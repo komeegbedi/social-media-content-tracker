@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+
+    function myDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function hasProfile() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function isAdmin() {
+      return hasProfile() && myDoc().role == 'admin';
+    }
+    function isApproved() {
+      return hasProfile() && (myDoc().status == 'approved' || myDoc().role == 'admin');
+    }
+    function isQA() {
+      return hasProfile() && (myDoc().qa == true || myDoc().role == 'admin');
+    }
+
+    match /users/{uid} {
+      // Read your own profile always; read others only once you're approved.
+      allow get: if signedIn() && (request.auth.uid == uid || isApproved());
+      allow list: if isApproved();
+
+      // On registration you may create ONLY your own doc, and only as a
+      // pending member — you cannot make yourself an admin or pre-approved,
+      // nor grant yourself the QA / captions roles. Privileges are admin-only.
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == 'member'
+        && request.resource.data.status == 'pending'
+        && request.resource.data.get('qa', false) == false
+        && request.resource.data.get('captions', false) == false;
+
+      // Only admins edit profiles (approvals, roles, skills, flags, removal).
+      // Members have no self-edit UI, and letting them change their own
+      // skills/flags could quietly game auto-assignment — so it's locked down.
+      allow update, delete: if isAdmin();
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isApproved();
+
+      // Only admins create or delete tasks.
+      allow create, delete: if isAdmin();
+
+      // Admins can change anything. Approved members may only touch
+      // collaboration fields — status, comments, reactions, and the
+      // "what's next / waiting on" fields — not reassign crew, owners,
+      // dates, priority, etc.
+      // ...plus content links and the activity log. A task can only be moved
+      // to "Approved" by a QA member or an admin.
+      allow update: if isAdmin()
+        || (isApproved()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'comments', 'reactions', 'updatedAt',
+                           'nextAction', 'nextActionNote', 'blockedOn',
+                           'links', 'activity'])
+            && (request.resource.data.status == resource.data.status
+                || request.resource.data.status != 'Approved'
+                || isQA()));
+    }
+
+    // Issue log: user-filed reports and auto-captured runtime errors.
+    match /issues/{id} {
+      // Any signed-in user may file an issue, but only under their own uid
+      // (can't spoof someone else). Errors are logged the same way.
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      // Only admins can read the log, triage (resolve), or delete.
+      allow read, update, delete: if isAdmin();
+    }
+  }
+}
