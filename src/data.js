@@ -1,24 +1,37 @@
 /* Pure logic — no React, no Firebase. Easy to unit-test or reuse. */
 
-// The 5-stage production pipeline. A task's `status` is always one of these.
-export const STAGES = ["Planned", "In Progress", "In Review", "Approved", "Posted"];
-export const STAGE_SHORT = ["Plan", "Make", "Review", "Approved", "Posted"];
-
-// Preset "next action" chips — what a task is actually waiting on *right now*.
-// Stored on the task as `nextAction` (one of these) plus an optional free-text
-// `nextActionNote`. Status tells you the stage; nextAction tells a person what
-// to actually do, which is the question contributors really ask.
-export const NEXT_ACTIONS = [
-  "Awaiting approval", "Needs footage", "Needs captions", "Needs revisions", "Ready to post",
+// The full 7-stage content workflow. A task's `status` is always one of these.
+// "Changes Requested" and "Ready to Post" are first-class statuses — they mark
+// real handoffs between departments (owner ↔ QA ↔ caption/upload team).
+export const STAGES = [
+  "Planned", "In Progress", "In Review", "Changes Requested", "Approved", "Ready to Post", "Posted",
 ];
+
+// For the progress bar, the 7 statuses group into 4 human phases.
+export const PHASES = ["Planning", "Creating", "Review", "Posting"];
+export const statusPhase = (s) =>
+  ({ "Planned":0, "In Progress":1, "Changes Requested":1, "In Review":2,
+     "Approved":2, "Ready to Post":3, "Posted":3 }[s] ?? 0);
+
+// The system-driven next step for a status — "who owns the next action".
+// Shown as small secondary text; the status itself is the dominant signal.
+export const nextStep = (status) =>
+  ({ "Planned": "Start creating the content",
+     "In Progress": "Submit content for QA",
+     "In Review": "Awaiting QA approval",
+     "Changes Requested": "Revise & resubmit for QA",
+     "Approved": "Write the caption",
+     "Ready to Post": "Post to Instagram",
+     "Posted": "Done — posted" }[status] || "");
 
 // Task priority. Defaults to "Medium" so only High (and Low) stand out.
 export const PRIORITIES = ["Low", "Medium", "High"];
 
 // status string → CSS class for the coloured status pill.
 export const statusClass = (s) =>
-  ({ Planned:"st-planned","In Progress":"st-progress","In Review":"st-review",
-     Approved:"st-approved",Posted:"st-posted" }[s] || "st-planned");
+  ({ "Planned":"st-planned", "In Progress":"st-progress", "In Review":"st-review",
+     "Changes Requested":"st-changes", "Approved":"st-approved",
+     "Ready to Post":"st-ready", "Posted":"st-posted" }[s] || "st-planned");
 
 // priority string → CSS class for the priority flag.
 export const priorityClass = (p) =>
@@ -64,9 +77,11 @@ export const activityEntry = (type, by, note = "") => ({ type, by, at: Date.now(
 export function activityLabel(e) {
   switch (e.type) {
     case "created": return "Created";
+    case "started": return "Started work";
     case "qa_sent": return "Sent to QA";
     case "approved": return "Approved";
     case "changes_requested": return "Requested changes";
+    case "ready": return "Marked ready to post";
     case "posted": return "Posted";
     case "status": return `Moved to ${e.note || "next stage"}`;
     case "assigned": return e.note || "Assignment changed";
@@ -74,16 +89,34 @@ export function activityLabel(e) {
     default: return e.type;
   }
 }
-export const isApprovalEvent = (e) => ["qa_sent", "approved", "changes_requested"].includes(e.type);
+export const isApprovalEvent = (e) =>
+  ["qa_sent", "approved", "changes_requested", "ready", "started"].includes(e.type);
 
-// Turn a "next action" into a verb-led to-do for the My Day list,
-// e.g. "Needs captions" + "Sunday reel" → "Write captions for Sunday reel".
-export const actionVerb = (action, title) =>
-  ({ "Needs footage": `Get footage for ${title}`,
-     "Needs captions": `Write captions for ${title}`,
-     "Needs revisions": `Revise ${title}`,
-     "Ready to post": `Post ${title}`,
-     "Awaiting approval": `Approve ${title}` }[action] || title);
+/* The single guided action this user can take next, given the task's status
+   and their role — the heart of the system-driven workflow. Returns
+   { label, to, kind, requiresLinks?, needsCaption?, needsPostLink? } or null
+   (no action for this person right now; e.g. they're waiting on someone else).
+   QA approve / request-changes is handled by its own panel, not here. */
+export function workflowAction(task, me) {
+  const isOwner = task.owner === me.name;
+  const isCaption = !!me.captions || me.role === "admin";
+  const isAdmin = me.role === "admin";
+  const mine = isOwner || isAdmin;
+  switch (task.status) {
+    case "Planned":
+      return mine ? { label: "Start work", to: "In Progress", kind: "started" } : null;
+    case "In Progress":
+      return mine ? { label: "Submit for QA", to: "In Review", kind: "qa_sent", requiresLinks: true } : null;
+    case "Changes Requested":
+      return mine ? { label: "Resubmit for QA", to: "In Review", kind: "qa_sent", requiresLinks: true } : null;
+    case "Approved":
+      return isCaption ? { label: "Mark ready to post", to: "Ready to Post", kind: "ready", needsCaption: true } : null;
+    case "Ready to Post":
+      return isCaption ? { label: "Mark as posted", to: "Posted", kind: "posted", needsPostLink: true } : null;
+    default: // In Review (QA panel), Posted (done)
+      return null;
+  }
+}
 
 export const initials = (n="") =>
   n.trim().split(/\s+/).map(w=>w[0]).join("").slice(0,2).toUpperCase() || "?";
@@ -299,7 +332,6 @@ export function rowToTask(row, users = []) {
   const location = LOCS.find((l) => l.toLowerCase() === locRaw.toLowerCase()) || (locRaw || "828");
 
   const priority = PRIORITIES.find((p) => p.toLowerCase() === getCol(row, "priority").toLowerCase()) || "Medium";
-  const nextAction = NEXT_ACTIONS.find((a) => a.toLowerCase() === getCol(row, "nextAction").toLowerCase()) || "";
 
   // Owner → registered user, else "Pending" (keep the sheet name as a hint).
   const ownerRaw = sanitizeName(getCol(row, "owner"));
@@ -323,8 +355,7 @@ export function rowToTask(row, users = []) {
   const task = {
     title, type: mapType(getCol(row, "type")), location,
     status: mapStatus(getCol(row, "status")),
-    owner, ownerSuggested, priority, nextAction,
-    nextActionNote: sanitizeName(getCol(row, "nextActionNote")),
+    owner, ownerSuggested, priority,
     blockedOn: sanitizeName(getCol(row, "blockedOn")),
     brief: getCol(row, "brief").trim(),
     shootDate: parseSheetDate(getCol(row, "shootDate")),
@@ -359,10 +390,13 @@ export function attentionItems(tasks, me) {
     t.status !== "Posted" &&
     (t.owner === me.name || (t.support || []).some((s) => s.name === me.name)));
 
+  // Statuses where the owner/crew clearly has the ball.
+  const owesAction = (t) => ["In Progress", "Changes Requested", "Ready to Post"].includes(t.status);
+
   // Gate: does this task warrant showing on My Day at all?
   const needsAttention = (t) => {
     const d = daysTo(t.postDate);
-    return (d !== null && d <= 2) || !!t.nextAction || !!t.blockedOn || t.status === "In Review";
+    return (d !== null && d <= 2) || !!t.blockedOn || owesAction(t) || t.status === "In Review";
   };
 
   // Higher score = more urgent. Drives the sort order.
@@ -372,9 +406,10 @@ export function attentionItems(tasks, me) {
     if (d !== null && d < 0) s += 100;        // overdue
     else if (d === 0) s += 60;                // due today
     else if (d !== null && d <= 2) s += 40;   // due soon
+    if (t.status === "Changes Requested") s += 30; // bounced back — act now
     if (t.blockedOn) s += 25;                 // blocked — someone needs to unblock it
     if (t.priority === "High") s += 20;
-    if (t.nextAction) s += 10;
+    if (owesAction(t)) s += 10;
     if (t.status === "In Review") s += 8;
     return s;
   };
@@ -387,9 +422,9 @@ export function attentionItems(tasks, me) {
 export function qaQueue(tasks) {
   const all = tasks || [];
   return {
-    awaiting: all.filter((t) => t.status === "In Review"),                 // needs approval now
-    returned: all.filter((t) => t.status !== "Posted" && t.nextAction === "Needs revisions"),
-    approved: all.filter((t) => t.status === "Approved"),                  // recently cleared
+    awaiting: all.filter((t) => t.status === "In Review"),          // needs approval now
+    returned: all.filter((t) => t.status === "Changes Requested"),  // sent back, awaiting revision
+    approved: all.filter((t) => t.status === "Approved"),           // recently cleared
   };
 }
 
@@ -397,9 +432,9 @@ export function qaQueue(tasks) {
 export function postQueue(tasks) {
   const live = (tasks || []).filter((t) => t.status !== "Posted");
   return {
-    captions: live.filter((t) => t.status === "Approved" && t.nextAction !== "Ready to post"),
-    ready: live.filter((t) => t.nextAction === "Ready to post"),
-    overdue: live.filter((t) => { const d = daysTo(t.postDate); return t.status === "Approved" && d !== null && d < 0; }),
+    captions: live.filter((t) => t.status === "Approved"),       // approved → needs a caption
+    ready: live.filter((t) => t.status === "Ready to Post"),     // caption done → post it
+    overdue: live.filter((t) => { const d = daysTo(t.postDate); return (t.status === "Approved" || t.status === "Ready to Post") && d !== null && d < 0; }),
   };
 }
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   onAuthStateChanged, signOut,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -12,7 +12,8 @@ import {
   STAGES, statusClass, roleLabel, initials, emailFor,
   fmt, daysTo, autoAssign, computeCapacity,
   parseCSV, rowToTask, sheetCsvUrl,
-  NEXT_ACTIONS, PRIORITIES, priorityClass, actionVerb, attentionItems, matchUser,
+  PRIORITIES, priorityClass, attentionItems, matchUser,
+  PHASES, statusPhase, nextStep, workflowAction,
   LINK_FIELDS, requiredLinkKeys, missingLinks, QA_STATUSES,
   activityEntry, activityLabel, isApprovalEvent,
   TYPES, typeClass, qaQueue, postQueue, pendingMatches, applyAssignment,
@@ -220,7 +221,7 @@ function Login() {
 
           {mode === "register" && (
             <div className="sb-field"><label>Your name</label>
-              <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="e.g. Esther New" /></div>
+              <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="e.g. John Smith" /></div>
           )}
           <div className="sb-field"><label>Email</label>
             <input type="email" autoComplete="username" value={email}
@@ -321,37 +322,61 @@ function Board({ profile, isAdmin }) {
     setEditTask(null);
   };
   const deleteTask = async (id) => { await deleteDoc(doc(db, "tasks", id)); };
+  // Archive = move to the Posted/completed status (no separate flag in the model).
+  const archiveTask = async (task) =>
+    updateDoc(doc(db, "tasks", task.id), {
+      status: "Posted",
+      activity: [...(task.activity||[]), activityEntry("posted", me.name, "Posted")],
+      updatedAt: serverTimestamp(),
+    });
+  // Duplicate = fresh copy at the start of the workflow, no produced artifacts.
+  const duplicateTask = async (task) => {
+    const { id, comments, reactions, activity, createdAt, updatedAt,
+            caption, postLink, links, blockedOn, ...rest } = task;
+    await addDoc(collection(db, "tasks"), {
+      ...rest, title: `Copy of ${task.title}`, status: "Planned",
+      caption: "", postLink: "", links: {}, blockedOn: "",
+      comments: [], reactions: {}, activity: [activityEntry("created", me.name)],
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+  };
   const importTasks = async (newTasks) =>
     Promise.all(newTasks.map((t) => addDoc(collection(db, "tasks"), {
       ...t, comments: [], reactions: {}, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     })));
-  // Status change also writes the matching activity-timeline entry (qa_sent /
-  // approved / posted / status), giving us approval history for free.
-  const setStatus = async (task, status) => {
-    const type = status==="In Review" ? "qa_sent"
-      : status==="Approved" ? "approved"
-      : status==="Posted" ? "posted" : "status";
-    await updateDoc(doc(db, "tasks", task.id), {
-      status,
-      activity: [...(task.activity||[]), activityEntry(type, me.name, status)],
+  // Map a destination status → the activity-timeline event type.
+  const eventType = (status) => ({
+    "In Progress":"started", "In Review":"qa_sent", "Approved":"approved",
+    "Changes Requested":"changes_requested", "Ready to Post":"ready", "Posted":"posted",
+  }[status] || "status");
+  // Admin manual status override (the status segmented control).
+  const setStatus = async (task, status) =>
+    updateDoc(doc(db, "tasks", task.id), {
+      status, activity: [...(task.activity||[]), activityEntry(eventType(status), me.name, status)],
       updatedAt: serverTimestamp(),
     });
-  };
-  // QA "request changes": bounce back to In Progress with a revision note.
+  // The guided workflow action (Start work / Submit for QA / Mark ready / Posted).
+  // `extra` carries caption / postLink when the step requires them.
+  const runWorkflow = async (task, action, extra = {}) =>
+    updateDoc(doc(db, "tasks", task.id), {
+      status: action.to, ...extra,
+      activity: [...(task.activity||[]), activityEntry(action.kind, me.name, action.to)],
+      updatedAt: serverTimestamp(),
+    });
+  // QA "request changes": send back as the first-class "Changes Requested" status.
   const qaRequestChanges = async (task, note) =>
     updateDoc(doc(db, "tasks", task.id), {
-      status: "In Progress", nextAction: "Needs revisions",
+      status: "Changes Requested",
       activity: [...(task.activity||[]), activityEntry("changes_requested", me.name, note)],
       updatedAt: serverTimestamp(),
     });
-  // Collaborative fields any approved member can set from a task's detail view
-  // (allowed by firestore.rules): what the task is waiting on, and what's next.
-  const setNextAction = async (id, nextAction, nextActionNote = "") =>
-    updateDoc(doc(db, "tasks", id), { nextAction, nextActionNote, updatedAt: serverTimestamp() });
+  // Collaborative fields any approved member can set from a task's detail view.
   const setBlocked = async (id, blockedOn) =>
     updateDoc(doc(db, "tasks", id), { blockedOn, updatedAt: serverTimestamp() });
   const setLinks = async (task, links) =>
     updateDoc(doc(db, "tasks", task.id), { links, updatedAt: serverTimestamp() });
+  const setCaption = async (task, caption) =>
+    updateDoc(doc(db, "tasks", task.id), { caption, updatedAt: serverTimestamp() });
   const addComment = async (task, txt) =>
     updateDoc(doc(db, "tasks", task.id), {
       comments: [...(task.comments||[]), { who: me.name, txt, tm: Date.now() }],
@@ -411,7 +436,7 @@ function Board({ profile, isAdmin }) {
               </button>
             ))}
           </nav>
-          {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")}>+ New task</button>}
+          {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")}>+ New content</button>}
           <div className="sb-sfoot">
             <div className="sb-suser">
               <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(me.name)}</span>
@@ -446,6 +471,7 @@ function Board({ profile, isAdmin }) {
               <Admin users={allUsers} tasks={tasks} teamUsers={users} issues={issues}
                 onEditUser={setEditUser} onEditTask={setEditTask}
                 onDeleteUser={removeUser} onDeleteTask={deleteTask}
+                onArchiveTask={archiveTask} onDuplicateTask={duplicateTask} onOpenTask={setOpenId}
                 onAutoAll={autoAll} onImport={importTasks} onResolveIssue={resolveIssue}
                 onAssignSuggested={assignSuggested} />
             )}
@@ -463,7 +489,7 @@ function Board({ profile, isAdmin }) {
       </div>
 
       {isAdmin && tab!=="admin" && (
-        <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New task">+</button>
+        <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content">+</button>
       )}
 
       {openTask && (
@@ -471,9 +497,11 @@ function Board({ profile, isAdmin }) {
           isQA={isAdmin || !!me.qa}
           onClose={()=>setOpenId(null)}
           onStatus={(s)=>setStatus(openTask, s)}
+          onAction={(action, extra)=>runWorkflow(openTask, action, extra)}
+          onApprove={()=>setStatus(openTask, "Approved")}
           onLinks={(links)=>setLinks(openTask, links)}
+          onCaption={(c)=>setCaption(openTask, c)}
           onRequestChanges={(note)=>qaRequestChanges(openTask, note)}
-          onNextAction={(a,note)=>setNextAction(openTask.id, a, note)}
           onBlocked={(b)=>setBlocked(openTask.id, b)}
           onComment={(txt)=>addComment(openTask, txt)}
           onReact={(emo)=>toggleReact(openTask, emo)}
@@ -642,9 +670,8 @@ function QueueSection({ title, items, me, openTask }) {
   );
 }
 
-/* A single actionable row in "Needs your attention" — a verb-led label
-   (from the task's next action) plus the reason it surfaced and why it's
-   urgent. Tighter than a full TaskCard so My Day scans fast. */
+/* A single actionable row in "Needs your attention" — the task title plus the
+   reason it surfaced and why it's urgent. Tighter than a full TaskCard. */
 function AttentionItem({ t, onClick }) {
   const d = daysTo(t.postDate);
   // Why is this on the list? Most pressing reason wins.
@@ -652,13 +679,13 @@ function AttentionItem({ t, onClick }) {
     : (d!==null && d<0) ? `${Math.abs(d)}d overdue`
     : d===0 ? "Due today"
     : d===1 ? "Due tomorrow"
-    : t.nextAction ? t.nextAction
+    : t.status==="Changes Requested" ? "Changes requested"
     : t.status==="In Review" ? "In review"
     : (d!==null) ? `Due ${fmt(t.postDate)}` : "Needs a look";
-  const reasonCls = (t.blockedOn || (d!==null && d<0)) ? "due-over"
+  const reasonCls = (t.blockedOn || (d!==null && d<0) || t.status==="Changes Requested") ? "due-over"
     : (d!==null && d<=2) ? "due-soon" : "due-ok";
-  // Verb-led title when there's a next action ("Write captions for …").
-  const label = t.nextAction ? actionVerb(t.nextAction, t.title) : t.title;
+  // Lead with the system-derived next step so the row reads as a to-do.
+  const label = `${nextStep(t.status)} — ${t.title}`;
   return (
     <button className="sb-attn" onClick={onClick}>
       <span className={"sb-attn-bar "+reasonCls}/>
@@ -681,7 +708,7 @@ function AttentionItem({ t, onClick }) {
 function BoardList({ tasks, openTask }) {
   const [filter, setFilter] = useState("All");
   const [q, setQ] = useState("");
-  const filters = ["All","Reel","Poster","Photography","In Review","Approved","479","828","Archive"];
+  const filters = ["All","Reel","Poster","Photography","In Review","Changes Requested","Approved","Ready to Post","479","828","Archive"];
   const searching = q.trim().length > 0;
 
   // Search spans EVERYTHING (active + archive). Otherwise the board shows
@@ -931,7 +958,36 @@ function Home({ tasks, users, me, goTab }) {
 /* ===================================================================
    ADMIN
    =================================================================== */
-function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDeleteUser, onDeleteTask, onAutoAll, onImport, onResolveIssue, onAssignSuggested }) {
+/* A 3-dot "more actions" menu. Stops click propagation so using it never
+   triggers the card's own open-on-click. Closes on outside click or Escape. */
+function KebabMenu({ items }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  return (
+    <div className="sb-kebab" ref={ref} onClick={(e)=>e.stopPropagation()}>
+      <button className="sb-kebab-btn" aria-label="More actions" aria-haspopup="menu" aria-expanded={open}
+        onClick={()=>setOpen(o=>!o)}>⋯</button>
+      {open && (
+        <div className="sb-kebab-menu" role="menu">
+          {items.map((it, i) => (
+            <button key={i} role="menuitem" className={"sb-kebab-item"+(it.danger?" danger":"")}
+              onClick={()=>{ setOpen(false); it.onClick(); }}>{it.label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDeleteUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onImport, onResolveIssue, onAssignSuggested }) {
   const [sec, setSec] = useState("tasks");
   const pending = users.filter(u => u.status === "pending");
   const approved = users.filter(u => u.status === "approved" || u.role === "admin");
@@ -953,22 +1009,34 @@ function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDele
 
       {sec==="tasks" && <>
         <div className="sb-btnrow" style={{marginBottom:14}}>
-          <button className="sb-btn" onClick={()=>onEditTask("new")}>+ New task</button>
+          <button className="sb-btn" onClick={()=>onEditTask("new")}>+ New content</button>
           <button className="sb-btn gold" onClick={onAutoAll}>⚡ Auto-assign empty</button>
         </div>
         <div className="sb-list">
           {tasks.map(t => (
-            <div className="sb-task" key={t.id} style={{cursor:"default"}}>
+            <div className="sb-task sb-task-act" key={t.id} role="button" tabIndex={0}
+              onClick={()=>onOpenTask(t.id)}
+              onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onOpenTask(t.id); } }}>
               <div className="row1"><span className="title">{t.title}</span>
-                <span className={"sb-chip "+typeClass(t.type)}>{t.type}</span></div>
-              <div className="sub"><span><b>{t.owner}</b> · {t.location}</span><span>{fmt(t.postDate)}</span></div>
-              <div className="sb-btnrow" style={{marginTop:10}}>
-                <button className="sb-btn ghost" onClick={()=>onEditTask(t)}>Edit</button>
-                <button className="sb-btn danger" onClick={()=>{ if(confirm(`Delete "${t.title}"?`)) onDeleteTask(t.id); }}>Delete</button>
+                <div className="sb-row1end">
+                  <span className={"sb-chip "+typeClass(t.type)}>{t.type}</span>
+                  <KebabMenu items={[
+                    { label:"Open", onClick:()=>onOpenTask(t.id) },
+                    { label:"Edit", onClick:()=>onEditTask(t) },
+                    { label:"Duplicate", onClick:()=>onDuplicateTask(t) },
+                    ...(t.status!=="Posted" ? [{ label:"Archive", onClick:()=>onArchiveTask(t) }] : []),
+                    { label:"Delete", danger:true, onClick:()=>{ if(confirm(`Delete "${t.title}"?`)) onDeleteTask(t.id); } },
+                  ]} />
+                </div></div>
+              <div className="sb-cardstatus">
+                <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
+                <span className="sb-due due-ok">{fmt(t.postDate)}</span>
               </div>
+              {t.status!=="Posted" && <div className="sb-next">Next: {nextStep(t.status)}</div>}
+              <div className="sub"><span><b>{t.owner==="Pending"&&t.ownerSuggested?`Pending — ${t.ownerSuggested}`:t.owner}</b> · {t.location}</span></div>
             </div>
           ))}
-          {tasks.length===0 && <div className="sb-empty">No tasks yet. Tap “New task” to start.</div>}
+          {tasks.length===0 && <div className="sb-empty">No content yet. Tap “New content” to start.</div>}
         </div>
       </>}
 
@@ -1100,7 +1168,7 @@ function AssignHint({ user, tasks, onAssign }) {
   if (!n) return null;
   return (
     <div className="sb-assign">
-      💡 May match <b>{n}</b> pending task{n!==1?"s":""} from the import.
+      💡 Suggested match for <b>{n}</b> imported task{n!==1?"s":""} (Pending owner/crew).
       <button className="link" onClick={()=>onAssign(user)}>Assign {n===1?"it":"them"}</button>
     </div>
   );
@@ -1223,8 +1291,9 @@ function TaskCard({ t, me, onClick }) {
   const isPosted = t.status==="Posted";
   const dueCls = d===null?"due-ok":d<0?"due-over":d<=2?"due-soon":"due-ok";
   const dueTxt = d===null?"No date":d<0?`${Math.abs(d)}d overdue`:d===0?"Due today":d===1?"Due tomorrow":`Due ${fmt(t.postDate)}`;
-  const stageIdx = STAGES.indexOf(t.status);
-  const pct = ((stageIdx+1)/STAGES.length)*100;          // how far along Plan → Posted
+  const phase = statusPhase(t.status);
+  const pct = ((phase+1)/PHASES.length)*100;             // progress through the 4 phases
+  const ownerLabel = t.owner==="Pending" ? (t.ownerSuggested ? `Pending — ${t.ownerSuggested}` : "Pending") : t.owner;
   // De-duplicate owner + crew so the same person shows one avatar.
   const people = [{name:t.owner,owner:true}, ...(t.support||[]).map(s=>({name:s.name}))];
   const seen = new Set(); const uniquePeople = people.filter(p=>!seen.has(p.name)&&seen.add(p.name));
@@ -1238,36 +1307,31 @@ function TaskCard({ t, me, onClick }) {
         </span>
       </div>
 
-      {/* The "what do I do next" line: blocked beats next-action; show neither
-          when the task is just cruising (keeps simple cards clean). */}
+      {/* Status is dominant; "Next" + blocker are small supporting text. */}
+      <div className="sb-cardstatus">
+        <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
+        {!isPosted && <span className={"sb-due "+dueCls}>{dueTxt}</span>}
+      </div>
       {t.blockedOn
-        ? <div className="sb-act blocked">⛔ Waiting on {t.blockedOn}</div>
-        : t.nextAction
-          ? <div className="sb-act">→ {t.nextAction}</div>
-          : null}
+        ? <div className="sb-next blocked">⛔ Waiting on {t.blockedOn}</div>
+        : !isPosted && <div className="sb-next">Next: {nextStep(t.status)}</div>}
 
       <div className="sub">
-        <span><b>{t.owner}</b> leads</span>
+        <span><b>{ownerLabel}</b> leads</span>
         <span>{t.location==="Both"?"479 + 828":t.location}</span>
       </div>
 
-      {/* Slim progress bar through the pipeline (replaces the old dotted rail). */}
-      <div className="sb-prog" aria-label={`Stage: ${t.status}`}>
-        <i className={t.status==="Posted"?"done":""} style={{width:`${pct}%`}}/>
+      {/* Slim progress bar through the 4 phases (Planning → Posting). */}
+      <div className="sb-prog" aria-label={`Status: ${t.status}`}>
+        <i className={isPosted?"done":""} style={{width:`${pct}%`}}/>
       </div>
 
-      <div className="sb-ppl" style={{justifyContent:"space-between"}}>
-        <span style={{display:"flex"}}>
-          {uniquePeople.slice(0,5).map((p,i)=>(
-            <span key={i} className={"sb-av"+(p.owner?" owner":"")}
-              style={me&&p.name===me.name?{outline:"2px solid var(--violet)"}:{}}>{initials(p.name)}</span>
-          ))}
-        </span>
-        <span style={{display:"flex",alignItems:"center",gap:8}}>
-          {(t.comments?.length>0) && <span style={{fontSize:11,color:"var(--muted)"}}>{Ic.chat} {t.comments.length}</span>}
-          {!isPosted && <span className={"sb-due "+dueCls}>{dueTxt}</span>}
-          <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
-        </span>
+      <div className="sb-ppl">
+        {uniquePeople.slice(0,5).map((p,i)=>(
+          <span key={i} className={"sb-av"+(p.owner?" owner":"")}
+            style={me&&p.name===me.name?{outline:"2px solid var(--violet)"}:{}}>{initials(p.name)}</span>
+        ))}
+        {(t.comments?.length>0) && <span style={{fontSize:11,color:"var(--muted)",marginLeft:"auto"}}>{Ic.chat} {t.comments.length}</span>}
       </div>
     </button>
   );
@@ -1276,30 +1340,47 @@ function TaskCard({ t, me, onClick }) {
 /* ===================================================================
    TASK DETAIL
    =================================================================== */
-function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onRequestChanges, onNextAction, onBlocked, onComment, onReact, onEdit }) {
+function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onApprove, onLinks, onCaption, onRequestChanges, onBlocked, onComment, onReact, onEdit }) {
   const [draft, setDraft] = useState("");
-  // Local drafts for the collaborative fields; persisted on blur. The component
-  // is keyed by task id (see Board), so these reset when a new task opens.
-  const [note, setNote] = useState(task.nextActionNote || "");
+  // Local drafts; persisted on blur. Component is keyed by task id, so these
+  // reset when a new task opens.
   const [blocked, setBlocked] = useState(task.blockedOn || "");
   const [links, setLinksDraft] = useState(task.links || {});
+  const [caption, setCaptionDraft] = useState(task.caption || "");
+  const [postLink, setPostLink] = useState(task.postLink || "");
   const [changeNote, setChangeNote] = useState("");
   const [askChanges, setAskChanges] = useState(false);
   const [warn, setWarn] = useState("");
-  const stageIdx = STAGES.indexOf(task.status);
   const EMOJIS = ["👍","🔥","🙏","👀"];
   const isLink = task.link && task.link.startsWith("http");
+  const phase = statusPhase(task.status);
+  const action = workflowAction(task, me);                 // the single guided step for this user
   const required = requiredLinkKeys(task.type);
-  // Guard the workflow: only QA can approve, and content links are required
-  // before a task can be sent to QA (matches the firestore.rules server-side).
-  const tryStatus = (s) => {
-    if (s==="Approved" && !isQA) { setWarn("Only a QA reviewer can approve content."); return; }
-    const miss = QA_STATUSES.includes(s) ? missingLinks({ ...task, links }) : [];
-    if (miss.length) { setWarn(`Add the required content link${miss.length>1?"s":""} below before sending to QA: ${miss.map(k=>LINK_FIELDS[k]).join(", ")}.`); return; }
-    setWarn(""); onStatus(s);
-  };
+  // Only the type's required links (plus any already filled) — keeps it focused.
+  const linkKeys = Object.keys(LINK_FIELDS).filter(k => required.includes(k) || (links[k]||"").trim());
+  const captionStage = ["Approved","Ready to Post","Posted"].includes(task.status);
+  const postStage = ["Ready to Post","Posted"].includes(task.status);
+  const canCaption = (!!me.captions || isAdmin) && task.status !== "Posted";
+  const lastFeedback = [...(task.activity||[])].reverse().find(e => e.type==="changes_requested")?.note;
   const saveLinks = (next) => { setLinksDraft(next); onLinks(next); };
   const tm = (t) => typeof t === "number" ? new Date(t).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : t;
+
+  // Run the guided action, enforcing its preconditions (same gates as the rules).
+  const doAction = () => {
+    if (!action) return;
+    if (action.requiresLinks) {
+      const miss = missingLinks({ ...task, links });
+      if (miss.length) { setWarn(`Add the required content link${miss.length>1?"s":""} first: ${miss.map(k=>LINK_FIELDS[k]).join(", ")}.`); return; }
+    }
+    if (action.needsCaption && !caption.trim()) { setWarn("Write the caption first."); return; }
+    if (action.needsPostLink && !postLink.trim()) { setWarn("Add the final post link first."); return; }
+    setWarn("");
+    const extra = {};
+    if (action.needsCaption) extra.caption = caption.trim();
+    if (action.needsPostLink) extra.postLink = postLink.trim();
+    onAction(action, extra);
+  };
+
   return (
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
@@ -1308,17 +1389,24 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onReq
           <button className="sb-x" onClick={onClose}>✕</button>
         </div>
         <div className="bd">
-          <h2 style={{fontSize:22,fontWeight:600,lineHeight:1.15,marginBottom:6}}>{task.title}</h2>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-            <span className={"sb-status "+statusClass(task.status)}><span className="pip"/>{task.status}</span>
+          <h2 style={{fontSize:22,fontWeight:600,lineHeight:1.15,marginBottom:8}}>{task.title}</h2>
+
+          {/* Status is the dominant signal; "Next" is small supporting text. */}
+          <div className="sb-statusline">
+            <span className={"sb-status big "+statusClass(task.status)}><span className="pip"/>{task.status}</span>
             {task.priority==="High" && <span className={"sb-pri "+priorityClass(task.priority)}>▲ High</span>}
-            {task.blockedOn && <span className="sb-act blocked" style={{margin:0}}>⛔ {task.blockedOn}</span>}
-            {task.relatedEvent && <span className="sb-tag">{task.relatedEvent}</span>}
             <span className="sb-tag">{task.location==="Both"?"479 + 828":task.location}</span>
+            {task.relatedEvent && <span className="sb-tag">{task.relatedEvent}</span>}
+          </div>
+          <div className="sb-nextline">Next: {nextStep(task.status)}</div>
+
+          {/* Phase progress: Planning → Creating → Review → Posting. */}
+          <div className="sb-phases">
+            {PHASES.map((p,i)=>(
+              <div key={p} className={"sb-phase"+(i<phase?" done":i===phase?" now":"")}><span/>{p}</div>
+            ))}
           </div>
 
-          {/* Creative brief — the "why" behind the content, so anyone joining
-              the task understands what they're making. */}
           {task.brief && (
             <div className="sb-brief">
               <div className="sb-brief-h">Creative brief</div>
@@ -1326,43 +1414,29 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onReq
             </div>
           )}
 
-          <div className="sb-field"><label>Move it along</label>
-            <div className="sb-seg">
-              {STAGES.map((s,i)=>(
-                <button key={s} className={"sb-segbtn"+(task.status===s?" on":"")}
-                  onClick={()=>tryStatus(s)}>{i<=stageIdx?"✓ ":""}{s}</button>))}
+          {/* QA sent it back — show the feedback to the owner. */}
+          {task.status==="Changes Requested" && lastFeedback && (
+            <div className="sb-lerr" style={{marginBottom:12}}><b>Changes requested:</b> {lastFeedback}</div>
+          )}
+
+          {/* The guided primary action for this user (Start work / Submit for QA /
+              Mark ready to post / Mark as posted). */}
+          {action && (
+            <div style={{marginBottom:14}}>
+              <button className="sb-btn" onClick={doAction}>{action.label}</button>
+              {warn && <div className="sb-lerr" style={{marginTop:8}}>{warn}</div>}
             </div>
-            {warn && <div className="sb-lerr" style={{marginTop:8}}>{warn}</div>}
-          </div>
+          )}
+          {!action && task.status==="In Review" && !isQA && (
+            <div className="sb-banner" style={{marginBottom:14}}>⏳ Submitted — awaiting QA review.</div>
+          )}
 
-          {/* Content links — produced by the crew, required before QA. Editable
-              by anyone on the task; persisted as they're entered. */}
-          <div className="sb-shead" style={{marginTop:6}}><h2>Content links</h2></div>
-          {Object.keys(LINK_FIELDS).map(k => {
-            const need = required.includes(k);
-            const val = links[k] || "";
-            return (
-              <div className="sb-field" key={k}>
-                <label>{LINK_FIELDS[k]}{need && <span style={{color:"var(--red)"}}> *</span>}</label>
-                <div className="sb-inline">
-                  <input value={val} placeholder="Paste a Google Drive link…"
-                    onChange={e=>setLinksDraft({...links, [k]: e.target.value})}
-                    onBlur={()=>saveLinks({ ...links, [k]: (links[k]||"").trim() })} />
-                  {val.startsWith("http") &&
-                    <a className="sb-btn ghost compact" style={{textDecoration:"none",display:"flex",alignItems:"center"}}
-                      href={val} target="_blank" rel="noreferrer noopener">Open</a>}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* QA panel — only QA members / admins see approve & request-changes,
-              and only while the task is awaiting review. */}
+          {/* QA panel — Approve / Request changes, only for QA while In Review. */}
           {isQA && task.status==="In Review" && (
-            <div className="sb-banner" style={{flexDirection:"column",alignItems:"stretch",display:"flex",gap:10,background:"var(--violet-soft)",borderColor:"var(--line)",color:"var(--ink)"}}>
+            <div className="sb-qa">
               <b>QA review</b>
               <div className="sb-btnrow">
-                <button className="sb-btn green compact" onClick={()=>tryStatus("Approved")}>Approve</button>
+                <button className="sb-btn green compact" onClick={onApprove}>Approve</button>
                 <button className="sb-btn danger compact" onClick={()=>setAskChanges(v=>!v)}>Request changes</button>
               </div>
               {askChanges && <>
@@ -1375,34 +1449,67 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onReq
             </div>
           )}
 
-          {/* What's next — any member can set this so the team knows the
-              immediate action (it drives the My Day list and card headline). */}
-          <div className="sb-field"><label>What's next?</label>
-            <div className="sb-seg" style={{flexWrap:"wrap"}}>
-              {NEXT_ACTIONS.map(a=>(
-                <button key={a} className={"sb-segbtn"+(task.nextAction===a?" on":"")}
-                  onClick={()=>onNextAction(task.nextAction===a?"":a, note)}>{a}</button>))}
-            </div>
-            <input style={{marginTop:8}}
-              value={note} onChange={e=>setNote(e.target.value)}
-              onBlur={()=>onNextAction(task.nextAction||"", note.trim())}
-              placeholder="Optional note — e.g. “captions by Friday”" />
-          </div>
+          {/* Content links — appear once production has started (not at Planned).
+              Required ones (by type) gate the Submit-for-QA step. */}
+          {phase>=1 && <>
+            <div className="sb-shead" style={{marginTop:6}}><h2>Content links</h2>
+              {required.length>0 && <span className="sb-sub" style={{margin:0}}>* required for QA</span>}</div>
+            {linkKeys.map(k => {
+              const val = links[k] || "";
+              return (
+                <div className="sb-field" key={k}>
+                  <label>{LINK_FIELDS[k]}{required.includes(k) && <span style={{color:"var(--red)"}}> *</span>}</label>
+                  <div className="sb-inline">
+                    <input value={val} placeholder="Paste a Google Drive link…"
+                      onChange={e=>setLinksDraft({...links, [k]: e.target.value})}
+                      onBlur={()=>saveLinks({ ...links, [k]: (links[k]||"").trim() })} />
+                    {val.startsWith("http") &&
+                      <a className="sb-btn ghost compact" style={{textDecoration:"none",display:"flex",alignItems:"center"}}
+                        href={val} target="_blank" rel="noreferrer noopener">Open</a>}
+                  </div>
+                </div>
+              );
+            })}
+          </>}
 
-          <div className="sb-field"><label>Waiting on (leave blank if not blocked)</label>
-            <input value={blocked} onChange={e=>setBlocked(e.target.value)}
-              onBlur={()=>onBlocked(blocked.trim())}
-              placeholder="e.g. Pastor's approval, David's graphics" />
-          </div>
+          {/* Caption — written by the caption/upload team once approved. */}
+          {captionStage && (
+            <div className="sb-field"><label>Caption</label>
+              <textarea rows={3} value={caption} disabled={!canCaption}
+                onChange={e=>setCaptionDraft(e.target.value)} onBlur={()=>onCaption(caption.trim())}
+                placeholder="Write the Instagram caption…" />
+            </div>
+          )}
+
+          {/* Final post link — captured when marking as posted. */}
+          {postStage && (
+            <div className="sb-field"><label>Final post link</label>
+              <div className="sb-inline">
+                <input value={postLink} disabled={task.status==="Posted"}
+                  onChange={e=>setPostLink(e.target.value)} placeholder="Instagram / TikTok post URL…" />
+                {postLink.startsWith("http") &&
+                  <a className="sb-btn ghost compact" style={{textDecoration:"none",display:"flex",alignItems:"center"}}
+                    href={postLink} target="_blank" rel="noreferrer noopener">Open</a>}
+              </div>
+            </div>
+          )}
+
+          {/* Waiting on (blocker) — editable while the task is live. */}
+          {task.status!=="Posted" && (
+            <div className="sb-field"><label>Waiting on (leave blank if not blocked)</label>
+              <input value={blocked} onChange={e=>setBlocked(e.target.value)}
+                onBlur={()=>onBlocked(blocked.trim())}
+                placeholder="e.g. Pastor's approval, David's graphics" />
+            </div>
+          )}
 
           <div className="sb-cap" style={{marginTop:6}}>
-            <Detail k="Owner (lead)" v={task.owner} />
+            <Detail k="Owner (lead)" v={task.owner==="Pending" ? (task.ownerSuggested ? `Pending — ${task.ownerSuggested} (from import)` : "Pending") : task.owner} />
             <Detail k="Priority" v={task.priority || "Medium"} />
             <Detail k="Shoot date" v={fmt(task.shootDate)} />
             <Detail k="Post date" v={fmt(task.postDate)} />
-            {task.nextActionNote && <Detail k="Next-step note" v={task.nextActionNote} />}
             {task.notes && <Detail k="Notes" v={task.notes} />}
-            {task.link && <Detail k="Link" v={isLink ? <a className="sb-link" href={task.link} target="_blank" rel="noreferrer noopener">{task.link}</a> : task.link} />}
+            {task.link && <Detail k="Reference" v={isLink ? <a className="sb-link" href={task.link} target="_blank" rel="noreferrer noopener">{task.link}</a> : task.link} />}
           </div>
 
           <div className="sb-shead" style={{marginTop:18}}><h2>Crew</h2></div>
@@ -1460,8 +1567,18 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onReq
           <div className="sb-field" style={{marginTop:10}}>
             <textarea rows={2} placeholder="Add a note for the crew…" value={draft} onChange={e=>setDraft(e.target.value)} />
           </div>
-          <button className="sb-btn" disabled={!draft.trim()} onClick={()=>{ onComment(draft.trim()); setDraft(""); }}>Post note</button>
-          {isAdmin && <button className="sb-btn ghost" style={{marginTop:9}} onClick={onEdit}>Edit task details</button>}
+          <button className="sb-btn compact" disabled={!draft.trim()} onClick={()=>{ onComment(draft.trim()); setDraft(""); }}>Post note</button>
+
+          {/* Admin override — jump the workflow to any status if needed. */}
+          {isAdmin && <>
+            <div className="sb-field" style={{marginTop:18}}><label>Admin · set status</label>
+              <div className="sb-seg" style={{flexWrap:"wrap"}}>
+                {STAGES.map(s=>(
+                  <button key={s} className={"sb-segbtn"+(task.status===s?" on":"")} onClick={()=>onStatus(s)}>{s}</button>))}
+              </div>
+            </div>
+            <button className="sb-btn ghost" style={{marginTop:9}} onClick={onEdit}>Edit content details</button>
+          </>}
         </div>
       </div>
     </div>
@@ -1483,18 +1600,17 @@ function TaskEditor({ task, users, onClose, onSave, onAuto }) {
   const [f, setF] = useState(task || {
     title:"", type:"Reel", location:"828", owner:users[0]?.name||"", ownerSuggested:"",
     shootDate:"", postDate:"", status:"Planned", priority:"Medium",
-    nextAction:"", nextActionNote:"", blockedOn:"", brief:"",
-    relatedEvent:"", link:"", notes:"", support:[], links:{},
+    blockedOn:"", brief:"", relatedEvent:"", link:"", notes:"", support:[], links:{},
   });
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
-  const setLink = (k,v)=>setF(p=>({...p,links:{...(p.links||{}),[k]:v}}));
   const valid = f.title.trim() && f.location && f.type && f.owner;
   return (
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
-        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{task?"Edit task":"New task"}</b>
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{task?"Edit content":"Plan content"}</b>
           <button className="sb-x" onClick={onClose}>✕</button></div>
         <div className="bd">
+          <div className="sb-sub" style={{marginTop:0}}>Plan a piece of content. The team adds the deliverable links later, when it's ready for QA.</div>
           <div className="sb-field"><label>Content title</label>
             <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Sunday welcome reel" /></div>
           <div className="sb-btnrow">
@@ -1525,37 +1641,14 @@ function TaskEditor({ task, users, onClose, onSave, onAuto }) {
             <div className="sb-field" style={{flex:1}}><label>Post date</label>
               <input type="date" value={f.postDate} onChange={e=>set("postDate",e.target.value)} /></div>
           </div>
-          <div className="sb-btnrow">
-            <div className="sb-field" style={{flex:1}}><label>Status</label>
-              <select value={f.status} onChange={e=>set("status",e.target.value)}>{STAGES.map(s=><option key={s}>{s}</option>)}</select></div>
-            <div className="sb-field" style={{flex:1}}><label>Priority</label>
-              <select value={f.priority||"Medium"} onChange={e=>set("priority",e.target.value)}>{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></div>
-          </div>
-          <div className="sb-field"><label>What's next? (the immediate action)</label>
-            <div className="sb-seg" style={{flexWrap:"wrap"}}>
-              {NEXT_ACTIONS.map(a=>(
-                <button type="button" key={a} className={"sb-segbtn"+(f.nextAction===a?" on":"")}
-                  onClick={()=>set("nextAction", f.nextAction===a?"":a)}>{a}</button>))}
-            </div>
-            <input style={{marginTop:8}} value={f.nextActionNote||""} onChange={e=>set("nextActionNote",e.target.value)}
-              placeholder="Optional note — e.g. “captions by Friday”" /></div>
-          <div className="sb-field"><label>Waiting on (if blocked)</label>
-            <input value={f.blockedOn||""} onChange={e=>set("blockedOn",e.target.value)}
-              placeholder="e.g. Pastor's approval, David's graphics" /></div>
+          <div className="sb-field" style={{maxWidth:200}}><label>Priority</label>
+            <select value={f.priority||"Medium"} onChange={e=>set("priority",e.target.value)}>{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></div>
           <div className="sb-field"><label>Related event (optional)</label>
             <input value={f.relatedEvent} onChange={e=>set("relatedEvent",e.target.value)} placeholder="e.g. Easter Service" /></div>
           <div className="sb-field"><label>Reference link (optional)</label>
             <input value={f.link} onChange={e=>set("link",e.target.value)} placeholder="Idea / inspiration / reference" /></div>
           <div className="sb-field"><label>Notes (optional)</label>
             <textarea rows={2} value={f.notes} onChange={e=>set("notes",e.target.value)} /></div>
-
-          <div className="sb-shead"><h2>Content links</h2>
-            <span className="sb-sub" style={{margin:0}}>* required before QA</span></div>
-          {Object.keys(LINK_FIELDS).map(k=>(
-            <div className="sb-field" key={k}>
-              <label>{LINK_FIELDS[k]}{requiredLinkKeys(f.type).includes(k) && <span style={{color:"var(--red)"}}> *</span>}</label>
-              <input value={(f.links||{})[k]||""} onChange={e=>setLink(k,e.target.value)} placeholder="Google Drive link" /></div>
-          ))}
 
           <div className="sb-shead"><h2>Support crew</h2>
             <button className="link" onClick={()=>set("support", onAuto(f))}>⚡ Auto-assign</button></div>

@@ -115,6 +115,23 @@ a{color:inherit}
 .chip-photo{background:var(--blue-soft);color:var(--blue)}
 .sb-task .sub{font-size:12px;color:var(--muted);margin-top:5px;display:flex;flex-wrap:wrap;gap:4px 10px}
 .sb-task .sub b{color:var(--ink);font-weight:600}
+.sb-task-act{cursor:pointer}
+.sb-task-act:hover{border-color:var(--violet);transition:border-color .12s}
+.sb-row1end{display:flex;align-items:center;gap:6px;flex-shrink:0}
+
+/* 3-dot "more actions" kebab menu */
+.sb-kebab{position:relative;display:inline-flex}
+.sb-kebab-btn{width:28px;height:28px;border:none;background:transparent;border-radius:8px;cursor:pointer;
+  color:var(--muted);font-size:18px;line-height:1;display:grid;place-items:center;padding:0}
+.sb-kebab-btn:hover{background:var(--line);color:var(--ink)}
+.sb-kebab-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:20;min-width:148px;
+  background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);
+  padding:6px;display:flex;flex-direction:column}
+.sb-kebab-item{text-align:left;border:none;background:transparent;cursor:pointer;border-radius:8px;
+  padding:8px 10px;font-size:13.5px;color:var(--ink);font-weight:500}
+.sb-kebab-item:hover{background:var(--line)}
+.sb-kebab-item.danger{color:var(--red,#c0392b)}
+.sb-kebab-item.danger:hover{background:var(--red-soft,rgba(192,57,43,.1))}
 
 /* Slim pipeline progress bar on a task card. */
 .sb-prog{height:4px;border-radius:3px;background:var(--line);margin-top:11px;overflow:hidden}
@@ -137,12 +154,33 @@ a{color:inherit}
 .sb-rowtags{display:flex;gap:6px;flex:none;align-items:center}
 
 .sb-status{font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:5px}
+.sb-status.big{font-size:13px;padding:5px 12px;font-weight:700}
 .st-planned{background:var(--line);color:var(--muted)}
 .st-progress{background:var(--blue-soft);color:var(--blue)}
 .st-review{background:var(--amber-soft);color:var(--amber)}
+.st-changes{background:var(--red-soft);color:var(--red)}
 .st-approved{background:var(--green-soft);color:var(--green)}
+.st-ready{background:var(--gold-soft);color:var(--gold)}
 .st-posted{background:var(--violet-soft);color:var(--violet)}
 .sb-status .pip{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+/* Status-dominant header/card lines + system-driven "Next" text. */
+.sb-statusline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px}
+.sb-nextline{font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:12px}
+.sb-cardstatus{display:flex;align-items:center;gap:8px;margin-top:9px}
+.sb-next{font-size:12px;color:var(--muted);font-weight:600;margin-top:6px}
+.sb-next.blocked{color:var(--red)}
+
+/* Phase progress (Planning → Creating → Review → Posting) in task detail. */
+.sb-phases{display:flex;gap:6px;margin-bottom:14px}
+.sb-phase{flex:1;font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);text-align:center}
+.sb-phase span{display:block;height:4px;border-radius:3px;background:var(--line);margin-bottom:5px}
+.sb-phase.done span,.sb-phase.now span{background:var(--violet)}
+.sb-phase.now{color:var(--violet)}
+
+/* QA review panel in task detail. */
+.sb-qa{background:var(--violet-soft);border:1px solid var(--line);border-radius:13px;padding:13px 14px;
+  margin-bottom:14px;display:flex;flex-direction:column;gap:10px}
 .sb-due{font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px}
 .due-over{background:var(--red-soft);color:var(--red)}
 .due-soon{background:var(--amber-soft);color:var(--amber)}

@@ -51,16 +51,16 @@ service cloud.firestore {
       // collaboration fields — status, comments, reactions, and the
       // "what's next / waiting on" fields — not reassign crew, owners,
       // dates, priority, etc.
-      // ...plus content links and the activity log. A task can only be moved
-      // to "Approved" by a QA member or an admin.
+      // ...plus content links, captions/post link, and the activity log.
+      // The QA-decision transitions ("Approved" and "Changes Requested") can
+      // only be made by a QA member or an admin.
       allow update: if isAdmin()
         || (isApproved()
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['status', 'comments', 'reactions', 'updatedAt',
-                           'nextAction', 'nextActionNote', 'blockedOn',
-                           'links', 'activity'])
+                           'blockedOn', 'links', 'activity', 'caption', 'postLink'])
             && (request.resource.data.status == resource.data.status
-                || request.resource.data.status != 'Approved'
+                || !(request.resource.data.status in ['Approved', 'Changes Requested'])
                 || isQA()));
     }
 
