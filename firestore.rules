@@ -33,7 +33,8 @@ service cloud.firestore {
         && request.resource.data.role == 'member'
         && request.resource.data.status == 'pending'
         && request.resource.data.get('qa', false) == false
-        && request.resource.data.get('captions', false) == false;
+        && request.resource.data.get('captions', false) == false
+        && request.resource.data.get('lead', false) == false;
 
       // Only admins edit profiles (approvals, roles, skills, flags, removal).
       // Members have no self-edit UI, and letting them change their own

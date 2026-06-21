@@ -40,7 +40,7 @@ a{color:inherit}
 
 .sb-shell{display:flex;min-height:100vh}
 .sb-side{display:none}
-.sb-main{flex:1;min-width:0;padding-bottom:80px}
+.sb-main{flex:1;min-width:0;padding-bottom:96px}
 .sb-content{width:100%;max-width:960px;margin:0 auto}
 @media(min-width:900px){
   .sb-side{display:flex;flex-direction:column;width:var(--side);flex:none;
@@ -69,20 +69,39 @@ a{color:inherit}
   border-radius:999px;font-size:14px;flex:none}
 
 .sb-top{position:sticky;top:0;z-index:30;background:var(--violet);color:#fff;
-  padding:14px 18px 16px;display:flex;align-items:center;justify-content:space-between}
-.sb-top .brand{font-family:Fraunces;font-weight:600;font-size:20px;display:flex;align-items:center;gap:9px}
-.sb-spark{width:22px;height:22px;border-radius:6px;background:var(--gold);display:inline-flex;
-  align-items:center;justify-content:center;color:#3a2a06;font-weight:700;font-family:Inter;font-size:13px}
-.sb-whoami{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.14);border:none;color:#fff;
-  padding:5px 11px 5px 5px;border-radius:999px;font-size:13px;font-weight:500}
+  padding:9px 16px;display:flex;align-items:center;justify-content:space-between}
+.sb-top .brand{font-family:Fraunces;font-weight:600;font-size:17px;display:flex;align-items:center;gap:8px}
+.sb-spark{width:20px;height:20px;border-radius:6px;background:var(--gold);display:inline-flex;
+  align-items:center;justify-content:center;color:#3a2a06;font-weight:700;font-family:Inter;font-size:12px}
+.sb-avbtn{background:none;border:none;padding:0;border-radius:999px;line-height:0}
+.sb-avbtn .sb-av{background:rgba(255,255,255,.2);color:#fff}
 @media(min-width:900px){ .sb-top{display:none} }
+
+/* Account drawer (mobile) — bottom sheet from the header avatar */
+.sb-drawer{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+  padding:10px 12px calc(20px + env(safe-area-inset-bottom));animation:rise .2s ease}
+@media(min-width:900px){ .sb-drawer{border-radius:20px} }
+.sb-drawer-user{display:flex;align-items:center;gap:12px;padding:10px 10px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.sb-drawer-user .nm{font-size:15px;font-weight:600}
+.sb-drawer-user .rl{font-size:12px;color:var(--muted);word-break:break-all}
+.sb-drawer-item{display:flex;align-items:center;gap:13px;width:100%;background:none;border:none;cursor:pointer;
+  padding:13px 10px;border-radius:11px;font-size:14.5px;font-weight:600;color:var(--ink);text-align:left}
+.sb-drawer-item:hover{background:var(--card)}
+.sb-drawer-item .i{width:22px;text-align:center;font-size:16px}
+.sb-drawer-item.danger{color:var(--red)}
+.sb-drawer-item.disabled{color:var(--muted);cursor:default}
+.sb-drawer-state{margin-left:auto;font-size:11px;font-weight:700;color:var(--muted);
+  background:var(--card);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
 
 .sb-page{padding:18px 16px 8px}
 @media(min-width:900px){ .sb-page{padding:30px 14px 24px} }
-.sb-eyebrow{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}
-.sb-h{font-size:25px;font-weight:600;margin:3px 0 2px;line-height:1.1}
-@media(min-width:900px){ .sb-h{font-size:31px} }
-.sb-sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+.sb-eyebrow{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}
+.sb-h{font-size:31px;font-weight:600;margin:4px 0 6px;line-height:1.08}
+@media(min-width:900px){ .sb-h{font-size:40px} }
+.sb-sub{color:var(--muted);font-size:14px;line-height:1.5;margin-bottom:22px}
+.sb-greet{font-size:14px;line-height:1.6;max-width:46ch}
+.sb-greet span{display:block;margin-bottom:7px}
+.sb-greet span:last-child{margin-bottom:0}
 
 /* Compact inline stat strip (replaces the old 4-up grid of tiles). */
 .sb-strip{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 22px;
@@ -93,11 +112,14 @@ a{color:inherit}
 .dot-amber{color:var(--amber)} .dot-green{color:var(--green)}
 .dot-blue{color:var(--blue)} .dot-red{color:var(--red)} .dot-violet{color:var(--violet)}
 
-.sb-shead{display:flex;align-items:baseline;justify-content:space-between;margin:20px 2px 11px}
-.sb-shead h2{font-size:17px;font-weight:600}
+.sb-shead{display:flex;align-items:baseline;justify-content:space-between;margin:28px 2px 13px}
+.sb-shead h2{font-size:20px;font-weight:600}
+@media(min-width:900px){ .sb-shead h2{font-size:23px} }
 .sb-shead .link{font-size:12.5px;color:var(--violet);font-weight:600;background:none;border:none;padding:0}
+.sb-shead .link.subtle{color:var(--muted);font-weight:500;font-size:12px}
+.sb-shead-strong h2{font-size:19px;font-weight:700}
 
-.sb-list{display:grid;grid-template-columns:1fr;gap:10px}
+.sb-list{display:grid;grid-template-columns:1fr;gap:12px}
 @media(min-width:900px){ .sb-list{grid-template-columns:1fr 1fr} }
 
 .sb-div{display:flex;align-items:center;gap:12px;margin:26px 2px 4px;color:var(--muted)}
@@ -108,7 +130,7 @@ a{color:inherit}
   box-shadow:var(--shadow);width:100%;text-align:left;display:block}
 .sb-task:active{transform:scale(.99)}
 .sb-task .row1{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
-.sb-task .title{font-weight:600;font-size:15px;line-height:1.25;overflow-wrap:anywhere;min-width:0}
+.sb-task .title{font-weight:600;font-size:16px;line-height:1.25;overflow-wrap:anywhere;min-width:0}
 .sb-chip{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 7px;border-radius:6px;white-space:nowrap}
 .chip-reel{background:var(--violet-soft);color:var(--violet)}
 .chip-poster{background:var(--gold-soft);color:var(--gold)}
@@ -155,21 +177,28 @@ a{color:inherit}
 
 .sb-status{font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:5px}
 .sb-status.big{font-size:13px;padding:5px 12px;font-weight:700}
-.st-planned{background:var(--line);color:var(--muted)}
+/* Status colours are a fixed contract — never reassign them.
+   Planned=light purple · In Progress=blue · In Review=yellow ·
+   Changes Requested=red · Approved=green · Ready to Post=orange · Posted=purple */
+.st-planned{background:var(--violet-soft);color:var(--violet)}
 .st-progress{background:var(--blue-soft);color:var(--blue)}
-.st-review{background:var(--amber-soft);color:var(--amber)}
+.st-review{background:var(--gold-soft);color:var(--gold)}
 .st-changes{background:var(--red-soft);color:var(--red)}
 .st-approved{background:var(--green-soft);color:var(--green)}
-.st-ready{background:var(--gold-soft);color:var(--gold)}
-.st-posted{background:var(--violet-soft);color:var(--violet)}
+.st-ready{background:var(--amber-soft);color:var(--amber)}
+.st-posted{background:var(--violet);color:#fff}
 .sb-status .pip{width:6px;height:6px;border-radius:50%;background:currentColor}
 
 /* Status-dominant header/card lines + system-driven "Next" text. */
 .sb-statusline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px}
 .sb-nextline{font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:12px}
 .sb-cardstatus{display:flex;align-items:center;gap:8px;margin-top:9px}
-.sb-next{font-size:12px;color:var(--muted);font-weight:600;margin-top:6px}
+.sb-next{font-size:13px;color:var(--ink);font-weight:600;margin-top:7px}
+.sb-next-lbl{display:block;font-size:9px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);font-weight:700;margin-bottom:1px}
 .sb-next.blocked{color:var(--red)}
+.sb-next.blocked .sb-next-lbl{color:var(--red)}
+.sb-support{font-size:12px;color:var(--muted);font-weight:600;margin-top:5px}
 
 /* Phase progress (Planning → Creating → Review → Posting) in task detail. */
 .sb-phases{display:flex;gap:6px;margin-bottom:14px}
@@ -181,10 +210,10 @@ a{color:inherit}
 /* QA review panel in task detail. */
 .sb-qa{background:var(--violet-soft);border:1px solid var(--line);border-radius:13px;padding:13px 14px;
   margin-bottom:14px;display:flex;flex-direction:column;gap:10px}
-.sb-due{font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px}
+.sb-due{font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:6px}
 .due-over{background:var(--red-soft);color:var(--red)}
 .due-soon{background:var(--amber-soft);color:var(--amber)}
-.due-ok{background:transparent;color:var(--muted)}
+.due-ok{background:transparent;color:var(--ink)}
 
 .sb-ppl{display:flex;align-items:center;margin-top:10px;flex-wrap:wrap;gap:6px}
 .sb-av{width:24px;height:24px;border-radius:50%;background:var(--violet-soft);color:var(--violet);
@@ -194,9 +223,9 @@ a{color:inherit}
 .sb-av.owner{background:var(--gold);color:#3a2a06}
 
 /* "Needs your attention" rows on My Day — tighter than a full task card. */
-.sb-attnlist{display:flex;flex-direction:column;gap:8px;margin-bottom:6px}
-.sb-attn{display:flex;align-items:center;gap:12px;width:100%;text-align:left;
-  background:var(--card);border:1px solid var(--line);border-radius:13px;padding:12px 14px;box-shadow:var(--shadow)}
+.sb-attnlist{display:flex;flex-direction:column;gap:7px;margin-bottom:6px}
+.sb-attn{display:flex;align-items:center;gap:11px;width:100%;text-align:left;
+  background:var(--card);border:1px solid var(--line);border-radius:13px;padding:10px 12px;box-shadow:var(--shadow)}
 .sb-attn:active{transform:scale(.99)}
 .sb-attn-bar{width:4px;align-self:stretch;border-radius:3px;flex:none;background:var(--line)}
 .sb-attn-bar.due-over{background:var(--red)} .sb-attn-bar.due-soon{background:var(--amber)}
@@ -218,7 +247,7 @@ a{color:inherit}
 .sb-navbtn .pill{position:absolute;top:0;right:14px;background:var(--red);color:#fff;font-size:9px;
   font-weight:700;border-radius:999px;padding:0 5px}
 
-.sb-fab{position:fixed;bottom:84px;right:18px;z-index:41;width:54px;height:54px;border-radius:17px;
+.sb-fab{position:fixed;bottom:84px;right:18px;z-index:41;width:60px;height:60px;border-radius:18px;
   background:var(--violet);color:#fff;border:none;font-size:26px;box-shadow:0 8px 22px rgba(76,58,140,.4);
   display:flex;align-items:center;justify-content:center}
 .sb-fab:active{transform:scale(.94)}
@@ -239,9 +268,9 @@ a{color:inherit}
 /* Wins & metrics cards. */
 .sb-wincards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:4px}
 @media(min-width:680px){ .sb-wincards{grid-template-columns:repeat(4,1fr)} }
-.sb-wincard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 15px;box-shadow:var(--shadow)}
-.sb-wincard .n{font-family:Fraunces;font-size:26px;font-weight:600;line-height:1}
-.sb-wincard .lbl{font-size:12px;color:var(--muted);font-weight:600;margin-top:6px}
+.sb-wincard{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:10px 12px;box-shadow:var(--shadow)}
+.sb-wincard .n{font-family:Fraunces;font-size:22px;font-weight:600;line-height:1}
+.sb-wincard .lbl{font-size:11.5px;color:var(--muted);font-weight:600;margin-top:3px}
 /* Sub-label inside a section (This month / Last month / Across the team). */
 .sb-mlabel{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:12px 2px 8px}
 /* Upcoming events list on Home. */
@@ -251,6 +280,67 @@ a{color:inherit}
 .sb-ev-ic{font-size:22px;flex:none}
 .sb-ev-name{font-weight:600;font-size:14.5px}
 .sb-ev-sub{font-size:12px;color:var(--muted);margin-top:2px}
+.sb-ev-warn{color:var(--red);font-weight:700}
+
+/* ===== Admin activity feed ===== */
+.sb-actfeed{display:flex;flex-direction:column}
+.sb-actrow{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:none;
+  border:none;cursor:pointer;padding:10px 4px;border-bottom:1px solid var(--line)}
+.sb-actrow:last-child{border-bottom:none}
+.sb-actrow:hover{background:var(--card)}
+.sb-act-dot{width:7px;height:7px;border-radius:50%;background:var(--violet);flex:none}
+.sb-act-txt{flex:1;min-width:0;font-size:13.5px;color:var(--ink);overflow-wrap:anywhere}
+.sb-act-txt b{font-weight:600}
+.sb-act-ago{font-size:11.5px;color:var(--muted);white-space:nowrap;flex:none}
+
+/* ===== Beta banner ===== */
+.sb-beta{display:flex;align-items:center;gap:10px;background:var(--violet-soft);
+  border:1px solid var(--line);border-radius:12px;padding:9px 12px;margin:14px 16px 0}
+@media(min-width:900px){ .sb-beta{margin:14px 0 0} }
+.sb-beta-tag{font-size:11px;font-weight:700;letter-spacing:.03em;background:var(--violet);color:#fff;
+  border-radius:999px;padding:3px 9px;flex:none}
+.sb-beta-txt{flex:1;min-width:0;font-size:12.5px;color:var(--violet-deep);line-height:1.4}
+[data-theme="dark"] .sb-beta-txt{color:var(--ink)}
+.sb-beta-report{flex:none;background:var(--card);border:1px solid var(--violet);color:var(--violet);
+  border-radius:8px;padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer}
+.sb-beta-x{flex:none;background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:4px}
+.sb-beta-x:hover{color:var(--ink)}
+
+/* ===== People page: pending review rows ===== */
+.sb-prowlist{display:flex;flex-direction:column;gap:7px}
+.sb-prow{display:flex;align-items:center;gap:11px;background:var(--card);border:1px solid var(--line);
+  border-radius:13px;padding:10px 12px;box-shadow:var(--shadow)}
+.sb-prow-main{flex:1;min-width:0}
+.sb-prow-name{font-weight:600;font-size:14.5px}
+.sb-prow-sub{font-size:12px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.sb-pendtag{color:var(--gold);font-weight:700}
+
+/* ===== People page: team cards ===== */
+.sb-prow-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:9px}
+.sb-rolechip{font-size:10.5px;font-weight:700;letter-spacing:.03em;padding:2px 8px;border-radius:6px;
+  background:var(--violet-soft);color:var(--violet)}
+.sb-rolechip.rc-admin{background:var(--violet);color:#fff}
+.sb-rolechip.rc-lead{background:var(--gold-soft);color:var(--gold)}
+.sb-rolechip.rc-qa{background:var(--blue-soft);color:var(--blue)}
+.sb-rolechip.rc-captions{background:var(--green-soft);color:var(--green)}
+.sb-rolechip.rc-member{background:var(--line);color:var(--muted)}
+.sb-activecount{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--muted)}
+
+/* ===== Remove-user modal radio rows ===== */
+.sb-radio{display:flex;align-items:flex-start;gap:9px;padding:8px 0;font-size:13.5px;color:var(--ink);cursor:pointer}
+.sb-radio input{margin-top:2px;accent-color:var(--violet)}
+
+/* ===== Expand / collapse all control ===== */
+.sb-collapserow{display:flex;justify-content:flex-end;margin:-4px 2px 8px}
+.sb-collapselink{background:none;border:none;color:var(--violet);font-weight:600;font-size:12.5px;cursor:pointer;padding:4px 2px}
+.sb-collapselink:hover{text-decoration:underline}
+
+/* ===== Search modal close (✕ on touch, ESC hint on desktop) ===== */
+.sb-searchclose{background:var(--card);border:1px solid var(--line);color:var(--muted);
+  width:32px;height:32px;border-radius:9px;font-size:14px;cursor:pointer;flex:none}
+.sb-searchclose:hover{color:var(--ink);border-color:var(--violet)}
+.sb-deskonly{display:none}
+@media(min-width:900px){ .sb-deskonly{display:inline-block} }
 /* Recent wins rows. */
 .sb-recent{display:flex;flex-direction:column;gap:6px}
 .sb-recent-row{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:10px 13px;font-size:13.5px}
@@ -290,7 +380,7 @@ a{color:inherit}
 .sb-field input,.sb-field select,.sb-field textarea{width:100%;border:1px solid var(--line);border-radius:11px;
   padding:11px 12px;font-size:16px;font-family:inherit;background:var(--card);color:var(--ink)}
 .sb-field input:focus,.sb-field select:focus,.sb-field textarea:focus{outline:2px solid var(--violet);border-color:transparent}
-.sb-btn{width:100%;background:var(--violet);color:#fff;border:none;padding:13px;border-radius:13px;font-size:15px;font-weight:600;margin-top:4px}
+.sb-btn{width:100%;background:var(--violet);color:#fff;border:none;padding:12px 14px;border-radius:12px;font-size:14.5px;font-weight:600;margin-top:4px}
 .sb-btn:disabled{opacity:.5}
 .sb-btn.ghost{background:var(--card);color:var(--violet);border:1px solid var(--violet)}
 .sb-btn.danger{background:var(--red-soft);color:var(--red)}
@@ -299,7 +389,7 @@ a{color:inherit}
 .sb-btnrow{display:flex;gap:9px}
 /* Compact action button — only as wide as its label (Open / Fetch / Approve /
    Add / Send). Use inside .sb-inline rows so the input keeps the width. */
-.sb-btn.compact{width:auto;flex:none;margin-top:0;padding:11px 16px}
+.sb-btn.compact{width:auto;flex:none;margin-top:0;padding:9px 14px;font-size:13.5px}
 /* Input + compact-button row: the field takes the space, the button hugs its
    label. The global form pattern (see also .sb-urlrow). */
 .sb-inline{display:flex;gap:9px;align-items:stretch}
@@ -383,3 +473,110 @@ a{color:inherit}
 .sb-stack{margin-top:8px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:10px;
   font-size:11px;white-space:pre-wrap;overflow-x:auto;max-height:240px;color:var(--ink);
   font-family:ui-monospace,Menlo,Consolas,monospace}
+
+/* ===== Board: filter chips, sort, status groups ===== */
+.sb-chiprow{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.sb-fchip{background:var(--card);border:1px solid var(--line);color:var(--muted);
+  padding:6px 12px;border-radius:999px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.sb-fchip:hover{border-color:var(--violet)}
+.sb-fchip.on{background:var(--violet);color:#fff;border-color:var(--violet)}
+.sb-fchip.admin{border-style:dashed}
+.sb-fchip.admin.on{border-style:solid}
+.sb-sortrow{display:flex;justify-content:flex-end;margin-bottom:12px}
+.sb-sortlbl{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);font-weight:600}
+.sb-select{background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:9px;
+  padding:7px 10px;font-size:13px;font-weight:500;cursor:pointer}
+.sb-group{margin-bottom:22px}
+.sb-grouphd{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;cursor:pointer;
+  padding:8px 2px;text-align:left}
+.sb-grouphd .sb-status{font-size:12.5px;font-weight:700}
+.sb-chev{display:inline-block;color:var(--muted);font-size:16px;transition:transform .15s;flex:none}
+.sb-chev.open{transform:rotate(90deg)}
+.sb-archtag{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted);background:var(--line);padding:2px 7px;border-radius:6px}
+.sb-groupct{margin-left:auto;font-size:12px;font-weight:700;color:var(--muted);
+  background:var(--paper);border:1px solid var(--line);border-radius:999px;min-width:22px;
+  height:22px;padding:0 7px;display:inline-flex;align-items:center;justify-content:center}
+.sb-group .sb-list{margin-top:4px}
+
+/* ===== Sidebar / header search trigger ===== */
+.sb-searchbtn{display:flex;align-items:center;gap:9px;width:100%;background:var(--paper);
+  border:1px solid var(--line);color:var(--muted);border-radius:11px;padding:9px 12px;
+  font-size:13px;font-weight:500;cursor:pointer;margin:4px 0 12px}
+.sb-searchbtn:hover{border-color:var(--violet);color:var(--ink)}
+.sb-searchbtn .ico{font-size:13px}
+.sb-kbd{margin-left:auto;background:var(--card);border:1px solid var(--line);border-radius:6px;
+  padding:1px 7px;font-size:11px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
+
+/* ===== Global search overlay ===== */
+.sb-modal{position:fixed;inset:0;z-index:60;background:rgba(33,27,51,.45);
+  display:flex;align-items:flex-start;justify-content:center;padding:10vh 16px 16px}
+.sb-search{background:var(--paper);width:100%;max-width:600px;border-radius:18px;
+  box-shadow:var(--shadow);overflow:hidden;animation:rise .18s ease;max-height:78vh;display:flex;flex-direction:column}
+.sb-searchbar{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.sb-searchbar .ico{font-size:16px;flex:none}
+.sb-searchbar input{flex:1;border:none;background:none;font-size:16px;color:var(--ink);outline:none;min-width:0}
+.sb-searchhint{padding:16px;color:var(--muted);font-size:13px;line-height:1.5}
+.sb-searchresults{overflow-y:auto;padding:6px}
+.sb-searchsec{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--muted);padding:10px 10px 4px}
+.sb-sresult{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;
+  border:none;cursor:pointer;border-radius:10px;padding:9px 10px}
+.sb-sresult:hover{background:var(--violet-soft)}
+.sb-sresult .r-main{font-weight:600;font-size:14px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-sresult .r-sub{margin-left:auto;font-size:11.5px;color:var(--muted);white-space:nowrap;flex:none}
+.sb-sresult .r-icon{font-size:15px;flex:none;width:22px;text-align:center}
+.sb-sresult .sb-status{flex:none}
+
+/* ===== Card "your role" chip (Lead / Support) ===== */
+.sb-role{font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
+  padding:2px 7px;border-radius:6px;white-space:nowrap}
+.sb-role.lead{background:var(--gold-soft);color:var(--gold)}
+.sb-role.support{background:var(--blue-soft);color:var(--blue)}
+
+/* ===== My Work: accent the two urgency buckets ===== */
+.sb-shead.urgent h2{color:var(--red)}
+.sb-shead.soon h2{color:var(--amber)}
+
+/* ===== Admin Overview: health cards ===== */
+.sb-health{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:18px}
+@media(min-width:560px){ .sb-health{grid-template-columns:repeat(3,1fr)} }
+.sb-hcard{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;cursor:pointer;
+  background:var(--card);border:1px solid var(--line);border-left:3px solid var(--line);
+  border-radius:12px;padding:12px 13px}
+.sb-hcard:hover{box-shadow:var(--shadow)}
+.sb-hcard .n{font-size:24px;font-weight:700;line-height:1.1;font-family:'Fraunces',Georgia,serif}
+.sb-hcard .l{font-size:12px;color:var(--muted);font-weight:600}
+.sb-hcard.tone-red{border-left-color:var(--red)} .sb-hcard.tone-red .n{color:var(--red)}
+.sb-hcard.tone-amber{border-left-color:var(--amber)} .sb-hcard.tone-amber .n{color:var(--amber)}
+.sb-hcard.tone-green{border-left-color:var(--green)} .sb-hcard.tone-green .n{color:var(--green)}
+.sb-hcard.tone-violet{border-left-color:var(--violet)} .sb-hcard.tone-violet .n{color:var(--violet)}
+.sb-hcard.tone-gold{border-left-color:var(--gold)} .sb-hcard.tone-gold .n{color:var(--gold)}
+.sb-hcard.tone-blue{border-left-color:var(--blue)} .sb-hcard.tone-blue .n{color:var(--blue)}
+
+/* ===== Admin card "problem" line + helpers ===== */
+.sb-problem{margin-top:7px;font-size:12.5px;font-weight:600;color:var(--red);
+  background:var(--red-soft);border-radius:8px;padding:6px 9px}
+.sb-morelink{background:none;border:none;color:var(--violet);font-weight:600;font-size:13px;
+  cursor:pointer;padding:8px 2px;margin-bottom:6px}
+.sb-morelink:hover{text-decoration:underline}
+.sb-quickrow{flex-wrap:wrap}
+
+/* ===== Board: collapsible filter bar ===== */
+.sb-filterbar{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.sb-filtertoggle{display:inline-flex;align-items:center;gap:7px;background:var(--card);
+  border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:8px 12px;
+  font-size:13px;font-weight:600;cursor:pointer}
+.sb-filtertoggle .ico{font-size:13px}
+.sb-filtertoggle .sb-chev{font-size:15px}
+.sb-filteractive{background:var(--violet);color:#fff;font-size:11px;font-weight:700;
+  border-radius:999px;padding:1px 9px}
+.sb-filterbar .sb-sortlbl{margin-left:auto}
+
+/* ===== Collapsible section header (My Work) ===== */
+.sb-sheadbtn{display:flex;align-items:center;gap:8px;width:100%;background:none;border:none;
+  cursor:pointer;text-align:left;padding-left:0}
+.sb-sheadbtn .sb-chev{font-size:17px;color:var(--muted)}
+.sb-sheadbtn h2{margin:0}
+.sb-sheadbtn .sb-tag{margin-left:auto}
+
