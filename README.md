@@ -86,8 +86,11 @@ Firebase Auth ──▶ user profile (users/{uid})
 name, email
 role: "member" | "admin"
 status: "pending" | "approved"
-qa: boolean          // QA reviewer
-captions: boolean    // captions / upload team
+qa: boolean          // QA reviewer            (admin-set; locked at sign-up)
+captions: boolean    // captions / upload team (admin-set; locked at sign-up)
+lead: boolean        // department lead        (admin-set; locked at sign-up)
+department: "Graphic Design" | "Content Creation" | "Videography"
+           | "Photography" | "Caption & Upload" | "QA" | ""   // admin-set
 skills: ["shoot" | "edit" | "coordinate" | "design" | "shadow"]
 location: ["479" | "828"]
 deprioritize, limited, manualSchedule: boolean   // auto-assign tuning
@@ -99,18 +102,23 @@ createdAt
 title, type ("Reel" | "Poster" | "Photography"), location ("479" | "828" | "Both")
 owner            // a registered user's name, or "Pending" (imported)
 ownerSuggested   // original sheet name when owner is Pending
-support: [{ name, role, loc?, suggested? }]
-status: "Planned" | "In Progress" | "In Review" | "Approved" | "Posted"
+support: [{ name, role, loc?, suggested? }]   // suggested = sheet name for a Pending slot
+status: "Planned" | "In Progress" | "In Review" | "Changes Requested"
+      | "Approved" | "Ready to Post" | "Posted"          // 7-stage workflow
 priority: "Low" | "Medium" | "High"
-nextAction, nextActionNote, blockedOn   // "what's next / waiting on"
+blockedOn                                // "waiting on …" (the next step is system-derived)
 brief, notes, relatedEvent, link
-shootDate, postDate                     // ISO yyyy-mm-dd
-links: { ig, landscape, video, photos } // content deliverables, required before QA
+shootDate, postDate                      // ISO yyyy-mm-dd
+links: { ig, landscape, video, photos }  // content deliverables, required before QA
+caption                                  // set by captions/upload team after approval
+postLink                                 // the published-post URL, at Ready to Post / Posted
 comments: [{ who, txt, tm }]
 reactions: { "👍": [names], … }
-activity: [{ type, by, at, note }]      // timeline + approval history
+activity: [{ type, by, at, note }]       // timeline + approval history
 createdAt, updatedAt
 ```
+
+The **7 statuses** group into four phases for the progress bar — Planning (Planned), Creating (In Progress, Changes Requested), Review (In Review, Approved), Posting (Ready to Post, Posted) — and the **next action is system-driven** (`workflowAction` / `nextStep` in `data.js`), so contributors never pick the next step manually.
 
 **`issues/{id}`** — bug/crash/feedback reports and auto-captured runtime errors (see [Logging & Monitoring](#logging--monitoring)).
 
@@ -126,7 +134,7 @@ Roles are flags/fields on the `users` doc; a person can hold more than one. Dash
 | **Contributor** | default (`role: "member"`) | My Day = "needs your attention"; My Work = leading vs supporting. |
 | **QA** | `qa: true` | My Day shows the review queue (awaiting approval / returned / recently approved); can **Approve** or **Request changes**. Only QA/admin can move a task to *Approved* (enforced in rules). |
 | **Caption / Upload** | `captions: true` | My Day shows approved-needs-captions / ready-to-post / overdue posts. Their work starts after approval. |
-| **Department Lead** | _planned_ | Per-department dashboards (Content / Photography / Videography / Graphic Design). Not yet built. |
+| **Department Lead** | `lead: true` + `department` | Assignable today (set in **Admin → People**; people are grouped by department on the roster). Per-department **dashboards** are still planned. |
 
 ---
 
@@ -141,21 +149,60 @@ Roles are flags/fields on the `users` doc; a person can hold more than one. Dash
 - **Wins & metrics** — personal + team wins, avg approval time, most active contributors (folded into Home).
 - **Upcoming events** — pastor birthdays + Mother's/Father's Day on Home, with content-prep lead times.
 - **Global search & archive** — search every task across all statuses; posted/completed work moves to an Archive view.
-- **CSV / Google Sheet import** — bulk-create tasks; unknown owners/crew import as **Pending** and are suggested to matching users when they sign up.
+- **CSV / Google Sheet import** with **intelligent name matching** — bulk-create tasks; unknown owners/crew import as **Pending**, and the importer reconciles shortened/alternate sheet names against real accounts (see [Intelligent Name Matching](#intelligent-name-matching-import-reconciliation)).
 - **Issue reporting & error tracking** — see [Logging & Monitoring](#logging--monitoring).
 - **Dark mode** — system preference + manual toggle, remembered.
 
 **Planned (not yet built):**
 - **Notifications** — in-app center for assignments, QA requests, approvals, overdue, mentions.
-- **Department-lead dashboards** and a full **Events calendar** page.
+- **Department-lead dashboards** and a full **Events calendar** page (creating/editing events; today they're hardcoded in `events.js`).
+- **Preferred names / nicknames** — store a legal name + a preferred name (e.g. "Oghenekome Egbedi" → display **"Kome"**) and show the preferred name everywhere; global search matches all forms. _(The import-side matching below already exists; this is the in-app display half.)_
+- **Workload-aware crew suggestions** in the manual picker — rank people by skill match **and** current active-assignment count, steering work away from overloaded volunteers (`autoAssign`/`computeCapacity`/`userActiveTasks` already model this).
+- **Self-service profiles** — let users edit their own name/nickname/email/avatar and trigger a password reset (needs a scoped rules change; members currently can't self-edit).
+- **Simpler auth** — evaluate passwordless sign-in (magic link → email code → passkeys / Face ID / Touch ID) to cut password friction for volunteers.
+- **Published-content performance** — pull IG/Facebook/YouTube stats into a Home "This week's performance" section (external integrations).
+- **Bulk actions** on Admin → Content (multi-select archive/delete/assign).
+
+---
+
+## Intelligent Name Matching (import reconciliation)
+
+Church volunteers sign up with their full name (e.g. *Oghenekome Egbedi*) but the Google Sheet refers to them by a short/alternate name (*Kome*). On import, StudioBoard tries to recognize that these refer to the same account, so tasks land on real people instead of staying "Pending."
+
+**How it scores a match** (`matchUserScored` in `src/data.js` → `{ user, confidence, reason }`):
+
+| Signal | Confidence | Example |
+| --- | --- | --- |
+| Remembered mapping (admin-confirmed before) | 100% | "Kome" once you've confirmed it |
+| Exact full name | 100% | "Oghenekome Egbedi" |
+| Email / email handle | 92–98% | `tofunmi@…` → Oluwatofunmi |
+| Exact first name | 90% | "David" → David Okafor |
+| Contained / partial token | ~65–88% | **"Kome" ⊂ Oghenekome**, **"Dola" ⊂ Dolabomi** |
+| Initials | 78% | **"OE"** → Oghenekome Egbedi |
+
+**Auto vs. confirm.** Strong matches (**≥ 90%** — exact, remembered, email, exact first name) resolve **automatically** during import. Fuzzy guesses (partial / initials) deliberately stay **Pending** so they're never silently mis-assigned.
+
+**The "Match names" step.** Above the import preview, any fuzzy guesses appear for review:
+```
+“Kome” → Oghenekome Egbedi
+71% match · partial name        [Assign] [Ignore]
+```
+- **Assign** resolves that name across all rows **and remembers it** — stored in `localStorage` under `sb-name-mappings` as `{ matchKey(name): userName }`.
+- **Ignore** leaves the entry Pending.
+
+**Remembered for next time.** Once confirmed, future imports containing that name auto-assign (the remembered mapping scores 100%). The preview re-derives live as confirmations are made (`reconcileNames` collects the still-pending names + best guesses; `rowToTask`/`parseSupport` accept the `mappings` map).
+
+> **Current scope.** This is purely an **import reconciliation** system — it helps the app understand that different spellings of a name may be the same account. It is _not_ yet a stored preferred-name/nickname on the user profile (that's a planned feature above). Confirmed mappings live per-browser in `localStorage`, not in Firestore.
 
 ---
 
 ## Future Roadmap
 
 - In-app **notifications** + (later) push notifications.
-- **Department-lead** dashboards and a dedicated **Events** page.
-- **Analytics / content performance** tracking.
+- **Department-lead** dashboards and a dedicated **Events** page (with event creation).
+- **Preferred names / nicknames** stored on the profile (the import-side matcher is the first half).
+- **Passwordless auth** (magic link / email code / passkeys) to ease volunteer onboarding.
+- **Analytics / content performance** tracking (IG / Facebook / YouTube).
 - **Integrations** — Google Drive, calendar sync.
 - Continued **mobile** refinement; recurring content templates; AI caption suggestions.
 
@@ -203,7 +250,7 @@ Conceptual mapping for newcomers:
 - **Pages / components** → functions in `src/App.jsx` (`Home`, `MyDay`, `BoardList`, `Mine`, `Team`, `Admin`, `TaskDetail`, `TaskEditor`, `UserEditor`, `ImportPanel`, `IssueLog`, …).
 - **Hooks** → `useAuthUser` / `useProfile` / `useCollection` in `App.jsx`.
 - **Services** → `src/firebase.js` (Auth + Firestore); scripts under `scripts/`.
-- **Utilities** → `src/data.js` (statuses, auto-assign, capacity, search, wins/metrics, CSV parsing, assignment matching), `src/events.js`, `src/theme.js`, `src/logging.js`.
+- **Utilities** → `src/data.js` (statuses, auto-assign, capacity, search, wins/metrics, CSV parsing, **intelligent name matching** — `matchUserScored` / `matchUser` / `reconcileNames`), `src/events.js`, `src/theme.js`, `src/logging.js`.
 
 `src/data.js` is intentionally free of React and Firebase so its logic can be unit-tested or reused — most verification in development was done by importing it directly under Node.
 

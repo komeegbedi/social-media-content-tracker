@@ -37,6 +37,21 @@ export const statusClass = (s) =>
 export const priorityClass = (p) =>
   ({ Low:"pri-low", Medium:"pri-med", High:"pri-high" }[p] || "pri-med");
 
+// A concise label for an unfilled support slot — "Pending editor" rather than
+// repeating "Pending (Name) · Getting People" everywhere.
+const PENDING_ROLE = { shoot: "shooter", edit: "editor", coordinate: "coordinator", design: "designer", shadow: "shadow" };
+export const pendingRoleLabel = (role) => PENDING_ROLE[role] ? `Pending ${PENDING_ROLE[role]}` : "Pending assignment";
+
+// How many tasks are tied to an event (loose token match on relatedEvent),
+// so Upcoming can show "1 content item planned" vs "no content assigned".
+export function eventContentCount(eventName, tasks) {
+  const tokens = (eventName || "").toLowerCase().split(/\W+/)
+    .filter((w) => w.length > 3 && !["pastor", "birthday", "conference"].includes(w));
+  if (!tokens.length) return 0;
+  return (tasks || []).filter((t) =>
+    tokens.some((tok) => (t.relatedEvent || "").toLowerCase().includes(tok))).length;
+}
+
 // support-crew role code → human label.
 export const roleLabel = (r) =>
   ({ shoot:"Shooting", edit:"Editing", coordinate:"Getting People",
@@ -243,17 +258,70 @@ export const sanitizeName = (s) =>
     .replace(/[\u0000-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u2028-\u2029\u202A-\u202E\u2060-\u206F\uFEFF]/g, "")
     .replace(/\s+/g, " ").trim();
 const normName = (s) => sanitizeName(s).toLowerCase();
+// Stable key for remembering an admin-confirmed name → user mapping.
+export const matchKey = (s) => normName(s);
 
-// Find the registered user a sheet name most likely refers to. Matches a full
-// name, or a first name on either side (the sheet mostly uses first names).
-// Powers the "if a Kolade signs up, suggest them for Kolade's tasks" feature.
-export function matchUser(name, users = []) {
+const ratio = (a, b) => Math.min(a, b) / Math.max(a, b);
+
+/* Intelligently guess which registered user a (often shortened/alternate) name
+   refers to — "Kome" → Oghenekome Egbedi, "Dola" → Dolabomi Bello. Returns
+   { user, confidence (0–1), reason } or null. `mappings` is the remembered
+   { matchKey(csvName): userName } map an admin has confirmed before. */
+export function matchUserScored(name, users = [], mappings = {}) {
   const n = normName(name);
   if (!n) return null;
-  return users.find((u) => normName(u.name) === n)
-    || users.find((u) => normName(u.name).split(" ")[0] === n)
-    || users.find((u) => n.split(" ")[0] === normName(u.name).split(" ")[0])
-    || null;
+  const find = (pred) => users.find(pred);
+
+  // 1. A previously confirmed manual mapping wins outright.
+  const remembered = mappings[n];
+  if (remembered) {
+    const u = find((x) => normName(x.name) === normName(remembered));
+    if (u) return { user: u, confidence: 1, reason: "remembered" };
+  }
+  // 2. Exact full name.
+  let u = find((x) => normName(x.name) === n);
+  if (u) return { user: u, confidence: 1, reason: "exact name" };
+  // 3. Email — value is an email, or matches a user's email handle.
+  if (n.includes("@")) {
+    u = find((x) => normName(x.email) === n);
+    if (u) return { user: u, confidence: 0.98, reason: "email" };
+  }
+  u = find((x) => (x.email || "").toLowerCase().split("@")[0] === n);
+  if (u) return { user: u, confidence: 0.92, reason: "email handle" };
+
+  const csvFirst = n.split(" ")[0];
+  const csvTokens = n.split(" ").filter(Boolean);
+
+  // 4. Exact first name.
+  u = find((x) => normName(x.name).split(" ")[0] === csvFirst);
+  if (u) return { user: u, confidence: 0.9, reason: "first name" };
+
+  // 5. Contained / partial token — handles Kome⊂Oghenekome, Dola⊂Dolabomi.
+  let best = null;
+  for (const x of users) {
+    for (const tok of normName(x.name).split(" ").filter(Boolean)) {
+      if (csvFirst.length < 3 || tok.length < 3) continue;
+      let conf = 0, why = "partial name";
+      if (tok === csvFirst) { conf = 0.9; why = "first name"; }
+      else if (tok.startsWith(csvFirst) || csvFirst.startsWith(tok)) conf = 0.72 + 0.18 * ratio(tok.length, csvFirst.length);
+      else if (tok.includes(csvFirst) || csvFirst.includes(tok)) conf = 0.64 + 0.18 * ratio(tok.length, csvFirst.length);
+      if (conf > (best?.confidence || 0)) best = { user: x, confidence: Math.round(conf * 100) / 100, reason: why };
+    }
+  }
+  // 6. Initials — "OE" → Oghenekome Egbedi.
+  if ((!best || best.confidence < 0.75) && csvTokens.length === 1 && /^[a-z]{2,4}$/.test(csvFirst)) {
+    u = find((x) => normName(x.name).split(" ").map((t) => t[0]).join("") === csvFirst);
+    if (u && 0.78 > (best?.confidence || 0)) best = { user: u, confidence: 0.78, reason: "initials" };
+  }
+  return best && best.confidence >= 0.6 ? best : null;
+}
+
+// Auto-resolve a name to a user only when we're confident (exact, remembered,
+// email, or exact first name ≥0.9). Fuzzy/partial guesses are left "Pending"
+// so the import reconciliation UI can confirm them before assigning.
+export function matchUser(name, users = [], mappings = {}) {
+  const m = matchUserScored(name, users, mappings);
+  return m && m.confidence >= 0.9 ? m.user : null;
 }
 
 // "2/15/2026" or "2026-02-15" → "2026-02-15"; anything else → "".
@@ -297,7 +365,7 @@ function detectRoles(text) {
 // resolving each name to a registered user where possible. Unknown people
 // become { name: "Pending", suggested: "<sheet name>" } so an admin can
 // assign them once that person has an account.
-export function parseSupport(raw, users = []) {
+export function parseSupport(raw, users = [], mappings = {}) {
   const s = sanitizeName(raw);
   if (!s || s === "-") return [];
   const out = [];
@@ -311,7 +379,7 @@ export function parseSupport(raw, users = []) {
     namesPart.split(/&|,/).forEach((rawName) => {
       const nm = sanitizeName(rawName);
       if (!nm) return;
-      const u = matchUser(nm, users);
+      const u = matchUser(nm, users, mappings);
       roles.forEach((role) => out.push(u ? { name: u.name, role } : { name: "Pending", role, suggested: nm }));
     });
   });
@@ -323,7 +391,7 @@ export function parseSupport(raw, users = []) {
    "Pending" with the original sheet name kept in `ownerSuggested` / each
    crew entry's `suggested`, so admins can assign them later (with matching
    suggestions). Returns { task, error }. */
-export function rowToTask(row, users = []) {
+export function rowToTask(row, users = [], mappings = {}) {
   const title = sanitizeName(getCol(row, "title"));
   if (!title) return { task: null, error: "Missing title" };
 
@@ -335,7 +403,7 @@ export function rowToTask(row, users = []) {
 
   // Owner → registered user, else "Pending" (keep the sheet name as a hint).
   const ownerRaw = sanitizeName(getCol(row, "owner"));
-  const ownerUser = matchUser(ownerRaw, users);
+  const ownerUser = matchUser(ownerRaw, users, mappings);
   const owner = ownerUser ? ownerUser.name : "Pending";
   const ownerSuggested = ownerUser ? "" : ownerRaw;
 
@@ -365,8 +433,28 @@ export function rowToTask(row, users = []) {
   };
   // Use the sheet's Support Team if that column exists; otherwise fall back
   // to auto-assigning crew (keeps the simple template working).
-  task.support = hasCol(row, "support") ? parseSupport(getCol(row, "support"), users) : autoAssign(task, users);
+  task.support = hasCol(row, "support") ? parseSupport(getCol(row, "support"), users, mappings) : autoAssign(task, users);
   return { task, error: null };
+}
+
+/* Collect the distinct still-"Pending" names across parsed import rows (owner +
+   crew), each with the best-guess match — drives the import reconciliation UI.
+   Returns [{ name, key, user, confidence, reason }] (only names with a guess). */
+export function reconcileNames(rows, users = [], mappings = {}) {
+  const seen = new Map();
+  for (const r of rows || []) {
+    const t = r.task; if (!t) continue;
+    const names = [];
+    if (t.owner === "Pending" && t.ownerSuggested) names.push(t.ownerSuggested);
+    (t.support || []).forEach((s) => { if (s.name === "Pending" && s.suggested) names.push(s.suggested); });
+    for (const nm of names) {
+      const key = matchKey(nm);
+      if (!key || seen.has(key)) continue;
+      const m = matchUserScored(nm, users, mappings);
+      if (m) seen.set(key, { name: nm, key, user: m.user, confidence: m.confidence, reason: m.reason });
+    }
+  }
+  return [...seen.values()].sort((a, b) => b.confidence - a.confidence);
 }
 
 /* Convert a Google Sheets URL to its CSV-export URL. Pass through any URL

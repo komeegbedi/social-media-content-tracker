@@ -12,7 +12,7 @@ import {
   STAGES, statusClass, roleLabel, initials, emailFor,
   fmt, daysTo, autoAssign, computeCapacity,
   parseCSV, rowToTask, sheetCsvUrl,
-  PRIORITIES, priorityClass, attentionItems, matchUser,
+  PRIORITIES, priorityClass, attentionItems, matchUser, reconcileNames,
   PHASES, statusPhase, nextStep, workflowAction,
   LINK_FIELDS, requiredLinkKeys, missingLinks, QA_STATUSES,
   activityEntry, activityLabel, isApprovalEvent,
@@ -24,6 +24,7 @@ import {
   adminHealth, adminNeedsAttention, adminReadyToMove, recentActivity,
   taskProblem, ADMIN_FILTERS, applyAdminFilter,
   DEPARTMENTS, roleChips, userActiveTasks, PEOPLE_FILTERS, applyPeopleFilter, groupPeople,
+  pendingRoleLabel, eventContentCount,
 } from "./data";
 import { upcomingEvents, searchEvents } from "./events";
 import { setView, reportIssue, logIssue } from "./logging";
@@ -36,6 +37,12 @@ const loadPref = (key, fallback) => {
   catch { return fallback; }
 };
 const savePref = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
+
+/* Full, friendly event date — "Jan 12th, 2026". */
+const ordinal = (n) => { const s = ["th","st","nd","rd"], v = n % 100; return n + (s[(v-20)%10] || s[v] || s[0]); };
+const fmtEventDate = (d) => `${d.toLocaleDateString(undefined,{month:"short"})} ${ordinal(d.getDate())}, ${d.getFullYear()}`;
+/* Sensible starting values when creating content for an event. */
+const eventPrefill = (e) => ({ title: e.name, relatedEvent: e.name, postDate: e.date.toISOString().slice(0,10) });
 
 /* A slim, dismissible beta notice — sets expectations and invites feedback.
    Dismissal is remembered so it doesn't nag returning testers. */
@@ -358,6 +365,8 @@ function Board({ profile, isAdmin }) {
   const [tab, setTab] = useState("home");
   const [openId, setOpenId] = useState(null);
   const [editTask, setEditTask] = useState(null);
+  const [editPrefill, setEditPrefill] = useState(null);  // defaults for a new task (e.g. from an event)
+  const newForEvent = (prefill) => { setEditPrefill(prefill); setEditTask("new"); };
   const [editUser, setEditUser] = useState(null);
   const [showReport, setShowReport] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -570,7 +579,7 @@ function Board({ profile, isAdmin }) {
 
           <div className="sb-content">
             <BetaBanner onReport={()=>setShowReport(true)} />
-            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} />}
+            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} />}
             {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
             {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} />}
             {tab==="mine"  && <Mine tasks={tasks} me={me} openTask={setOpenId} />}
@@ -581,7 +590,7 @@ function Board({ profile, isAdmin }) {
                 onDeleteUser={removeUser} onRemoveUser={removeUserWithTasks} onDeleteTask={deleteTask}
                 onArchiveTask={archiveTask} onDuplicateTask={duplicateTask} onOpenTask={setOpenId}
                 onAutoAll={autoAll} onAutoOne={autoOne} onImport={importTasks} onResolveIssue={resolveIssue}
-                onAssignSuggested={assignSuggested} />
+                onAssignSuggested={assignSuggested} onNewForEvent={newForEvent} />
             )}
           </div>
 
@@ -629,8 +638,9 @@ function Board({ profile, isAdmin }) {
           onEdit={()=>{ setOpenId(null); setEditTask(openTask); }} />
       )}
       {editTask && (
-        <TaskEditor task={editTask==="new"?null:editTask} users={users}
-          onClose={()=>setEditTask(null)} onSave={saveTask} onAuto={(t)=>autoAssign(t, users)} />
+        <TaskEditor task={editTask==="new"?null:editTask} prefill={editPrefill} users={users}
+          onClose={()=>{ setEditTask(null); setEditPrefill(null); }}
+          onSave={(t)=>{ saveTask(t); setEditPrefill(null); }} onAuto={(t)=>autoAssign(t, users)} />
       )}
       {editUser && (
         <UserEditor user={editUser} onClose={()=>setEditUser(null)}
@@ -1097,7 +1107,7 @@ function WinCard({ n, label, tone }) {
 /* The HOME landing page — a ministry / celebration dashboard, not a task list.
    It answers: what have we accomplished, what's coming up, what should I
    celebrate, what should I be aware of? Operational work lives in My Day. */
-function Home({ tasks, users, me, goTab }) {
+function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent }) {
   const pw = personalWins(tasks, me);
   const tw = teamWins(tasks);
   const m = dashboardMetrics(tasks, users);
@@ -1114,7 +1124,6 @@ function Home({ tasks, users, me, goTab }) {
 
   const hi = new Date().getHours();
   const greet = hi<12?"Good morning":hi<17?"Good afternoon":"Good evening";
-  const fmtEv = (d) => d.toLocaleDateString(undefined,{month:"short",day:"numeric"});
 
   // A short, meaningful summary — skip zero-value lines so quiet weeks don't
   // read as "everything is 0". Two lines max: how things are going + what's next.
@@ -1143,18 +1152,23 @@ function Home({ tasks, users, me, goTab }) {
         <div className="sb-shead"><h2>Coming up</h2>
           <button className="link" onClick={()=>goTab("board")}>Plan content →</button></div>
         <div className="sb-evlist">
-          {events.slice(0,3).map((e,i) => (
+          {events.slice(0,3).map((e,i) => {
+            const n = eventContentCount(e.name, tasks);
+            return (
             <div className="sb-ev" key={i}>
               <span className="sb-ev-ic">{e.kind==="birthday"?"🎂":"📅"}</span>
               <div style={{flex:1,minWidth:0}}>
                 <div className="sb-ev-name">{e.name}</div>
                 <div className="sb-ev-sub">
-                  {fmtEv(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
-                  {e.prepNow ? " · start content prep now" : ` · prep in ${e.prepInDays}d`}
+                  {fmtEventDate(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
+                  {n>0 && ` · ${n} content item${n!==1?"s":""} planned`}
                 </div>
               </div>
+              {isAdmin && n===0 && onNewForEvent &&
+                <button className="sb-btn ghost compact" onClick={()=>onNewForEvent(eventPrefill(e))}>Create content</button>}
             </div>
-          ))}
+            );
+          })}
         </div>
       </>}
 
@@ -1288,7 +1302,7 @@ function AdminTaskCard({ t, h }) {
   );
 }
 
-function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested }) {
+function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
   const [sec, setSec] = useState("overview");
   const [contentFilter, setContentFilter] = useState("all");
   const pending = users.filter(u => u.status === "pending");
@@ -1320,7 +1334,7 @@ function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDele
 
       {sec==="overview" && <AdminOverview tasks={tasks} users={users} h={h}
         onGoContent={goContent} onGoPeople={()=>setSec("people")} onGoImport={()=>setSec("import")}
-        onNewContent={()=>onEditTask("new")} onAutoAll={onAutoAll}
+        onNewContent={()=>onEditTask("new")} onAutoAll={onAutoAll} onNewForEvent={onNewForEvent}
         onEditUser={onEditUser} onDeleteUser={onDeleteUser} onAssignSuggested={onAssignSuggested} />}
 
       {sec==="people" && <AdminPeople users={users} tasks={tasks}
@@ -1340,7 +1354,7 @@ function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDele
 /* Overview = the admin landing page: health at a glance, then only the things
    that need a leader — stuck work, approvals, unassigned content — plus recent
    activity and quick actions. No endless content list. */
-function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, onNewContent, onAutoAll, onEditUser, onDeleteUser, onAssignSuggested }) {
+function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, onNewContent, onAutoAll, onEditUser, onDeleteUser, onAssignSuggested, onNewForEvent }) {
   const health = adminHealth(tasks, users);
   const attention = adminNeedsAttention(tasks);
   const pending = users.filter(u => u.status === "pending");
@@ -1350,12 +1364,7 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
   const [eventNote, setEventNote] = useState(false);
 
   // Does any active task reference this event? Loose token match on relatedEvent.
-  const eventCovered = (e) => {
-    const tokens = e.name.toLowerCase().split(/\W+/)
-      .filter(w => w.length>3 && !["pastor","birthday","conference"].includes(w));
-    return tasks.some(t => t.status!=="Posted" &&
-      tokens.some(tok => (t.relatedEvent||"").toLowerCase().includes(tok)));
-  };
+  const eventCount = (e) => eventContentCount(e.name, tasks);
   const ago = (ms) => {
     const m = Math.round((Date.now()-ms)/60000);
     if (m<1) return "just now"; if (m<60) return `${m}m ago`;
@@ -1425,17 +1434,21 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
         <div className="sb-shead"><h2>Upcoming</h2></div>
         <div className="sb-evlist">
           {events.map((e,i) => {
-            const covered = eventCovered(e);
+            const n = eventCount(e);
             return (
               <div className="sb-ev" key={i}>
                 <span className="sb-ev-ic">{e.kind==="birthday"?"🎂":"📅"}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div className="sb-ev-name">{e.name}</div>
                   <div className="sb-ev-sub">
-                    {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
-                    {!covered && <span className="sb-ev-warn"> · ⚠ no content assigned</span>}
+                    {fmtEventDate(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
+                    {n>0
+                      ? <> · {n} content item{n!==1?"s":""} planned</>
+                      : <span className="sb-ev-warn"> · ⚠ no content assigned</span>}
                   </div>
                 </div>
+                {n===0 && onNewForEvent &&
+                  <button className="sb-btn ghost compact" onClick={()=>onNewForEvent(eventPrefill(e))}>Create content</button>}
               </div>
             );
           })}
@@ -1765,14 +1778,29 @@ function AssignHint({ user, tasks, onAssign }) {
    IMPORT (CSV upload / Google Sheet link → tasks)
    =================================================================== */
 function ImportPanel({ users, onImport }) {
-  const [rows, setRows] = useState([]);     // [{ task, error }]
+  const [rawRows, setRawRows] = useState([]);   // parseCSV output (re-mapped as confirmations change)
+  const [mappings, setMappings] = useState(() => loadPref("sb-name-mappings", {}));
+  const [ignored, setIgnored] = useState(new Set());
   const [sheetUrl, setSheetUrl] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Re-derive tasks whenever the raw rows or confirmed name-mappings change.
+  const rows = useMemo(() => rawRows.map((r) => rowToTask(r, users, mappings)), [rawRows, users, mappings]);
+  const reconcile = useMemo(
+    () => reconcileNames(rows, users, mappings).filter((m) => !ignored.has(m.key)),
+    [rows, users, mappings, ignored]);
+
+  const confirmMatch = (m) => {
+    const next = { ...mappings, [m.key]: m.user.name };
+    setMappings(next);
+    savePref("sb-name-mappings", next);   // remember for future imports
+  };
+  const ignoreMatch = (m) => setIgnored((s) => new Set(s).add(m.key));
+
   const ingest = (text) => {
-    const parsed = parseCSV(text).map((r) => rowToTask(r, users));
-    setRows(parsed);
+    const parsed = parseCSV(text);
+    setRawRows(parsed); setIgnored(new Set());
     setMsg(parsed.length ? "" : "No rows found — check the file has a header row and at least one task.");
   };
 
@@ -1788,7 +1816,7 @@ function ImportPanel({ users, onImport }) {
 
   const fetchSheet = async () => {
     if (!sheetUrl.trim()) return;
-    setBusy(true); setMsg(""); setRows([]);
+    setBusy(true); setMsg(""); setRawRows([]);
     try {
       const res = await fetch(sheetCsvUrl(sheetUrl));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1806,7 +1834,7 @@ function ImportPanel({ users, onImport }) {
     try {
       await onImport(valid.map((r) => r.task));
       setMsg(`✓ Imported ${valid.length} task${valid.length!==1?"s":""}.`);
-      setRows([]);
+      setRawRows([]);
     } catch {
       setMsg("Import failed — please try again.");
     } finally { setBusy(false); }
@@ -1837,6 +1865,28 @@ function ImportPanel({ users, onImport }) {
       </div>
 
       {msg && <div className="sb-banner" style={{marginTop:8}}>{msg}</div>}
+
+      {reconcile.length > 0 && <>
+        <div className="sb-shead" style={{marginTop:16}}><h2>Match names</h2>
+          <span className="sb-tag">{reconcile.length}</span></div>
+        <div className="sb-sub" style={{marginTop:-4}}>These sheet names look like existing people. Confirm to assign their tasks — confirmed matches are remembered for next time.</div>
+        <div className="sb-prowlist">
+          {reconcile.map((m) => (
+            <div className="sb-prow" key={m.key}>
+              <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(m.user.name)}</span>
+              <div className="sb-prow-main">
+                <div className="sb-prow-name">“{m.name}” → {m.user.name}</div>
+                <div className="sb-prow-sub">
+                  <span className={"sb-conf "+(m.confidence>=0.8?"hi":m.confidence>=0.7?"mid":"lo")}>{Math.round(m.confidence*100)}% match</span>
+                  {" · "}{m.reason}
+                </div>
+              </div>
+              <button className="sb-btn green compact" onClick={()=>confirmMatch(m)}>Assign</button>
+              <button className="sb-btn ghost compact" onClick={()=>ignoreMatch(m)}>Ignore</button>
+            </div>
+          ))}
+        </div>
+      </>}
 
       {rows.length > 0 && <>
         <div className="sb-shead" style={{marginTop:16}}><h2>Preview</h2>
@@ -2095,12 +2145,13 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
           {(task.support||[]).length===0
             ? <div className="sb-empty" style={{padding:16}}>No support crew yet.</div>
             : (task.support||[]).map((s,i)=>{
-              const pending = s.name==="Pending" && s.suggested;
+              const pending = s.name==="Pending";
               return (
               <div className="sb-cmt" key={i} style={{display:"flex",alignItems:"center",gap:10}}>
-                <span className="sb-av">{initials(pending ? s.suggested : s.name)}</span>
-                <span><b>{pending ? "Pending" : s.name}</b>{pending && <span style={{color:"var(--muted)"}}> ({s.suggested})</span>}
-                  {" · "}<span style={{color:"var(--muted)"}}>{roleLabel(s.role)}{s.loc?` · ${s.loc}`:""}</span></span>
+                <span className="sb-av">{pending ? "?" : initials(s.name)}</span>
+                {pending
+                  ? <span><b>{pendingRoleLabel(s.role)}</b>{s.suggested && <span style={{color:"var(--muted)"}}> · suggested: {s.suggested}</span>}</span>
+                  : <span><b>{s.name}</b> · <span style={{color:"var(--muted)"}}>{roleLabel(s.role)}{s.loc?` · ${s.loc}`:""}</span></span>}
               </div>
               );
             })}
@@ -2175,11 +2226,12 @@ function Detail({ k, v }) {
 /* ===================================================================
    TASK EDITOR
    =================================================================== */
-function TaskEditor({ task, users, onClose, onSave, onAuto }) {
+function TaskEditor({ task, prefill, users, onClose, onSave, onAuto }) {
   const [f, setF] = useState(task || {
     title:"", type:"Reel", location:"828", owner:users[0]?.name||"", ownerSuggested:"",
     shootDate:"", postDate:"", status:"Planned", priority:"Medium",
     blockedOn:"", brief:"", relatedEvent:"", link:"", notes:"", support:[], links:{},
+    ...(prefill || {}),
   });
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
   const valid = f.title.trim() && f.location && f.type && f.owner;
@@ -2234,19 +2286,19 @@ function TaskEditor({ task, users, onClose, onSave, onAuto }) {
           {(f.support||[]).length===0
             ? <div className="sb-sub">No crew yet — tap Auto-assign or add below.</div>
             : (f.support||[]).map((s,i)=>{
-              const pending = s.name==="Pending" && s.suggested;
-              const m = pending ? matchUser(s.suggested, users) : null;
+              const pending = s.name==="Pending";
+              const m = pending && s.suggested ? matchUser(s.suggested, users) : null;
               return (
               <div className="sb-cmt" key={i} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span className="sb-av">{initials(pending ? s.suggested : s.name)}</span>
+                <span className="sb-av">{pending ? "?" : initials(s.name)}</span>
                 <span style={{flex:1,minWidth:0}}>
-                  <b>{pending ? "Pending" : s.name}</b>
-                  {pending && <span style={{color:"var(--muted)"}}> ({s.suggested})</span>}
-                  {" · "}<span style={{color:"var(--muted)"}}>{roleLabel(s.role)}{s.loc?` · ${s.loc}`:""}</span>
+                  {pending
+                    ? <><b>{pendingRoleLabel(s.role)}</b>{s.suggested && <span style={{color:"var(--muted)"}}> · suggested: {s.suggested}</span>}</>
+                    : <><b>{s.name}</b> · <span style={{color:"var(--muted)"}}>{roleLabel(s.role)}{s.loc?` · ${s.loc}`:""}</span></>}
                 </span>
-                {m && <button type="button" className="link"
+                {m && <button type="button" className="sb-btn ghost compact"
                   onClick={()=>set("support", f.support.map((x,j)=> j===i ? { name:m.name, role:x.role, ...(x.loc?{loc:x.loc}:{}) } : x))}>
-                  assign {m.name}</button>}
+                  Assign {m.name.split(" ")[0]} →</button>}
                 <button className="sb-x" onClick={()=>set("support",f.support.filter((_,j)=>j!==i))}>✕</button>
               </div>
               );
