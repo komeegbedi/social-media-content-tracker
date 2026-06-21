@@ -362,17 +362,26 @@ a{color:inherit}
 .sb-overload{font-size:10.5px;color:var(--red);font-weight:700;margin-left:6px}
 .sb-idle{font-size:10.5px;color:var(--amber);font-weight:700;margin-left:6px}
 
-.sb-scrim{position:fixed;inset:0;background:rgba(33,27,51,.45);z-index:50;display:flex;align-items:flex-end;justify-content:center}
-.sb-sheet{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;max-height:92vh;overflow-y:auto;animation:rise .22s ease}
-@media(min-width:900px){ .sb-scrim{align-items:center;padding:20px} .sb-sheet{border-radius:20px;max-height:86vh} }
+.sb-scrim{position:fixed;inset:0;height:100dvh;background:rgba(33,27,51,.45);z-index:50;
+  display:flex;align-items:flex-end;justify-content:center}
+/* Cap the sheet to the *visible* viewport (dvh), minus the top safe-area, so a
+   bottom-anchored sheet's top can never hide under the iPhone Safari/Chrome URL
+   bar. `vh` is the fallback for browsers without dvh. */
+.sb-sheet{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+  max-height:calc(100vh - 48px);
+  max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
+  overflow-y:auto;-webkit-overflow-scrolling:touch;animation:rise .22s ease}
+@media(min-width:900px){ .sb-scrim{align-items:center;padding:20px}
+  .sb-sheet{border-radius:20px;max-height:86dvh} }
 @keyframes rise{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
-/* Keep the type badge + ✕ clear of the iPhone Safari URL bar / notch. */
+/* Sticky header pins the type badge + ✕ to the top of the panel, always
+   visible and tappable; extra top padding clears the notch/home indicator. */
 .sb-sheet .hd{position:sticky;top:0;background:var(--paper);
-  padding:calc(16px + env(safe-area-inset-top)) 18px 12px;border-bottom:1px solid var(--line);
-  display:flex;align-items:center;justify-content:space-between;z-index:2}
-@media(max-width:899px){ .sb-sheet .hd{padding-top:calc(22px + env(safe-area-inset-top))} }
-.sb-sheet .bd{padding:16px 18px 26px}
-.sb-x{background:var(--line);border:none;width:30px;height:30px;border-radius:50%;font-size:16px;color:var(--ink)}
+  padding:16px 18px 12px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;z-index:3}
+@media(max-width:899px){ .sb-sheet .hd{padding-top:calc(18px + env(safe-area-inset-top))} }
+.sb-sheet .bd{padding:16px 18px calc(26px + env(safe-area-inset-bottom))}
+.sb-x{background:var(--line);border:none;width:36px;height:36px;border-radius:50%;font-size:17px;color:var(--ink);flex:none;cursor:pointer}
 
 /* Creative brief callout in the task detail sheet. */
 .sb-brief{background:var(--violet-soft);border:1px solid var(--line);border-radius:13px;
