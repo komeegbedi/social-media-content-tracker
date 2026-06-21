@@ -1,24 +1,37 @@
 /* Pure logic — no React, no Firebase. Easy to unit-test or reuse. */
 
-// The 5-stage production pipeline. A task's `status` is always one of these.
-export const STAGES = ["Planned", "In Progress", "In Review", "Approved", "Posted"];
-export const STAGE_SHORT = ["Plan", "Make", "Review", "Approved", "Posted"];
-
-// Preset "next action" chips — what a task is actually waiting on *right now*.
-// Stored on the task as `nextAction` (one of these) plus an optional free-text
-// `nextActionNote`. Status tells you the stage; nextAction tells a person what
-// to actually do, which is the question contributors really ask.
-export const NEXT_ACTIONS = [
-  "Awaiting approval", "Needs footage", "Needs captions", "Needs revisions", "Ready to post",
+// The full 7-stage content workflow. A task's `status` is always one of these.
+// "Changes Requested" and "Ready to Post" are first-class statuses — they mark
+// real handoffs between departments (owner ↔ QA ↔ caption/upload team).
+export const STAGES = [
+  "Planned", "In Progress", "In Review", "Changes Requested", "Approved", "Ready to Post", "Posted",
 ];
+
+// For the progress bar, the 7 statuses group into 4 human phases.
+export const PHASES = ["Planning", "Creating", "Review", "Posting"];
+export const statusPhase = (s) =>
+  ({ "Planned":0, "In Progress":1, "Changes Requested":1, "In Review":2,
+     "Approved":2, "Ready to Post":3, "Posted":3 }[s] ?? 0);
+
+// The system-driven next step for a status — "who owns the next action".
+// Shown as small secondary text; the status itself is the dominant signal.
+export const nextStep = (status) =>
+  ({ "Planned": "Start creating the content",
+     "In Progress": "Submit content for QA",
+     "In Review": "Awaiting QA approval",
+     "Changes Requested": "Revise & resubmit for QA",
+     "Approved": "Write the caption",
+     "Ready to Post": "Post to Instagram",
+     "Posted": "Done — posted" }[status] || "");
 
 // Task priority. Defaults to "Medium" so only High (and Low) stand out.
 export const PRIORITIES = ["Low", "Medium", "High"];
 
 // status string → CSS class for the coloured status pill.
 export const statusClass = (s) =>
-  ({ Planned:"st-planned","In Progress":"st-progress","In Review":"st-review",
-     Approved:"st-approved",Posted:"st-posted" }[s] || "st-planned");
+  ({ "Planned":"st-planned", "In Progress":"st-progress", "In Review":"st-review",
+     "Changes Requested":"st-changes", "Approved":"st-approved",
+     "Ready to Post":"st-ready", "Posted":"st-posted" }[s] || "st-planned");
 
 // priority string → CSS class for the priority flag.
 export const priorityClass = (p) =>
@@ -64,9 +77,11 @@ export const activityEntry = (type, by, note = "") => ({ type, by, at: Date.now(
 export function activityLabel(e) {
   switch (e.type) {
     case "created": return "Created";
+    case "started": return "Started work";
     case "qa_sent": return "Sent to QA";
     case "approved": return "Approved";
     case "changes_requested": return "Requested changes";
+    case "ready": return "Marked ready to post";
     case "posted": return "Posted";
     case "status": return `Moved to ${e.note || "next stage"}`;
     case "assigned": return e.note || "Assignment changed";
@@ -74,16 +89,34 @@ export function activityLabel(e) {
     default: return e.type;
   }
 }
-export const isApprovalEvent = (e) => ["qa_sent", "approved", "changes_requested"].includes(e.type);
+export const isApprovalEvent = (e) =>
+  ["qa_sent", "approved", "changes_requested", "ready", "started"].includes(e.type);
 
-// Turn a "next action" into a verb-led to-do for the My Day list,
-// e.g. "Needs captions" + "Sunday reel" → "Write captions for Sunday reel".
-export const actionVerb = (action, title) =>
-  ({ "Needs footage": `Get footage for ${title}`,
-     "Needs captions": `Write captions for ${title}`,
-     "Needs revisions": `Revise ${title}`,
-     "Ready to post": `Post ${title}`,
-     "Awaiting approval": `Approve ${title}` }[action] || title);
+/* The single guided action this user can take next, given the task's status
+   and their role — the heart of the system-driven workflow. Returns
+   { label, to, kind, requiresLinks?, needsCaption?, needsPostLink? } or null
+   (no action for this person right now; e.g. they're waiting on someone else).
+   QA approve / request-changes is handled by its own panel, not here. */
+export function workflowAction(task, me) {
+  const isOwner = task.owner === me.name;
+  const isCaption = !!me.captions || me.role === "admin";
+  const isAdmin = me.role === "admin";
+  const mine = isOwner || isAdmin;
+  switch (task.status) {
+    case "Planned":
+      return mine ? { label: "Start work", to: "In Progress", kind: "started" } : null;
+    case "In Progress":
+      return mine ? { label: "Submit for QA", to: "In Review", kind: "qa_sent", requiresLinks: true } : null;
+    case "Changes Requested":
+      return mine ? { label: "Resubmit for QA", to: "In Review", kind: "qa_sent", requiresLinks: true } : null;
+    case "Approved":
+      return isCaption ? { label: "Mark ready to post", to: "Ready to Post", kind: "ready", needsCaption: true } : null;
+    case "Ready to Post":
+      return isCaption ? { label: "Mark as posted", to: "Posted", kind: "posted", needsPostLink: true } : null;
+    default: // In Review (QA panel), Posted (done)
+      return null;
+  }
+}
 
 export const initials = (n="") =>
   n.trim().split(/\s+/).map(w=>w[0]).join("").slice(0,2).toUpperCase() || "?";
@@ -299,7 +332,6 @@ export function rowToTask(row, users = []) {
   const location = LOCS.find((l) => l.toLowerCase() === locRaw.toLowerCase()) || (locRaw || "828");
 
   const priority = PRIORITIES.find((p) => p.toLowerCase() === getCol(row, "priority").toLowerCase()) || "Medium";
-  const nextAction = NEXT_ACTIONS.find((a) => a.toLowerCase() === getCol(row, "nextAction").toLowerCase()) || "";
 
   // Owner → registered user, else "Pending" (keep the sheet name as a hint).
   const ownerRaw = sanitizeName(getCol(row, "owner"));
@@ -323,8 +355,7 @@ export function rowToTask(row, users = []) {
   const task = {
     title, type: mapType(getCol(row, "type")), location,
     status: mapStatus(getCol(row, "status")),
-    owner, ownerSuggested, priority, nextAction,
-    nextActionNote: sanitizeName(getCol(row, "nextActionNote")),
+    owner, ownerSuggested, priority,
     blockedOn: sanitizeName(getCol(row, "blockedOn")),
     brief: getCol(row, "brief").trim(),
     shootDate: parseSheetDate(getCol(row, "shootDate")),
@@ -359,10 +390,13 @@ export function attentionItems(tasks, me) {
     t.status !== "Posted" &&
     (t.owner === me.name || (t.support || []).some((s) => s.name === me.name)));
 
+  // Statuses where the owner/crew clearly has the ball.
+  const owesAction = (t) => ["In Progress", "Changes Requested", "Ready to Post"].includes(t.status);
+
   // Gate: does this task warrant showing on My Day at all?
   const needsAttention = (t) => {
     const d = daysTo(t.postDate);
-    return (d !== null && d <= 2) || !!t.nextAction || !!t.blockedOn || t.status === "In Review";
+    return (d !== null && d <= 2) || !!t.blockedOn || owesAction(t) || t.status === "In Review";
   };
 
   // Higher score = more urgent. Drives the sort order.
@@ -372,9 +406,10 @@ export function attentionItems(tasks, me) {
     if (d !== null && d < 0) s += 100;        // overdue
     else if (d === 0) s += 60;                // due today
     else if (d !== null && d <= 2) s += 40;   // due soon
+    if (t.status === "Changes Requested") s += 30; // bounced back — act now
     if (t.blockedOn) s += 25;                 // blocked — someone needs to unblock it
     if (t.priority === "High") s += 20;
-    if (t.nextAction) s += 10;
+    if (owesAction(t)) s += 10;
     if (t.status === "In Review") s += 8;
     return s;
   };
@@ -387,9 +422,9 @@ export function attentionItems(tasks, me) {
 export function qaQueue(tasks) {
   const all = tasks || [];
   return {
-    awaiting: all.filter((t) => t.status === "In Review"),                 // needs approval now
-    returned: all.filter((t) => t.status !== "Posted" && t.nextAction === "Needs revisions"),
-    approved: all.filter((t) => t.status === "Approved"),                  // recently cleared
+    awaiting: all.filter((t) => t.status === "In Review"),          // needs approval now
+    returned: all.filter((t) => t.status === "Changes Requested"),  // sent back, awaiting revision
+    approved: all.filter((t) => t.status === "Approved"),           // recently cleared
   };
 }
 
@@ -397,9 +432,9 @@ export function qaQueue(tasks) {
 export function postQueue(tasks) {
   const live = (tasks || []).filter((t) => t.status !== "Posted");
   return {
-    captions: live.filter((t) => t.status === "Approved" && t.nextAction !== "Ready to post"),
-    ready: live.filter((t) => t.nextAction === "Ready to post"),
-    overdue: live.filter((t) => { const d = daysTo(t.postDate); return t.status === "Approved" && d !== null && d < 0; }),
+    captions: live.filter((t) => t.status === "Approved"),       // approved → needs a caption
+    ready: live.filter((t) => t.status === "Ready to Post"),     // caption done → post it
+    overdue: live.filter((t) => { const d = daysTo(t.postDate); return (t.status === "Approved" || t.status === "Ready to Post") && d !== null && d < 0; }),
   };
 }
 
@@ -438,10 +473,283 @@ export function searchTasks(tasks, query) {
   const terms = q.split(/\s+/);
   const haystack = (t) => [
     t.title, t.relatedEvent, t.owner, t.ownerSuggested, t.type, t.notes, t.brief,
+    t.status, t.location, t.caption, t.link, t.postLink,
+    ...Object.values(t.links || {}),
     ...(t.support || []).map((s) => s.name),
     ...(t.support || []).map((s) => s.suggested || ""),
   ].join(" ").toLowerCase();
   return (tasks || []).filter((t) => { const h = haystack(t); return terms.every((term) => h.includes(term)); });
+}
+
+/* People search — for the global "find anything" search + People page. */
+export function searchPeople(users, query) {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return [];
+  const terms = q.split(/\s+/);
+  const haystack = (u) => [
+    u.name, u.email, u.role, u.status, u.department,
+    ...(u.skills || []), ...(u.location || []),
+  ].join(" ").toLowerCase();
+  return (users || []).filter((u) => { const h = haystack(u); return terms.every((term) => h.includes(term)); });
+}
+
+/* ===================================================================
+   People management (Admin → People)
+   =================================================================== */
+export const DEPARTMENTS = [
+  "Graphic Design", "Content Creation", "Videography", "Photography", "Caption & Upload", "QA",
+];
+
+// Permission/role chips shown on a person card.
+export function roleChips(user) {
+  const chips = [];
+  if (user.role === "admin") chips.push("Admin");
+  if (user.lead) chips.push("Lead");
+  if (user.qa) chips.push("QA");
+  if (user.captions) chips.push("Captions");
+  if (!chips.length) chips.push("Member");
+  return chips;
+}
+
+// How many active (non-Posted) tasks a person owns or is crew on.
+export function userActiveTasks(user, tasks) {
+  return (tasks || []).filter((t) => t.status !== "Posted" &&
+    (t.owner === user.name || (t.support || []).some((s) => s.name === user.name))).length;
+}
+
+export const PEOPLE_FILTERS = [
+  { id: "all",      label: "All",            test: () => true },
+  { id: "admins",   label: "Admins",         test: (u) => u.role === "admin" },
+  { id: "leads",    label: "Leads",          test: (u) => !!u.lead },
+  { id: "qa",       label: "QA",             test: (u) => !!u.qa },
+  { id: "captions", label: "Captions",       test: (u) => !!u.captions },
+  { id: "479",      label: "479",            test: (u) => (u.location || []).includes("479") },
+  { id: "828",      label: "828",            test: (u) => (u.location || []).includes("828") },
+  { id: "nodept",   label: "No department",  test: (u) => !u.department },
+];
+
+export function applyPeopleFilter(users, id) {
+  const f = PEOPLE_FILTERS.find((x) => x.id === id) || PEOPLE_FILTERS[0];
+  return (users || []).filter(f.test);
+}
+
+// Group approved team members for scanning. One bucket each, by priority:
+// Admins → Department Leads → each department → No department.
+export function groupPeople(users) {
+  const out = [];
+  const used = new Set();
+  const take = (label, pred) => {
+    const items = (users || []).filter((u) => !used.has(u.id) && pred(u));
+    items.forEach((u) => used.add(u.id));
+    if (items.length) out.push({ label, items });
+  };
+  take("Admins", (u) => u.role === "admin");
+  take("Department Leads", (u) => u.lead);
+  DEPARTMENTS.forEach((d) => take(d, (u) => u.department === d));
+  take("No department", () => true);
+  return out;
+}
+
+/* ===================================================================
+   Board organization — grouping, sorting, filtering
+   =================================================================== */
+
+// Firestore Timestamp / Date / millis → comparable millis (0 if missing).
+const tsMillis = (v) =>
+  !v ? 0
+  : typeof v === "number" ? v
+  : typeof v.toMillis === "function" ? v.toMillis()
+  : typeof v.seconds === "number" ? v.seconds * 1000
+  : new Date(v).getTime() || 0;
+
+export const BOARD_SORTS = [
+  { id: "post-asc",    label: "Post date · soonest first" },
+  { id: "post-desc",   label: "Post date · latest first" },
+  { id: "created-desc",label: "Newest created" },
+  { id: "created-asc", label: "Oldest created" },
+  { id: "priority",    label: "Priority · High → Low" },
+  { id: "updated",     label: "Recently updated" },
+  { id: "owner",       label: "Owner · A → Z" },
+];
+
+const PRI_RANK = { High: 0, Medium: 1, Low: 2 };
+const dueRank = (t) => { const d = daysTo(t.postDate); return d == null ? Infinity : d; };
+
+export function sortTasks(list, sortId = "post-asc") {
+  const arr = [...(list || [])];
+  switch (sortId) {
+    case "post-desc":    return arr.sort((a, b) => dueRank(b) - dueRank(a));
+    case "created-desc": return arr.sort((a, b) => tsMillis(b.createdAt) - tsMillis(a.createdAt));
+    case "created-asc":  return arr.sort((a, b) => tsMillis(a.createdAt) - tsMillis(b.createdAt));
+    case "priority":     return arr.sort((a, b) =>
+      (PRI_RANK[a.priority] ?? 1) - (PRI_RANK[b.priority] ?? 1) || dueRank(a) - dueRank(b));
+    case "updated":      return arr.sort((a, b) => tsMillis(b.updatedAt) - tsMillis(a.updatedAt));
+    case "owner":        return arr.sort((a, b) =>
+      String(a.owner || "").localeCompare(String(b.owner || "")) || dueRank(a) - dueRank(b));
+    case "post-asc":
+    default:             return arr.sort((a, b) => dueRank(a) - dueRank(b));
+  }
+}
+
+// Group a (already filtered + sorted) list into STAGES order, skipping empties.
+export function groupByStatus(list) {
+  return STAGES
+    .map((status) => ({ status, items: (list || []).filter((t) => t.status === status) }))
+    .filter((g) => g.items.length > 0);
+}
+
+const isOwner = (t, me) => !!me && t.owner === me.name;
+const isCrew  = (t, me) => !!me && (t.support || []).some((s) => s.name === me.name);
+
+/* Board filters — kept deliberately small so the board reads at a glance.
+   The board is for "where is everything?"; "what's mine?" lives on My Work.
+   Each `test(task, me)` is a pure predicate; "all" returns everything. */
+export const BOARD_FILTERS = [
+  { id: "all",      label: "All",            test: () => true },
+  { id: "reel",     label: "Reels",          test: (t) => t.type === "Reel" },
+  { id: "poster",   label: "Posters",        test: (t) => t.type === "Poster" },
+  { id: "479",      label: "479",            test: (t) => t.location === "479" || t.location === "Both" },
+  { id: "828",      label: "828",            test: (t) => t.location === "828" || t.location === "Both" },
+  { id: "high",     label: "High priority",  test: (t) => t.priority === "High" },
+  { id: "overdue",  label: "Overdue",        test: (t) => t.status !== "Posted" && (daysTo(t.postDate) ?? 99) < 0 },
+  { id: "review",   label: "In Review",      test: (t) => t.status === "In Review" },
+  { id: "ready",    label: "Ready to Post",  test: (t) => t.status === "Ready to Post" },
+  { id: "approved", label: "Approved",       test: (t) => t.status === "Approved" },
+  { id: "archive",  label: "Archive",        test: (t) => t.status === "Posted" },
+];
+
+export function applyBoardFilter(tasks, filterId, me) {
+  const f = BOARD_FILTERS.find((x) => x.id === filterId) || BOARD_FILTERS[0];
+  return (tasks || []).filter((t) => f.test(t, me));
+}
+
+/* My Work, organized by URGENCY (not by lead/support). Each task lands in
+   exactly one section — the first it qualifies for, top-down — so overdue and
+   due-soon work always floats above status buckets. Answers "what should I
+   work on next?" rather than "here are all my assignments." */
+export function myWorkSections(tasks, me) {
+  const mine = (tasks || []).filter((t) => isOwner(t, me) || isCrew(t, me));
+  const used = new Set();
+  const take = (pred) => {
+    const out = sortTasks(mine.filter((t) => !used.has(t.id) && pred(t)), "post-asc");
+    out.forEach((t) => used.add(t.id));
+    return out;
+  };
+  const active = (t) => t.status !== "Posted";
+  const due = (t) => daysTo(t.postDate);
+  const sections = [
+    { key: "overdue",  label: "Overdue",           items: take((t) => active(t) && (due(t) ?? 99) < 0) },
+    { key: "soon",     label: "Due soon",          items: take((t) => active(t) && due(t) != null && due(t) >= 0 && due(t) <= 7) },
+    { key: "changes",  label: "Changes requested", items: take((t) => t.status === "Changes Requested") },
+    { key: "ready",    label: "Ready to post",     items: take((t) => t.status === "Ready to Post") },
+    { key: "review",   label: "In review",         items: take((t) => t.status === "In Review") },
+    { key: "approved", label: "Approved",          items: take((t) => t.status === "Approved") },
+    { key: "progress", label: "In progress",       items: take((t) => t.status === "In Progress") },
+    { key: "planned",  label: "Planned",           items: take((t) => t.status === "Planned") },
+    { key: "posted",   label: "Posted",            items: take((t) => t.status === "Posted") },
+  ];
+  return sections.filter((s) => s.items.length > 0);
+}
+
+// The current viewer's role on a task — for the "Lead"/"Support" card chip.
+export function myRole(task, me) {
+  if (!me) return null;
+  if (task.owner === me.name) return "Lead";
+  if ((task.support || []).some((s) => s.name === me.name)) return "Support";
+  return null;
+}
+
+/* ===================================================================
+   Admin control-centre — "what needs leadership attention?"
+   =================================================================== */
+const isActive = (t) => t.status !== "Posted";
+const noOwner  = (t) => !t.owner || t.owner === "Pending";
+const noCrew   = (t) => !((t.support || []).length);
+const isOverdue = (t) => isActive(t) && (daysTo(t.postDate) ?? 99) < 0;
+const isBlocked = (t) => isActive(t) && !!(t.blockedOn && t.blockedOn.trim());
+
+// At-a-glance health counts for the Overview cards. Each maps to a Content
+// filter (or the People tab) so the cards double as shortcuts.
+export function adminHealth(tasks, users) {
+  return {
+    pendingUsers: (users || []).filter((u) => u.status === "pending").length,
+    awaitingQA:   (tasks || []).filter((t) => t.status === "In Review").length,
+    blocked:      (tasks || []).filter(isBlocked).length,
+    overdue:      (tasks || []).filter(isOverdue).length,
+    ready:        (tasks || []).filter((t) => t.status === "Ready to Post").length,
+    unassigned:   (tasks || []).filter((t) => isActive(t) && (noOwner(t) || noCrew(t))).length,
+  };
+}
+
+// The things only an admin can resolve — overdue, blocked, bounced-back,
+// or missing an owner/crew. Deduped, soonest-due first.
+export function adminNeedsAttention(tasks) {
+  return sortTasks((tasks || []).filter((t) => isActive(t) && (
+    isOverdue(t) || isBlocked(t) || t.status === "Changes Requested" || noOwner(t) || noCrew(t)
+  )), "post-asc");
+}
+
+export function adminUnassigned(tasks) {
+  return sortTasks((tasks || []).filter((t) => isActive(t) && (noOwner(t) || noCrew(t))), "post-asc");
+}
+
+export function recentContent(tasks, limit = 6) {
+  return [...(tasks || [])].sort((a, b) => tsMillis(b.createdAt) - tsMillis(a.createdAt)).slice(0, limit);
+}
+
+// Things that can advance with a nudge — healthy work in the pipeline.
+export function adminReadyToMove(tasks) {
+  return sortTasks((tasks || []).filter((t) =>
+    ["In Review", "Approved", "Ready to Post"].includes(t.status)), "post-asc");
+}
+
+// A cross-task activity feed for the leadership dashboard: who did what, newest
+// first. Reads each task's activity[] timeline.
+const ACTIVITY_VERB = {
+  created: "created", started: "started", qa_sent: "sent for review",
+  approved: "approved", changes_requested: "requested changes on",
+  ready: "marked ready", posted: "posted", status: "updated",
+  assigned: "reassigned", comment: "commented on",
+};
+export function recentActivity(tasks, limit = 8) {
+  const out = [];
+  for (const t of tasks || []) {
+    for (const e of t.activity || []) {
+      out.push({ taskId: t.id, title: t.title, who: e.by, type: e.type,
+                 verb: ACTIVITY_VERB[e.type] || e.type, at: e.at || 0 });
+    }
+  }
+  return out.sort((a, b) => b.at - a.at).slice(0, limit);
+}
+
+// A one-line "what's wrong" for an admin card — blocker first, then the most
+// pressing gap. Null when nothing needs intervention.
+export function taskProblem(t) {
+  if (isBlocked(t)) return `Waiting on ${t.blockedOn}`;
+  if (isActive(t)) {
+    if (noOwner(t)) return "No owner assigned";
+    if (noCrew(t))  return "No crew assigned";
+    if (isOverdue(t)) return "Past its post date";
+  }
+  return null;
+}
+
+/* Admin content filters — admins care about what's stuck/broken, not type. */
+export const ADMIN_FILTERS = [
+  { id: "all",       label: "All",               test: () => true },
+  { id: "needowner", label: "Needs owner",       test: (t) => isActive(t) && noOwner(t) },
+  { id: "needcrew",  label: "Needs crew",        test: (t) => isActive(t) && noCrew(t) },
+  { id: "qa",        label: "Awaiting QA",       test: (t) => t.status === "In Review" },
+  { id: "changes",   label: "Changes requested", test: (t) => t.status === "Changes Requested" },
+  { id: "ready",     label: "Ready to post",     test: (t) => t.status === "Ready to Post" },
+  { id: "overdue",   label: "Overdue",           test: isOverdue },
+  { id: "blocked",   label: "Blocked",           test: isBlocked },
+  { id: "archived",  label: "Archived",          test: (t) => t.status === "Posted" },
+];
+
+export function applyAdminFilter(tasks, id) {
+  const f = ADMIN_FILTERS.find((x) => x.id === id) || ADMIN_FILTERS[0];
+  return (tasks || []).filter(f.test);
 }
 
 /* ===================================================================

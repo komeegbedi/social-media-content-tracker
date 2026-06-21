@@ -53,3 +53,14 @@ export function upcomingEvents(limit = 5, prepLead = 15) {
     .sort((a, b) => a.daysAway - b.daysAway)
     .slice(0, limit);
 }
+
+/* Search across all ministry events — for the global "find anything" search. */
+export function searchEvents(query) {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return [];
+  const terms = q.split(/\s+/);
+  return upcomingEvents(99).filter((e) => {
+    const h = `${e.name} ${e.kind}`.toLowerCase();
+    return terms.every((term) => h.includes(term));
+  });
+}

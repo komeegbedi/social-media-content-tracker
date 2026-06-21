@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   onAuthStateChanged, signOut,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -12,16 +12,46 @@ import {
   STAGES, statusClass, roleLabel, initials, emailFor,
   fmt, daysTo, autoAssign, computeCapacity,
   parseCSV, rowToTask, sheetCsvUrl,
-  NEXT_ACTIONS, PRIORITIES, priorityClass, actionVerb, attentionItems, matchUser,
+  PRIORITIES, priorityClass, attentionItems, matchUser,
+  PHASES, statusPhase, nextStep, workflowAction,
   LINK_FIELDS, requiredLinkKeys, missingLinks, QA_STATUSES,
   activityEntry, activityLabel, isApprovalEvent,
   TYPES, typeClass, qaQueue, postQueue, pendingMatches, applyAssignment,
-  personalWins, teamWins, dashboardMetrics, searchTasks,
+  personalWins, teamWins, dashboardMetrics, searchTasks, searchPeople,
   monthlyWins, recentWins, contributorWins,
+  BOARD_SORTS, BOARD_FILTERS, sortTasks, groupByStatus, applyBoardFilter,
+  myWorkSections,
+  adminHealth, adminNeedsAttention, adminReadyToMove, recentActivity,
+  taskProblem, ADMIN_FILTERS, applyAdminFilter,
+  DEPARTMENTS, roleChips, userActiveTasks, PEOPLE_FILTERS, applyPeopleFilter, groupPeople,
 } from "./data";
-import { upcomingEvents } from "./events";
+import { upcomingEvents, searchEvents } from "./events";
 import { setView, reportIssue, logIssue } from "./logging";
 import { getTheme, setTheme } from "./theme";
+
+/* Tiny localStorage helpers for remembering small UI preferences (e.g. which
+   status groups a user has collapsed). Best-effort — never throw. */
+const loadPref = (key, fallback) => {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch { return fallback; }
+};
+const savePref = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
+
+/* A slim, dismissible beta notice — sets expectations and invites feedback.
+   Dismissal is remembered so it doesn't nag returning testers. */
+function BetaBanner({ onReport }) {
+  const [open, setOpen] = useState(() => loadPref("sb-beta-dismissed", false) !== true);
+  if (!open) return null;
+  const dismiss = () => { setOpen(false); savePref("sb-beta-dismissed", true); };
+  return (
+    <div className="sb-beta">
+      <span className="sb-beta-tag">⚡ Beta</span>
+      <span className="sb-beta-txt">We're testing StudioBoard — please report bugs, confusing steps, or feature ideas.</span>
+      <button className="sb-beta-report" onClick={onReport}>Report</button>
+      <button className="sb-beta-x" onClick={dismiss} aria-label="Dismiss beta notice">✕</button>
+    </div>
+  );
+}
 
 /* Light/dark toggle. Default follows the OS; a manual choice is remembered. */
 function ThemeToggle({ compact }) {
@@ -30,6 +60,45 @@ function ThemeToggle({ compact }) {
   return compact
     ? <button className="sb-report-top" onClick={toggle} aria-label="Toggle dark mode">{theme==="dark"?"☀":"🌙"}</button>
     : <button className="sb-report" onClick={toggle}>{theme==="dark"?"☀︎ Light mode":"🌙 Dark mode"}</button>;
+}
+
+/* Mobile account drawer — opened from the header avatar. Pulls the profile,
+   theme, report and sign-out off every screen and into one slide-up sheet. */
+function ProfileDrawer({ me, isAdmin, onClose, onReport }) {
+  const [theme, setT] = useState(getTheme());
+  const toggleTheme = () => { const next = theme==="dark"?"light":"dark"; setTheme(next); setT(next); };
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="sb-scrim" onMouseDown={onClose}>
+      <div className="sb-drawer" onMouseDown={e=>e.stopPropagation()}>
+        <div className="sb-drawer-user">
+          <span className="sb-av" style={{width:46,height:46,fontSize:16}}>{initials(me.name)}</span>
+          <div style={{minWidth:0}}>
+            <div className="nm">{me.name}</div>
+            <div className="rl">{isAdmin?"Admin":"Member"} · {me.email}</div>
+          </div>
+        </div>
+        <button className="sb-drawer-item" onClick={toggleTheme}>
+          <span className="i">{theme==="dark"?"☀︎":"🌙"}</span>
+          {theme==="dark"?"Light mode":"Dark mode"}
+          <span className="sb-drawer-state">{theme==="dark"?"On":"Off"}</span>
+        </button>
+        <div className="sb-drawer-item disabled">
+          <span className="i">🔔</span>Notifications<span className="sb-drawer-state">Soon</span>
+        </div>
+        <button className="sb-drawer-item" onClick={onReport}>
+          <span className="i">⚠︎</span>Report an issue
+        </button>
+        <button className="sb-drawer-item danger" onClick={()=>signOut(auth)}>
+          <span className="i">⇥</span>Sign out
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /* ===================================================================
@@ -220,7 +289,7 @@ function Login() {
 
           {mode === "register" && (
             <div className="sb-field"><label>Your name</label>
-              <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="e.g. Esther New" /></div>
+              <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="e.g. John Smith" /></div>
           )}
           <div className="sb-field"><label>Email</label>
             <input type="email" autoComplete="username" value={email}
@@ -291,9 +360,26 @@ function Board({ profile, isAdmin }) {
   const [editTask, setEditTask] = useState(null);
   const [editUser, setEditUser] = useState(null);
   const [showReport, setShowReport] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [showDrawer, setShowDrawer] = useState(false);
 
   // Stamp the active screen onto any error/report logged from here.
   useEffect(() => setView(tab), [tab]);
+
+  // Global search shortcuts: "/" or ⌘K / Ctrl+K from anywhere (but not while
+  // typing in a field, so "/" stays usable in inputs).
+  useEffect(() => {
+    const onKey = (e) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+      if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault(); setSearchOpen(true);
+      } else if (e.key === "/" && !typing && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault(); setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const me = profile;
   const pendingCount = allUsers.filter(u => u.status === "pending").length;
@@ -321,37 +407,61 @@ function Board({ profile, isAdmin }) {
     setEditTask(null);
   };
   const deleteTask = async (id) => { await deleteDoc(doc(db, "tasks", id)); };
+  // Archive = move to the Posted/completed status (no separate flag in the model).
+  const archiveTask = async (task) =>
+    updateDoc(doc(db, "tasks", task.id), {
+      status: "Posted",
+      activity: [...(task.activity||[]), activityEntry("posted", me.name, "Posted")],
+      updatedAt: serverTimestamp(),
+    });
+  // Duplicate = fresh copy at the start of the workflow, no produced artifacts.
+  const duplicateTask = async (task) => {
+    const { id, comments, reactions, activity, createdAt, updatedAt,
+            caption, postLink, links, blockedOn, ...rest } = task;
+    await addDoc(collection(db, "tasks"), {
+      ...rest, title: `Copy of ${task.title}`, status: "Planned",
+      caption: "", postLink: "", links: {}, blockedOn: "",
+      comments: [], reactions: {}, activity: [activityEntry("created", me.name)],
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+  };
   const importTasks = async (newTasks) =>
     Promise.all(newTasks.map((t) => addDoc(collection(db, "tasks"), {
       ...t, comments: [], reactions: {}, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     })));
-  // Status change also writes the matching activity-timeline entry (qa_sent /
-  // approved / posted / status), giving us approval history for free.
-  const setStatus = async (task, status) => {
-    const type = status==="In Review" ? "qa_sent"
-      : status==="Approved" ? "approved"
-      : status==="Posted" ? "posted" : "status";
-    await updateDoc(doc(db, "tasks", task.id), {
-      status,
-      activity: [...(task.activity||[]), activityEntry(type, me.name, status)],
+  // Map a destination status → the activity-timeline event type.
+  const eventType = (status) => ({
+    "In Progress":"started", "In Review":"qa_sent", "Approved":"approved",
+    "Changes Requested":"changes_requested", "Ready to Post":"ready", "Posted":"posted",
+  }[status] || "status");
+  // Admin manual status override (the status segmented control).
+  const setStatus = async (task, status) =>
+    updateDoc(doc(db, "tasks", task.id), {
+      status, activity: [...(task.activity||[]), activityEntry(eventType(status), me.name, status)],
       updatedAt: serverTimestamp(),
     });
-  };
-  // QA "request changes": bounce back to In Progress with a revision note.
+  // The guided workflow action (Start work / Submit for QA / Mark ready / Posted).
+  // `extra` carries caption / postLink when the step requires them.
+  const runWorkflow = async (task, action, extra = {}) =>
+    updateDoc(doc(db, "tasks", task.id), {
+      status: action.to, ...extra,
+      activity: [...(task.activity||[]), activityEntry(action.kind, me.name, action.to)],
+      updatedAt: serverTimestamp(),
+    });
+  // QA "request changes": send back as the first-class "Changes Requested" status.
   const qaRequestChanges = async (task, note) =>
     updateDoc(doc(db, "tasks", task.id), {
-      status: "In Progress", nextAction: "Needs revisions",
+      status: "Changes Requested",
       activity: [...(task.activity||[]), activityEntry("changes_requested", me.name, note)],
       updatedAt: serverTimestamp(),
     });
-  // Collaborative fields any approved member can set from a task's detail view
-  // (allowed by firestore.rules): what the task is waiting on, and what's next.
-  const setNextAction = async (id, nextAction, nextActionNote = "") =>
-    updateDoc(doc(db, "tasks", id), { nextAction, nextActionNote, updatedAt: serverTimestamp() });
+  // Collaborative fields any approved member can set from a task's detail view.
   const setBlocked = async (id, blockedOn) =>
     updateDoc(doc(db, "tasks", id), { blockedOn, updatedAt: serverTimestamp() });
   const setLinks = async (task, links) =>
     updateDoc(doc(db, "tasks", task.id), { links, updatedAt: serverTimestamp() });
+  const setCaption = async (task, caption) =>
+    updateDoc(doc(db, "tasks", task.id), { caption, updatedAt: serverTimestamp() });
   const addComment = async (task, txt) =>
     updateDoc(doc(db, "tasks", task.id), {
       comments: [...(task.comments||[]), { who: me.name, txt, tm: Date.now() }],
@@ -369,6 +479,8 @@ function Board({ profile, isAdmin }) {
     await Promise.all(targets.map(t =>
       updateDoc(doc(db, "tasks", t.id), { support: autoAssign(t, users), updatedAt: serverTimestamp() })));
   };
+  const autoOne = async (task) =>
+    updateDoc(doc(db, "tasks", task.id), { support: autoAssign(task, users), updatedAt: serverTimestamp() });
 
   /* ---- user writes ---- */
   const saveUser = async (u) => {
@@ -381,6 +493,25 @@ function Board({ profile, isAdmin }) {
     setEditUser(null);
   };
   const removeUser = async (id) => { await deleteDoc(doc(db, "users", id)); };
+  // Safer team removal: detach the person from their tasks first (tasks stay),
+  // either reassigning owned work to someone else or marking it for reassignment.
+  const removeUserWithTasks = async (user, { mode, target } = {}) => {
+    const updates = [];
+    for (const t of tasks) {
+      const ownsActive = t.owner === user.name && t.status !== "Posted";
+      const isCrew = (t.support || []).some(s => s.name === user.name);
+      if (!ownsActive && !isCrew) continue;
+      const patch = { updatedAt: serverTimestamp() };
+      if (ownsActive) {
+        patch.owner = mode === "reassign" && target ? target : "Pending";
+        patch.ownerSuggested = "";
+      }
+      if (isCrew) patch.support = t.support.filter(s => s.name !== user.name);
+      updates.push(updateDoc(doc(db, "tasks", t.id), patch));
+    }
+    await Promise.all(updates);
+    await deleteDoc(doc(db, "users", user.id));
+  };
 
   /* ---- bulk-assign imported "Pending" tasks to a newly-matched user ---- */
   const assignSuggested = async (user) => {
@@ -403,6 +534,9 @@ function Board({ profile, isAdmin }) {
       <div className="sb-shell">
         <aside className="sb-side">
           <div className="sb-sbrand"><span className="sb-spark">✦</span>StudioBoard</div>
+          <button className="sb-searchbtn" onClick={()=>setSearchOpen(true)}>
+            <span className="ico">🔍</span>Search…<kbd className="sb-kbd">/</kbd>
+          </button>
           <nav className="sb-snav">
             {nav.map(n => (
               <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)}>
@@ -411,7 +545,7 @@ function Board({ profile, isAdmin }) {
               </button>
             ))}
           </nav>
-          {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")}>+ New task</button>}
+          {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")}>+ New content</button>}
           <div className="sb-sfoot">
             <div className="sb-suser">
               <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(me.name)}</span>
@@ -426,27 +560,27 @@ function Board({ profile, isAdmin }) {
         <div className="sb-main">
           <header className="sb-top">
             <span className="brand"><span className="sb-spark">✦</span>StudioBoard</span>
-            <span style={{display:"flex",alignItems:"center",gap:8}}>
-              <ThemeToggle compact />
-              <button className="sb-report-top" onClick={()=>setShowReport(true)} aria-label="Report an issue">⚠︎</button>
-              <button className="sb-whoami" onClick={()=>signOut(auth)}>
-                <span className="sb-av" style={{width:22,height:22,fontSize:9}}>{initials(me.name)}</span>
-                {me.name.split(" ")[0]} · Sign out
+            <span style={{display:"flex",alignItems:"center",gap:10}}>
+              <button className="sb-report-top" onClick={()=>setSearchOpen(true)} aria-label="Search">🔍</button>
+              <button className="sb-avbtn" onClick={()=>setShowDrawer(true)} aria-label="Profile and settings">
+                <span className="sb-av" style={{width:30,height:30,fontSize:11}}>{initials(me.name)}</span>
               </button>
             </span>
           </header>
 
           <div className="sb-content">
+            <BetaBanner onReport={()=>setShowReport(true)} />
             {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} />}
             {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
-            {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} />}
+            {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} />}
             {tab==="mine"  && <Mine tasks={tasks} me={me} openTask={setOpenId} />}
             {tab==="team"  && <Team tasks={tasks} users={users} />}
             {tab==="admin" && isAdmin && (
               <Admin users={allUsers} tasks={tasks} teamUsers={users} issues={issues}
                 onEditUser={setEditUser} onEditTask={setEditTask}
-                onDeleteUser={removeUser} onDeleteTask={deleteTask}
-                onAutoAll={autoAll} onImport={importTasks} onResolveIssue={resolveIssue}
+                onDeleteUser={removeUser} onRemoveUser={removeUserWithTasks} onDeleteTask={deleteTask}
+                onArchiveTask={archiveTask} onDuplicateTask={duplicateTask} onOpenTask={setOpenId}
+                onAutoAll={autoAll} onAutoOne={autoOne} onImport={importTasks} onResolveIssue={resolveIssue}
                 onAssignSuggested={assignSuggested} />
             )}
           </div>
@@ -462,8 +596,21 @@ function Board({ profile, isAdmin }) {
         </div>
       </div>
 
-      {isAdmin && tab!=="admin" && (
-        <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New task">+</button>
+      {isAdmin && tab==="board" && (
+        <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content">+</button>
+      )}
+
+      {showDrawer && (
+        <ProfileDrawer me={me} isAdmin={isAdmin}
+          onClose={()=>setShowDrawer(false)}
+          onReport={()=>{ setShowDrawer(false); setShowReport(true); }} />
+      )}
+
+      {searchOpen && (
+        <GlobalSearch tasks={tasks} users={isAdmin ? allUsers : users}
+          onClose={()=>setSearchOpen(false)}
+          onOpenTask={(id)=>{ setSearchOpen(false); setOpenId(id); }}
+          goTab={(t)=>{ setSearchOpen(false); setTab(t); }} />
       )}
 
       {openTask && (
@@ -471,9 +618,11 @@ function Board({ profile, isAdmin }) {
           isQA={isAdmin || !!me.qa}
           onClose={()=>setOpenId(null)}
           onStatus={(s)=>setStatus(openTask, s)}
+          onAction={(action, extra)=>runWorkflow(openTask, action, extra)}
+          onApprove={()=>setStatus(openTask, "Approved")}
           onLinks={(links)=>setLinks(openTask, links)}
+          onCaption={(c)=>setCaption(openTask, c)}
           onRequestChanges={(note)=>qaRequestChanges(openTask, note)}
-          onNextAction={(a,note)=>setNextAction(openTask.id, a, note)}
           onBlocked={(b)=>setBlocked(openTask.id, b)}
           onComment={(txt)=>addComment(openTask, txt)}
           onReact={(emo)=>toggleReact(openTask, emo)}
@@ -611,8 +760,8 @@ function MyDay({ tasks, me, openTask, goTab }) {
         ))}
       </div>
 
-      <div className="sb-shead"><h2>Needs your attention</h2>
-        <button className="link" onClick={()=>goTab("mine")}>All my work →</button></div>
+      <div className="sb-shead sb-shead-strong"><h2>Needs your attention</h2>
+        <button className="link subtle" onClick={()=>goTab("mine")}>All my work →</button></div>
       {attention.length===0
         ? <div className="sb-empty"><div className="big">✓</div>Nothing urgent — enjoy the breather.</div>
         : <div className="sb-attnlist">{attention.map(t =>
@@ -642,9 +791,8 @@ function QueueSection({ title, items, me, openTask }) {
   );
 }
 
-/* A single actionable row in "Needs your attention" — a verb-led label
-   (from the task's next action) plus the reason it surfaced and why it's
-   urgent. Tighter than a full TaskCard so My Day scans fast. */
+/* A single actionable row in "Needs your attention" — the task title plus the
+   reason it surfaced and why it's urgent. Tighter than a full TaskCard. */
 function AttentionItem({ t, onClick }) {
   const d = daysTo(t.postDate);
   // Why is this on the list? Most pressing reason wins.
@@ -652,13 +800,13 @@ function AttentionItem({ t, onClick }) {
     : (d!==null && d<0) ? `${Math.abs(d)}d overdue`
     : d===0 ? "Due today"
     : d===1 ? "Due tomorrow"
-    : t.nextAction ? t.nextAction
+    : t.status==="Changes Requested" ? "Changes requested"
     : t.status==="In Review" ? "In review"
     : (d!==null) ? `Due ${fmt(t.postDate)}` : "Needs a look";
-  const reasonCls = (t.blockedOn || (d!==null && d<0)) ? "due-over"
+  const reasonCls = (t.blockedOn || (d!==null && d<0) || t.status==="Changes Requested") ? "due-over"
     : (d!==null && d<=2) ? "due-soon" : "due-ok";
-  // Verb-led title when there's a next action ("Write captions for …").
-  const label = t.nextAction ? actionVerb(t.nextAction, t.title) : t.title;
+  // Lead with the system-derived next step so the row reads as a to-do.
+  const label = `${nextStep(t.status)} — ${t.title}`;
   return (
     <button className="sb-attn" onClick={onClick}>
       <span className={"sb-attn-bar "+reasonCls}/>
@@ -676,60 +824,165 @@ function AttentionItem({ t, onClick }) {
 }
 
 /* ===================================================================
+   GLOBAL SEARCH — a "find anything" overlay reachable from anywhere
+   (header button, "/" or ⌘K / Ctrl+K). Spans tasks (every status, incl.
+   archive), people, and ministry events — never limited by board filters.
+   =================================================================== */
+function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
+  const [q, setQ] = useState("");
+  const inputRef = useRef(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const query = q.trim();
+  const taskHits = query ? searchTasks(tasks, query).slice(0, 8) : [];
+  const peopleHits = query ? searchPeople(users, query).slice(0, 6) : [];
+  const eventHits = query ? searchEvents(query).slice(0, 5) : [];
+  const nothing = query && !taskHits.length && !peopleHits.length && !eventHits.length;
+
+  return (
+    <div className="sb-modal" onMouseDown={onClose}>
+      <div className="sb-search" onMouseDown={e=>e.stopPropagation()}>
+        <div className="sb-searchbar">
+          <span className="ico">🔍</span>
+          <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)}
+            placeholder="Search tasks, people, events…" />
+          <kbd className="sb-kbd sb-deskonly">ESC</kbd>
+          <button className="sb-searchclose" onClick={onClose} aria-label="Close search">✕</button>
+        </div>
+
+        {!query && <div className="sb-searchhint">
+          Find anything across the whole app — titles, owners &amp; crew, statuses,
+          types, locations, notes, links, people and upcoming events.
+        </div>}
+
+        {nothing && <div className="sb-searchhint">No matches for “{query}”.</div>}
+
+        <div className="sb-searchresults">
+          {taskHits.length>0 && <>
+            <div className="sb-searchsec">Content · {taskHits.length}</div>
+            {taskHits.map(t => (
+              <button key={t.id} className="sb-sresult" onClick={()=>onOpenTask(t.id)}>
+                <span className="r-main">{t.title}</span>
+                <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
+                <span className="r-sub">{t.type} · {t.owner==="Pending"&&t.ownerSuggested?`Pending — ${t.ownerSuggested}`:t.owner}</span>
+              </button>
+            ))}
+          </>}
+
+          {peopleHits.length>0 && <>
+            <div className="sb-searchsec">People · {peopleHits.length}</div>
+            {peopleHits.map(u => (
+              <button key={u.id} className="sb-sresult" onClick={()=>goTab("team")}>
+                <span className="sb-av" style={{width:26,height:26,fontSize:10}}>{initials(u.name)}</span>
+                <span className="r-main">{u.name}</span>
+                <span className="r-sub">{u.role==="admin"?"Admin":"Member"}{u.qa?" · QA":""}{u.captions?" · Captions":""} · {u.status}</span>
+              </button>
+            ))}
+          </>}
+
+          {eventHits.length>0 && <>
+            <div className="sb-searchsec">Events · {eventHits.length}</div>
+            {eventHits.map((e,i) => (
+              <button key={i} className="sb-sresult" onClick={()=>goTab("home")}>
+                <span className="r-icon">{e.kind==="birthday"?"🎂":"📅"}</span>
+                <span className="r-main">{e.name}</span>
+                <span className="r-sub">{e.daysAway===0?"Today":`in ${e.daysAway} day${e.daysAway!==1?"s":""}`}</span>
+              </button>
+            ))}
+          </>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===================================================================
    BOARD LIST
    =================================================================== */
-function BoardList({ tasks, openTask }) {
-  const [filter, setFilter] = useState("All");
-  const [q, setQ] = useState("");
-  const filters = ["All","Reel","Poster","Photography","In Review","Approved","479","828","Archive"];
-  const searching = q.trim().length > 0;
+function BoardList({ tasks, openTask, me, isAdmin }) {
+  const [filter, setFilter] = useState("all");
+  const [sort, setSort] = useState("post-asc");
+  const [filtersOpen, setFiltersOpen] = useState(false);  // collapsed by default → content first
+  // Completed work starts collapsed; the choice is remembered across sessions.
+  const [collapsed, setCollapsed] = useState(() => loadPref("sb-board-collapsed", { Posted: true }));
+  const persistCollapsed = (next) => { setCollapsed(next); savePref("sb-board-collapsed", next); };
+  const toggle = (status) => persistCollapsed({ ...collapsed, [status]: !collapsed[status] });
+  const setAllCollapsed = (val) => { const m = {}; STAGES.forEach(s => m[s] = val); persistCollapsed(m); };
 
-  // Search spans EVERYTHING (active + archive). Otherwise the board shows
-  // active work, with an Archive view for posted/completed content.
-  let list;
-  if (searching) {
-    list = searchTasks(tasks, q);
-  } else if (filter === "Archive") {
-    list = tasks.filter(t => t.status === "Posted");
-  } else {
-    list = tasks.filter(t => {
-      if (t.status === "Posted") return false;                 // archived → not on the active board
-      if (filter === "All") return true;
-      if (["Reel","Poster","Photography"].includes(filter)) return t.type === filter;
-      if (filter === "479" || filter === "828") return t.location === filter || t.location === "Both";
-      return t.status === filter;
-    });
-  }
-  list = [...list].sort((a,b)=>(daysTo(a.postDate)??99)-(daysTo(b.postDate)??99));
+  const availableFilters = useMemo(
+    () => BOARD_FILTERS.filter(f => !f.admin || isAdmin), [isAdmin]);
+  const groups = useMemo(() => {
+    const filtered = applyBoardFilter(tasks, filter, me);
+    return groupByStatus(sortTasks(filtered, sort));
+  }, [tasks, filter, sort, me]);
+
+  const total = groups.reduce((n, g) => n + g.items.length, 0);
+  const activeFilter = BOARD_FILTERS.find(f => f.id === filter);
 
   return (
     <div className="sb-page">
-      <div className="sb-eyebrow">{searching ? "Search results" : filter==="Archive" ? "Archive" : "Everything in motion"}</div>
+      <div className="sb-eyebrow">Everything in motion</div>
       <div className="sb-h">The board</div>
       <div className="sb-sub">
-        {searching ? `${list.length} result${list.length!==1?"s":""} for “${q.trim()}” — across every status.`
-          : filter==="Archive" ? "Posted & completed work — searchable for reference and reuse."
-          : "Active content, sorted by what's due first."}
+        {total} piece{total!==1?"s":""} of content{filter!=="all"?` · ${activeFilter?.label}`:""},
+        grouped by where each one is in the workflow.
       </div>
 
-      <div className="sb-field" style={{marginBottom:10}}>
-        <div className="sb-inline">
-          <input value={q} onChange={e=>setQ(e.target.value)}
-            placeholder="🔍 Search all tasks — title, event, person, type, notes…" />
-          {searching && <button className="sb-btn ghost compact" onClick={()=>setQ("")}>Clear</button>}
-        </div>
+      {/* Filters — collapsed by default so content shows first */}
+      <div className="sb-filterbar">
+        <button className="sb-filtertoggle" onClick={()=>setFiltersOpen(o=>!o)} aria-expanded={filtersOpen}>
+          <span className="ico">⛃</span>Filters
+          {filter!=="all" && <span className="sb-filteractive">{activeFilter?.label}</span>}
+          <span className={"sb-chev"+(filtersOpen?" open":"")}>›</span>
+        </button>
+        <label className="sb-sortlbl">
+          <select className="sb-select" value={sort} onChange={e=>setSort(e.target.value)} aria-label="Sort">
+            {BOARD_SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
+        </label>
       </div>
-
-      {!searching && <div className="sb-seg">
-        {filters.map(f => (
-          <button key={f} className={"sb-segbtn"+(filter===f?" on":"")} onClick={()=>setFilter(f)}>{f}</button>
+      {filtersOpen && <div className="sb-chiprow">
+        {availableFilters.map(f => (
+          <button key={f.id} className={"sb-fchip"+(filter===f.id?" on":"")}
+            onClick={()=>{ setFilter(f.id); setFiltersOpen(false); }}>{f.label}</button>
         ))}
       </div>}
 
-      {list.length===0
-        ? <div className="sb-empty"><div className="big">{searching?"🔍":"▦"}</div>
-            {searching ? `Nothing matches “${q.trim()}”.` : filter==="Archive" ? "Nothing archived yet." : "No content matches that filter."}</div>
-        : <div className="sb-list">{list.map(t => <TaskCard key={t.id} t={t} onClick={()=>openTask(t.id)} />)}</div>}
+      {/* Status groups */}
+      {groups.length>1 && <div className="sb-collapserow">
+        <button className="sb-collapselink" onClick={()=>setAllCollapsed(!groups.every(g=>collapsed[g.status]))}>
+          {groups.every(g=>collapsed[g.status]) ? "Expand all" : "Collapse all"}
+        </button>
+      </div>}
+      {groups.length===0
+        ? <div className="sb-empty"><div className="big">▦</div>No content matches these filters.</div>
+        : groups.map(g => {
+            // When a filter narrows the board to a single status group, always
+            // show it open (e.g. the Archive filter shouldn't land collapsed).
+            const isCollapsed = groups.length > 1 && !!collapsed[g.status];
+            const archive = g.status === "Posted";
+            return (
+              <section className="sb-group" key={g.status}>
+                <button className="sb-grouphd" onClick={()=>toggle(g.status)} aria-expanded={!isCollapsed}>
+                  <span className={"sb-chev"+(isCollapsed?"":" open")}>›</span>
+                  <span className={"sb-status "+statusClass(g.status)}><span className="pip"/>{g.status}</span>
+                  {archive && <span className="sb-archtag">Archive</span>}
+                  <span className="sb-groupct">{g.items.length}</span>
+                </button>
+                {!isCollapsed && (
+                  <div className="sb-list">
+                    {g.items.map(t => <TaskCard key={t.id} t={t} me={me} onClick={()=>openTask(t.id)} />)}
+                  </div>
+                )}
+              </section>
+            );
+          })}
     </div>
   );
 }
@@ -738,22 +991,46 @@ function BoardList({ tasks, openTask }) {
    MINE
    =================================================================== */
 function Mine({ tasks, me, openTask }) {
-  const mine = tasks.filter(t => t.owner===me.name || (t.support||[]).some(s=>s.name===me.name));
-  const owned = mine.filter(t => t.owner===me.name);
-  const helping = mine.filter(t => t.owner!==me.name);
+  const sections = useMemo(() => myWorkSections(tasks, me), [tasks, me]);
+  const total = sections.reduce((n, s) => n + s.items.length, 0);
+  // Only the urgent buckets start expanded; the rest stay collapsed so the
+  // screen opens focused. The user's expand/collapse choice is remembered.
+  const [override, setOverride] = useState(() => loadPref("sb-mine-collapsed", {}));
+  const openByDefault = (key) => ["overdue", "soon", "review"].includes(key);
+  const isOpen = (key) => key in override ? override[key] : openByDefault(key);
+  const persist = (next) => { setOverride(next); savePref("sb-mine-collapsed", next); };
+  const toggle = (key) => persist({ ...override, [key]: !isOpen(key) });
+  const setAll = (val) => { const m = {}; sections.forEach(s => m[s.key] = val); persist(m); };
+  const allOpen = sections.length > 0 && sections.every(s => isOpen(s.key));
+  // The two urgency buckets get a subtle accent so they read as "do this first".
+  const accent = { overdue: " urgent", soon: " soon" };
   return (
     <div className="sb-page">
-      <div className="sb-eyebrow">Just for you</div>
+      <div className="sb-eyebrow">What needs you next</div>
       <div className="sb-h">My work</div>
-      <div className="sb-sub">{mine.length} thing{mine.length!==1?"s":""} with your name on {mine.length!==1?"them":"it"}.</div>
+      <div className="sb-sub">
+        {total===0 ? "You're all clear — nothing assigned to you right now."
+          : `${total} thing${total!==1?"s":""} with your name on ${total!==1?"them":"it"}, most urgent first.`}
+      </div>
 
-      <div className="sb-shead"><h2>You're leading</h2><span className="sb-tag">{owned.length}</span></div>
-      {owned.length===0 ? <div className="sb-empty">Nothing you own right now.</div>
-        : <div className="sb-list">{owned.map(t => <TaskCard key={t.id} t={t} me={me} onClick={()=>openTask(t.id)} />)}</div>}
+      {total===0 && <div className="sb-empty"><div className="big">✓</div>You have no active assignments. Enjoy the breather.</div>}
 
-      <div className="sb-shead"><h2>You're supporting</h2><span className="sb-tag">{helping.length}</span></div>
-      {helping.length===0 ? <div className="sb-empty">No support tasks assigned.</div>
-        : <div className="sb-list">{helping.map(t => <TaskCard key={t.id} t={t} me={me} onClick={()=>openTask(t.id)} />)}</div>}
+      {sections.length>1 && <div className="sb-collapserow">
+        <button className="sb-collapselink" onClick={()=>setAll(!allOpen)}>{allOpen?"Collapse all":"Expand all"}</button>
+      </div>}
+
+      {sections.map(s => {
+        const open = isOpen(s.key);
+        return (
+          <div key={s.key}>
+            <button className={"sb-shead sb-sheadbtn"+(accent[s.key]||"")} onClick={()=>toggle(s.key)} aria-expanded={open}>
+              <span className={"sb-chev"+(open?" open":"")}>›</span>
+              <h2>{s.label}</h2><span className="sb-tag">{s.items.length}</span>
+            </button>
+            {open && <div className="sb-list">{s.items.map(t => <TaskCard key={t.id} t={t} me={me} onClick={()=>openTask(t.id)} />)}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -839,15 +1116,47 @@ function Home({ tasks, users, me, goTab }) {
   const greet = hi<12?"Good morning":hi<17?"Good afternoon":"Good evening";
   const fmtEv = (d) => d.toLocaleDateString(undefined,{month:"short",day:"numeric"});
 
+  // A short, meaningful summary — skip zero-value lines so quiet weeks don't
+  // read as "everything is 0". Two lines max: how things are going + what's next.
+  const s1 = pw.thisMonth>0
+    ? `You've helped complete ${pw.thisMonth} project${pw.thisMonth!==1?"s":""} this month.`
+    : thisM.posted>0
+    ? `The team has posted ${thisM.posted} piece${thisM.posted!==1?"s":""} of content this month.`
+    : "The month is just getting started.";
+  const s2 = prepCount>0
+    ? `${prepCount} upcoming event${prepCount!==1?"s":""} need${prepCount===1?"s":""} content preparation.`
+    : readyToPost>0
+    ? `${readyToPost} piece${readyToPost!==1?"s":""} approved and ready to post.`
+    : "You're all caught up — nothing needs prep right now.";
+
   return (
     <div className="sb-page">
       <div className="sb-eyebrow">{greet}</div>
-      <div className="sb-h">{greet}, {me.name.split(" ")[0]} 👋</div>
-      <div className="sb-sub">
-        You helped complete <b>{pw.thisMonth}</b> project{pw.thisMonth!==1?"s":""} this month. The team has posted
-        {" "}<b>{thisM.posted}</b> piece{thisM.posted!==1?"s":""} of content.
-        {prepCount>0 ? ` ${prepCount} upcoming event${prepCount!==1?"s":""} need content prep.` : " You're caught up on prep — nice."}
+      <div className="sb-h">Welcome back, {me.name.split(" ")[0]} 👋</div>
+      <div className="sb-sub sb-greet">
+        <span>{s1}</span>
+        <span>{s2}</span>
       </div>
+
+      {/* Coming up — what's on the ministry horizon */}
+      {events.length>0 && <>
+        <div className="sb-shead"><h2>Coming up</h2>
+          <button className="link" onClick={()=>goTab("board")}>Plan content →</button></div>
+        <div className="sb-evlist">
+          {events.slice(0,3).map((e,i) => (
+            <div className="sb-ev" key={i}>
+              <span className="sb-ev-ic">{e.kind==="birthday"?"🎂":"📅"}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div className="sb-ev-name">{e.name}</div>
+                <div className="sb-ev-sub">
+                  {fmtEv(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
+                  {e.prepNow ? " · start content prep now" : ` · prep in ${e.prepInDays}d`}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </>}
 
       {/* Ministry wins */}
       <div className="sb-shead"><h2>Ministry wins</h2></div>
@@ -891,25 +1200,6 @@ function Home({ tasks, users, me, goTab }) {
         <div className="sb-stat"><span className="num dot-blue">{m.avgApprovalHours==null?"—":m.avgApprovalHours+"h"}</span><span className="lbl">Avg approval</span></div>
       </div>
 
-      {/* Upcoming events */}
-      <div className="sb-shead"><h2>Upcoming events</h2></div>
-      {events.length===0
-        ? <div className="sb-empty">No upcoming events.</div>
-        : <div className="sb-evlist">
-            {events.map((e,i) => (
-              <div className="sb-ev" key={i}>
-                <span className="sb-ev-ic">{e.kind==="birthday"?"🎂":"📅"}</span>
-                <div style={{flex:1,minWidth:0}}>
-                  <div className="sb-ev-name">{e.name}</div>
-                  <div className="sb-ev-sub">
-                    {fmtEv(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
-                    {" · "}{e.prepNow ? "start content prep now" : `prep in ${e.prepInDays} day${e.prepInDays!==1?"s":""}`}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>}
-
       {/* Team pulse — small, awareness not stress */}
       <div className="sb-div"><span>Team pulse</span></div>
       <div className="sb-strip" style={{marginTop:12}}>
@@ -931,89 +1221,454 @@ function Home({ tasks, users, me, goTab }) {
 /* ===================================================================
    ADMIN
    =================================================================== */
-function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDeleteUser, onDeleteTask, onAutoAll, onImport, onResolveIssue, onAssignSuggested }) {
-  const [sec, setSec] = useState("tasks");
+/* A 3-dot "more actions" menu. Stops click propagation so using it never
+   triggers the card's own open-on-click. Closes on outside click or Escape. */
+function KebabMenu({ items }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  return (
+    <div className="sb-kebab" ref={ref} onClick={(e)=>e.stopPropagation()}>
+      <button className="sb-kebab-btn" aria-label="More actions" aria-haspopup="menu" aria-expanded={open}
+        onClick={()=>setOpen(o=>!o)}>⋯</button>
+      {open && (
+        <div className="sb-kebab-menu" role="menu">
+          {items.map((it, i) => (
+            <button key={i} role="menuitem" className={"sb-kebab-item"+(it.danger?" danger":"")}
+              onClick={()=>{ setOpen(false); it.onClick(); }}>{it.label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Shared kebab actions for an admin content card. */
+const adminKebab = (t, h) => [
+  { label:"Open", onClick:()=>h.open(t.id) },
+  { label:"Edit", onClick:()=>h.edit(t) },
+  { label:"Duplicate", onClick:()=>h.duplicate(t) },
+  ...(t.status!=="Posted" ? [{ label:"Archive", onClick:()=>h.archive(t) }] : []),
+  { label:"Delete", danger:true, onClick:()=>{ if(confirm(`Delete "${t.title}"?`)) h.del(t.id); } },
+];
+
+/* Admin content card — surfaces status, owner, the problem (blocker/gap) and
+   due date up front so an admin can triage without opening the card. */
+function AdminTaskCard({ t, h }) {
+  const problem = taskProblem(t);
+  const d = daysTo(t.postDate);
+  const dueCls = d===null?"due-ok":d<0?"due-over":d<=2?"due-soon":"due-ok";
+  const ownerLabel = t.owner==="Pending" ? (t.ownerSuggested?`Pending — ${t.ownerSuggested}`:"Pending") : (t.owner||"Unassigned");
+  const canAuto = h.auto && t.status!=="Posted" && !((t.support||[]).length);
+  return (
+    <div className="sb-task sb-task-act" role="button" tabIndex={0}
+      onClick={()=>h.open(t.id)}
+      onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); h.open(t.id); } }}>
+      <div className="row1"><span className="title">{t.title}</span>
+        <div className="sb-row1end">
+          <KebabMenu items={adminKebab(t, h)} />
+        </div></div>
+      <div className="sb-cardstatus">
+        <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
+        {t.status!=="Posted" && <span className={"sb-due "+dueCls}>Due {fmt(t.postDate)}</span>}
+      </div>
+      {problem && <div className="sb-problem">⚠ {problem}</div>}
+      <div className="sub"><span>Owner <b>{ownerLabel}</b></span></div>
+      {canAuto && <div className="sb-btnrow" style={{marginTop:8}} onClick={e=>e.stopPropagation()}>
+        <button className="sb-btn gold compact" onClick={()=>h.auto(t)}>⚡ Auto-assign crew</button>
+      </div>}
+    </div>
+  );
+}
+
+function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested }) {
+  const [sec, setSec] = useState("overview");
+  const [contentFilter, setContentFilter] = useState("all");
   const pending = users.filter(u => u.status === "pending");
-  const approved = users.filter(u => u.status === "approved" || u.role === "admin");
   const openIssues = (issues || []).filter(i => i.status !== "resolved").length;
+
+  // Card action handlers, bundled once and threaded through the panels.
+  const h = { open:onOpenTask, edit:onEditTask, archive:onArchiveTask,
+              duplicate:onDuplicateTask, del:onDeleteTask, auto:onAutoOne };
+  const goContent = (filter="all") => { setContentFilter(filter); setSec("content"); };
+
+  const tabs = [
+    ["overview", "Overview"],
+    ["people",   pending.length>0 ? `People · ${pending.length}` : "People"],
+    ["content",  "Content"],
+    ["import",   "Import"],
+    ["issues",   openIssues>0 ? `Issues · ${openIssues}` : "Issues"],
+  ];
 
   return (
     <div className="sb-page">
       <div className="sb-eyebrow">Control room</div>
       <div className="sb-h">Admin</div>
-      <div className="sb-sub">Create and manage content, people, and assignments.</div>
+      <div className="sb-sub">What needs leadership attention.</div>
       <div className="sb-seg" style={{marginBottom:14}}>
-        <button className={"sb-segbtn"+(sec==="tasks"?" on":"")} onClick={()=>setSec("tasks")}>Tasks</button>
-        <button className={"sb-segbtn"+(sec==="people"?" on":"")} onClick={()=>setSec("people")}>
-          People{pending.length>0?` · ${pending.length} pending`:""}</button>
-        <button className={"sb-segbtn"+(sec==="import"?" on":"")} onClick={()=>setSec("import")}>Import</button>
-        <button className={"sb-segbtn"+(sec==="issues"?" on":"")} onClick={()=>setSec("issues")}>
-          Issues{openIssues>0?` · ${openIssues} open`:""}</button>
+        {tabs.map(([id,label]) => (
+          <button key={id} className={"sb-segbtn"+(sec===id?" on":"")} onClick={()=>setSec(id)}>{label}</button>
+        ))}
       </div>
 
-      {sec==="tasks" && <>
-        <div className="sb-btnrow" style={{marginBottom:14}}>
-          <button className="sb-btn" onClick={()=>onEditTask("new")}>+ New task</button>
-          <button className="sb-btn gold" onClick={onAutoAll}>⚡ Auto-assign empty</button>
-        </div>
-        <div className="sb-list">
-          {tasks.map(t => (
-            <div className="sb-task" key={t.id} style={{cursor:"default"}}>
-              <div className="row1"><span className="title">{t.title}</span>
-                <span className={"sb-chip "+typeClass(t.type)}>{t.type}</span></div>
-              <div className="sub"><span><b>{t.owner}</b> · {t.location}</span><span>{fmt(t.postDate)}</span></div>
-              <div className="sb-btnrow" style={{marginTop:10}}>
-                <button className="sb-btn ghost" onClick={()=>onEditTask(t)}>Edit</button>
-                <button className="sb-btn danger" onClick={()=>{ if(confirm(`Delete "${t.title}"?`)) onDeleteTask(t.id); }}>Delete</button>
-              </div>
-            </div>
-          ))}
-          {tasks.length===0 && <div className="sb-empty">No tasks yet. Tap “New task” to start.</div>}
-        </div>
-      </>}
+      {sec==="overview" && <AdminOverview tasks={tasks} users={users} h={h}
+        onGoContent={goContent} onGoPeople={()=>setSec("people")} onGoImport={()=>setSec("import")}
+        onNewContent={()=>onEditTask("new")} onAutoAll={onAutoAll}
+        onEditUser={onEditUser} onDeleteUser={onDeleteUser} onAssignSuggested={onAssignSuggested} />}
 
-      {sec==="people" && <>
-        {pending.length>0 && <>
-          <div className="sb-banner">⏳ {pending.length} {pending.length===1?"person is":"people are"} waiting for approval</div>
-          <div className="sb-list" style={{marginBottom:18}}>
-            {pending.map(u => (
-              <div className="sb-task" key={u.id} style={{cursor:"default"}}>
-                <div className="row1"><span className="title">{u.name}</span>
-                  <span className="sb-chip chip-poster">Pending</span></div>
-                <div className="sub"><span>{u.email}</span></div>
-                <AssignHint user={u} tasks={tasks} onAssign={onAssignSuggested} />
-                <div className="sb-btnrow" style={{marginTop:10}}>
-                  <button className="sb-btn green" onClick={()=>onEditUser(u)}>Review &amp; approve</button>
-                  <button className="sb-btn danger" onClick={()=>{ if(confirm(`Reject ${u.name}? They'll be removed.`)) onDeleteUser(u.id); }}>Reject</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>}
+      {sec==="people" && <AdminPeople users={users} tasks={tasks}
+        onEditUser={onEditUser} onDeleteUser={onDeleteUser} onRemoveUser={onRemoveUser}
+        onAssignSuggested={onAssignSuggested} />}
 
-        <div className="sb-shead"><h2>Team</h2><span className="sb-tag">{approved.length}</span></div>
-        <div className="sb-list">
-          {approved.map(u => (
-            <div className="sb-task" key={u.id} style={{cursor:"default"}}>
-              <div className="row1">
-                <span className="title">{u.name}{u.role==="admin" && <span className="sb-chip chip-poster" style={{marginLeft:8}}>Admin</span>}</span>
-              </div>
-              <div className="sub"><span>{u.email}</span><span>{(u.location||[]).join("/")}</span></div>
-              <div className="sub"><span>{(u.skills||[]).map(roleLabel).join(", ")||"No skills set"}</span>
-                {(u.qa||u.captions) && <span>{[u.qa&&"QA",u.captions&&"Captions"].filter(Boolean).join(" · ")}</span>}</div>
-              <AssignHint user={u} tasks={tasks} onAssign={onAssignSuggested} />
-              <div className="sb-btnrow" style={{marginTop:10}}>
-                <button className="sb-btn ghost" onClick={()=>onEditUser(u)}>Edit</button>
-                <button className="sb-btn danger" onClick={()=>{ if(confirm(`Remove ${u.name}?`)) onDeleteUser(u.id); }}>Remove</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </>}
+      {sec==="content" && <AdminContent tasks={tasks} h={h}
+        filter={contentFilter} setFilter={setContentFilter}
+        onNewContent={()=>onEditTask("new")} onAutoAll={onAutoAll} />}
 
       {sec==="import" && <ImportPanel users={teamUsers} onImport={onImport} />}
-
       {sec==="issues" && <IssueLog issues={issues} onResolve={onResolveIssue} />}
+    </div>
+  );
+}
+
+/* Overview = the admin landing page: health at a glance, then only the things
+   that need a leader — stuck work, approvals, unassigned content — plus recent
+   activity and quick actions. No endless content list. */
+function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, onNewContent, onAutoAll, onEditUser, onDeleteUser, onAssignSuggested }) {
+  const health = adminHealth(tasks, users);
+  const attention = adminNeedsAttention(tasks);
+  const pending = users.filter(u => u.status === "pending");
+  const ready = adminReadyToMove(tasks);
+  const activity = recentActivity(tasks, 8);
+  const events = upcomingEvents(3);
+  const [eventNote, setEventNote] = useState(false);
+
+  // Does any active task reference this event? Loose token match on relatedEvent.
+  const eventCovered = (e) => {
+    const tokens = e.name.toLowerCase().split(/\W+/)
+      .filter(w => w.length>3 && !["pastor","birthday","conference"].includes(w));
+    return tasks.some(t => t.status!=="Posted" &&
+      tokens.some(tok => (t.relatedEvent||"").toLowerCase().includes(tok)));
+  };
+  const ago = (ms) => {
+    const m = Math.round((Date.now()-ms)/60000);
+    if (m<1) return "just now"; if (m<60) return `${m}m ago`;
+    const hrs = Math.round(m/60); if (hrs<24) return `${hrs}h ago`;
+    return `${Math.round(hrs/24)}d ago`;
+  };
+
+  // Severity-coded so a leader can scan instantly: red = broken, amber =
+  // slipping, gold = waiting on QA, green = good to go, violet = people.
+  const cards = [
+    { k:"blocked", n:health.blocked,      label:"Blocked",           tone:"red",    go:()=>onGoContent("blocked") },
+    { k:"overdue", n:health.overdue,      label:"Overdue",           tone:"amber",  go:()=>onGoContent("overdue") },
+    { k:"qa",      n:health.awaitingQA,   label:"Awaiting QA",       tone:"gold",   go:()=>onGoContent("qa") },
+    { k:"ready",   n:health.ready,        label:"Ready to post",     tone:"green",  go:()=>onGoContent("ready") },
+    { k:"pending", n:health.pendingUsers, label:"Awaiting approval", tone:"violet", go:onGoPeople },
+    { k:"unassig", n:health.unassigned,   label:"Unassigned",        tone:"blue",   go:()=>onGoContent("needowner") },
+  ];
+
+  return (
+    <>
+      {/* Quick actions first — the things a leader comes here to DO */}
+      <div className="sb-btnrow sb-quickrow">
+        <button className="sb-btn" onClick={onNewContent}>+ New content</button>
+        <button className="sb-btn ghost" onClick={onGoImport}>⤓ Import CSV</button>
+        <button className="sb-btn ghost" onClick={()=>setEventNote(v=>!v)}>＋ Create event</button>
+        <button className="sb-btn gold" onClick={onAutoAll}>⚡ Auto-assign crew</button>
+      </div>
+      {eventNote && <div className="sb-assign" style={{marginTop:10}}>
+        📅 Event management is coming soon — pastor birthdays &amp; key dates already power the reminders on Home.</div>}
+
+      {/* Health overview */}
+      <div className="sb-health" style={{marginTop:18}}>
+        {cards.map(c => (
+          <button key={c.k} className={"sb-hcard tone-"+c.tone} onClick={c.go}>
+            <span className="n">{c.n}</span><span className="l">{c.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Decision #1: people waiting to be let in */}
+      {pending.length>0 && <>
+        <div className="sb-shead sb-shead-strong"><h2>Waiting for approval</h2><span className="sb-tag">{pending.length}</span></div>
+        <div className="sb-prowlist">
+          {pending.map(u => (
+            <PendingRow key={u.id} u={u} tasks={tasks}
+              onReview={()=>onEditUser(u)} onReject={onDeleteUser} onAssignSuggested={onAssignSuggested} />
+          ))}
+        </div>
+      </>}
+
+      {/* Only problematic items — overdue, blocked, missing owner/crew */}
+      <div className="sb-shead sb-shead-strong"><h2>Needs attention</h2><span className="sb-tag">{attention.length}</span></div>
+      {attention.length===0
+        ? <div className="sb-empty"><div className="big">✓</div>Nothing currently needs leadership attention.</div>
+        : <div className="sb-list">{attention.slice(0,6).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>}
+      {attention.length>6 && <button className="sb-morelink" onClick={()=>onGoContent("overdue")}>See everything that's stuck in Content →</button>}
+
+      {/* Healthy work that can advance with a nudge */}
+      {ready.length>0 && <>
+        <div className="sb-shead"><h2>Ready to move</h2><span className="sb-tag">{ready.length}</span></div>
+        <div className="sb-list">{ready.slice(0,5).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>
+        {ready.length>5 && <button className="sb-morelink" onClick={()=>onGoContent("ready")}>See all ready to move →</button>}
+      </>}
+
+      {/* Upcoming events with a "no content yet" flag */}
+      {events.length>0 && <>
+        <div className="sb-shead"><h2>Upcoming</h2></div>
+        <div className="sb-evlist">
+          {events.map((e,i) => {
+            const covered = eventCovered(e);
+            return (
+              <div className="sb-ev" key={i}>
+                <span className="sb-ev-ic">{e.kind==="birthday"?"🎂":"📅"}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div className="sb-ev-name">{e.name}</div>
+                  <div className="sb-ev-sub">
+                    {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
+                    {!covered && <span className="sb-ev-warn"> · ⚠ no content assigned</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>}
+
+      {/* Recent activity feed — who did what across the team */}
+      {activity.length>0 && <>
+        <div className="sb-shead"><h2>Activity</h2></div>
+        <div className="sb-actfeed">
+          {activity.map((a,i) => (
+            <button className="sb-actrow" key={i} onClick={()=>h.open(a.taskId)}>
+              <span className="sb-act-dot"/>
+              <span className="sb-act-txt"><b>{a.who}</b> {a.verb} “{a.title}”</span>
+              <span className="sb-act-ago">{ago(a.at)}</span>
+            </button>
+          ))}
+        </div>
+      </>}
+    </>
+  );
+}
+
+/* Content = the full "manage content" screen: search, admin-centric filters,
+   and the complete card list (edit / archive / duplicate / delete per card). */
+function AdminContent({ tasks, h, filter, setFilter, onNewContent, onAutoAll }) {
+  const [q, setQ] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const searching = q.trim().length > 0;
+  const list = sortTasks(searching ? searchTasks(tasks, q) : applyAdminFilter(tasks, filter), "post-asc");
+  const activeLabel = ADMIN_FILTERS.find(f => f.id === filter)?.label;
+
+  return (
+    <>
+      <div className="sb-btnrow" style={{marginBottom:12}}>
+        <button className="sb-btn" onClick={onNewContent}>+ New content</button>
+        <button className="sb-btn gold" onClick={onAutoAll}>⚡ Auto-assign empty</button>
+      </div>
+      <div className="sb-field" style={{marginBottom:10}}>
+        <div className="sb-inline">
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Search content — title, owner, event…" />
+          {searching && <button className="sb-btn ghost compact" onClick={()=>setQ("")}>Clear</button>}
+        </div>
+      </div>
+      {!searching && <>
+        <div className="sb-filterbar">
+          <button className="sb-filtertoggle" onClick={()=>setFiltersOpen(o=>!o)} aria-expanded={filtersOpen}>
+            <span className="ico">⛃</span>Filters
+            {filter!=="all" && <span className="sb-filteractive">{activeLabel}</span>}
+            <span className={"sb-chev"+(filtersOpen?" open":"")}>›</span>
+          </button>
+        </div>
+        {filtersOpen && <div className="sb-chiprow">
+          {ADMIN_FILTERS.map(f => (
+            <button key={f.id} className={"sb-fchip"+(filter===f.id?" on":"")}
+              onClick={()=>{ setFilter(f.id); setFiltersOpen(false); }}>{f.label}</button>
+          ))}
+        </div>}
+      </>}
+      <div className="sb-sub" style={{margin:"8px 0 12px"}}>
+        {list.length} item{list.length!==1?"s":""}{searching?` matching “${q.trim()}”`:filter!=="all"?` · ${activeLabel}`:""}
+      </div>
+      {list.length===0
+        ? <div className="sb-empty"><div className="big">▦</div>Nothing matches.</div>
+        : <div className="sb-list">{list.map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>}
+    </>
+  );
+}
+
+/* A compact pending-approval row: identity + a single primary "Review" action.
+   Reject is tucked into the kebab so the page isn't a wall of danger buttons. */
+function PendingRow({ u, tasks, onReview, onReject, onAssignSuggested }) {
+  return (
+    <div className="sb-prow">
+      <span className="sb-av" style={{width:38,height:38,fontSize:13}}>{initials(u.name)}</span>
+      <div className="sb-prow-main">
+        <div className="sb-prow-name">{u.name}</div>
+        <div className="sb-prow-sub">{u.email} · <span className="sb-pendtag">Pending approval</span></div>
+        <AssignHint user={u} tasks={tasks} onAssign={onAssignSuggested} />
+      </div>
+      <button className="sb-btn green compact" onClick={onReview}>Review</button>
+      <KebabMenu items={[
+        { label:"Review & approve", onClick:onReview },
+        { label:"Reject", danger:true, onClick:()=>{ if(confirm(`Reject ${u.name}? Their account will be removed.`)) onReject(u.id); } },
+      ]} />
+    </div>
+  );
+}
+
+/* A team member card — identity, campus, department, permissions, and a live
+   active-task count. Edit is primary; Remove lives in the kebab (safer). */
+function PersonCard({ u, tasks, onEdit, onRemove }) {
+  const chips = roleChips(u);
+  const active = userActiveTasks(u, tasks);
+  const campus = (u.location||[]).join(" · ") || "No campus";
+  const dept = u.department || "No department";
+  return (
+    <div className="sb-task sb-task-act" role="button" tabIndex={0}
+      onClick={onEdit} onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onEdit(); } }}>
+      <div className="row1"><span className="title">{u.name}</span>
+        <div className="sb-row1end">
+          <KebabMenu items={[
+            { label:"Edit", onClick:onEdit },
+            { label:"Remove from team", danger:true, onClick:onRemove },
+          ]} />
+        </div></div>
+      <div className="sub"><span>{u.email}</span></div>
+      <div className="sub"><span>{campus} · {dept}</span></div>
+      <div className="sb-prow-chips">
+        {chips.map(c => <span key={c} className={"sb-rolechip rc-"+c.toLowerCase()}>{c}</span>)}
+        <span className="sb-activecount">{active} active task{active!==1?"s":""}</span>
+      </div>
+    </div>
+  );
+}
+
+/* People = approvals + team management: search, filters, grouped roster. */
+function AdminPeople({ users, tasks, onEditUser, onDeleteUser, onRemoveUser, onAssignSuggested }) {
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [removing, setRemoving] = useState(null);   // user pending removal
+  const searching = q.trim().length > 0;
+
+  const pending = users.filter(u => u.status === "pending");
+  const allApproved = users.filter(u => u.status === "approved" || u.role === "admin");
+  let team = searching ? searchPeople(allApproved, q) : applyPeopleFilter(allApproved, filter);
+  const groups = groupPeople(team);
+  const teamTotal = team.length;
+  const activeLabel = PEOPLE_FILTERS.find(f => f.id === filter)?.label;
+
+  return (
+    <>
+      {/* Pending approvals — its own clear section, compact rows */}
+      {pending.length>0 && <>
+        <div className="sb-shead sb-shead-strong"><h2>Waiting for approval</h2><span className="sb-tag">{pending.length}</span></div>
+        <div className="sb-prowlist" style={{marginBottom:18}}>
+          {pending.map(u => (
+            <PendingRow key={u.id} u={u} tasks={tasks}
+              onReview={()=>onEditUser(u)} onReject={onDeleteUser} onAssignSuggested={onAssignSuggested} />
+          ))}
+        </div>
+      </>}
+
+      {/* Search + filters */}
+      <div className="sb-field" style={{marginBottom:10}}>
+        <div className="sb-inline">
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Search people — name, email, department, role, campus…" />
+          {searching && <button className="sb-btn ghost compact" onClick={()=>setQ("")}>Clear</button>}
+        </div>
+      </div>
+      {!searching && <div className="sb-chiprow">
+        {PEOPLE_FILTERS.map(f => (
+          <button key={f.id} className={"sb-fchip"+(filter===f.id?" on":"")} onClick={()=>setFilter(f.id)}>{f.label}</button>
+        ))}
+      </div>}
+
+      <div className="sb-sub" style={{margin:"8px 0 6px"}}>
+        {teamTotal} team member{teamTotal!==1?"s":""}{searching?` matching “${q.trim()}”`:filter!=="all"?` · ${activeLabel}`:""}
+      </div>
+
+      {teamTotal===0
+        ? <div className="sb-empty"><div className="big">👥</div>No one matches.</div>
+        : groups.map(g => (
+            <div key={g.label}>
+              <div className="sb-shead"><h2>{g.label}</h2><span className="sb-tag">{g.items.length}</span></div>
+              <div className="sb-list">
+                {g.items.map(u => (
+                  <PersonCard key={u.id} u={u} tasks={tasks}
+                    onEdit={()=>onEditUser(u)} onRemove={()=>setRemoving(u)} />
+                ))}
+              </div>
+            </div>
+          ))}
+
+      {removing && (
+        <RemoveUserModal user={removing} tasks={tasks} team={allApproved}
+          onClose={()=>setRemoving(null)}
+          onConfirm={async (opts)=>{ await onRemoveUser(removing, opts); setRemoving(null); }} />
+      )}
+    </>
+  );
+}
+
+/* A deliberate, reversible-feeling removal flow: explains the consequence and
+   lets the admin reassign the person's active work or leave it for pickup. */
+function RemoveUserModal({ user, tasks, team, onClose, onConfirm }) {
+  const owned = tasks.filter(t => t.owner === user.name && t.status !== "Posted");
+  const others = team.filter(u => u.name !== user.name);
+  const [mode, setMode] = useState("unassign");
+  const [target, setTarget] = useState(others[0]?.name || "");
+  const [busy, setBusy] = useState(false);
+
+  const go = async () => {
+    setBusy(true);
+    await onConfirm({ mode, target: mode === "reassign" ? target : undefined });
+  };
+
+  return (
+    <div className="sb-scrim" onMouseDown={onClose}>
+      <div className="sb-sheet" onMouseDown={e=>e.stopPropagation()}>
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Remove {user.name}?</b>
+          <button className="sb-x" onClick={onClose}>✕</button></div>
+        <div className="bd">
+          <p className="sb-sub" style={{lineHeight:1.55}}>
+            Are you sure you want to remove this user from the team? Their content will remain,
+            but they'll no longer have access.
+          </p>
+
+          {owned.length>0 ? <>
+            <div className="sb-field"><label>They currently own {owned.length} active task{owned.length!==1?"s":""}</label>
+              <label className="sb-radio">
+                <input type="radio" name="rm" checked={mode==="unassign"} onChange={()=>setMode("unassign")} />
+                Keep the tasks unassigned (mark as needing an owner)
+              </label>
+              <label className="sb-radio">
+                <input type="radio" name="rm" checked={mode==="reassign"} onChange={()=>setMode("reassign")} />
+                Reassign their active tasks to:
+              </label>
+              {mode==="reassign" && (
+                <select className="sb-select" style={{marginTop:6}} value={target} onChange={e=>setTarget(e.target.value)}>
+                  {others.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                </select>
+              )}
+            </div>
+          </> : <p className="sb-sub">They don't own any active tasks.</p>}
+
+          <div className="sb-btnrow" style={{marginTop:8}}>
+            <button className="sb-btn danger" disabled={busy || (mode==="reassign" && !target)} onClick={go}>
+              {busy?"Removing…":"Remove from team"}</button>
+            <button className="sb-btn ghost" onClick={onClose}>Cancel</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1100,7 +1755,7 @@ function AssignHint({ user, tasks, onAssign }) {
   if (!n) return null;
   return (
     <div className="sb-assign">
-      💡 May match <b>{n}</b> pending task{n!==1?"s":""} from the import.
+      💡 Suggested match for <b>{n}</b> imported task{n!==1?"s":""} (Pending owner/crew).
       <button className="link" onClick={()=>onAssign(user)}>Assign {n===1?"it":"them"}</button>
     </div>
   );
@@ -1223,51 +1878,39 @@ function TaskCard({ t, me, onClick }) {
   const isPosted = t.status==="Posted";
   const dueCls = d===null?"due-ok":d<0?"due-over":d<=2?"due-soon":"due-ok";
   const dueTxt = d===null?"No date":d<0?`${Math.abs(d)}d overdue`:d===0?"Due today":d===1?"Due tomorrow":`Due ${fmt(t.postDate)}`;
-  const stageIdx = STAGES.indexOf(t.status);
-  const pct = ((stageIdx+1)/STAGES.length)*100;          // how far along Plan → Posted
   // De-duplicate owner + crew so the same person shows one avatar.
   const people = [{name:t.owner,owner:true}, ...(t.support||[]).map(s=>({name:s.name}))];
   const seen = new Set(); const uniquePeople = people.filter(p=>!seen.has(p.name)&&seen.add(p.name));
+  // Only surface ownership when it helps you act: if you're supporting (not the
+  // lead), name the lead. "Who owns it" otherwise lives in the detail screen.
+  const supporting = me && t.owner!==me.name && (t.support||[]).some(s=>s.name===me.name);
+  // Mobile-first card: title · status · due · next · avatars.
   return (
     <button className="sb-task" onClick={onClick}>
       <div className="row1">
         <span className="title">{t.title}</span>
         <span className="sb-rowtags">
-          {t.priority==="High" && <span className={"sb-pri "+priorityClass(t.priority)}>▲ High</span>}
+          {t.priority==="High" && <span className={"sb-pri "+priorityClass(t.priority)}>▲</span>}
           <span className={"sb-chip "+typeClass(t.type)}>{t.type}</span>
         </span>
       </div>
 
-      {/* The "what do I do next" line: blocked beats next-action; show neither
-          when the task is just cruising (keeps simple cards clean). */}
-      {t.blockedOn
-        ? <div className="sb-act blocked">⛔ Waiting on {t.blockedOn}</div>
-        : t.nextAction
-          ? <div className="sb-act">→ {t.nextAction}</div>
-          : null}
-
-      <div className="sub">
-        <span><b>{t.owner}</b> leads</span>
-        <span>{t.location==="Both"?"479 + 828":t.location}</span>
+      {/* Status is dominant; due date pops; "Next" + blocker are supporting text. */}
+      <div className="sb-cardstatus">
+        <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
+        {!isPosted && <span className={"sb-due "+dueCls}>🕒 {dueTxt}</span>}
       </div>
+      {/* Fixed order: blocking issue → up next → supporting/owner → avatars. */}
+      {t.blockedOn && <div className="sb-next blocked"><span className="sb-next-lbl">Blocked</span>Waiting on {t.blockedOn}</div>}
+      {!isPosted && <div className="sb-next"><span className="sb-next-lbl">Up next</span>{nextStep(t.status)}</div>}
+      {supporting && <div className="sb-support">Supporting {t.owner.split(" ")[0]}</div>}
 
-      {/* Slim progress bar through the pipeline (replaces the old dotted rail). */}
-      <div className="sb-prog" aria-label={`Stage: ${t.status}`}>
-        <i className={t.status==="Posted"?"done":""} style={{width:`${pct}%`}}/>
-      </div>
-
-      <div className="sb-ppl" style={{justifyContent:"space-between"}}>
-        <span style={{display:"flex"}}>
-          {uniquePeople.slice(0,5).map((p,i)=>(
-            <span key={i} className={"sb-av"+(p.owner?" owner":"")}
-              style={me&&p.name===me.name?{outline:"2px solid var(--violet)"}:{}}>{initials(p.name)}</span>
-          ))}
-        </span>
-        <span style={{display:"flex",alignItems:"center",gap:8}}>
-          {(t.comments?.length>0) && <span style={{fontSize:11,color:"var(--muted)"}}>{Ic.chat} {t.comments.length}</span>}
-          {!isPosted && <span className={"sb-due "+dueCls}>{dueTxt}</span>}
-          <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
-        </span>
+      <div className="sb-ppl">
+        {uniquePeople.slice(0,5).map((p,i)=>(
+          <span key={i} className={"sb-av"+(p.owner?" owner":"")}
+            style={me&&p.name===me.name?{outline:"2px solid var(--violet)"}:{}}>{initials(p.name)}</span>
+        ))}
+        {(t.comments?.length>0) && <span style={{fontSize:11,color:"var(--muted)",marginLeft:"auto"}}>{Ic.chat} {t.comments.length}</span>}
       </div>
     </button>
   );
@@ -1276,30 +1919,47 @@ function TaskCard({ t, me, onClick }) {
 /* ===================================================================
    TASK DETAIL
    =================================================================== */
-function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onRequestChanges, onNextAction, onBlocked, onComment, onReact, onEdit }) {
+function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onApprove, onLinks, onCaption, onRequestChanges, onBlocked, onComment, onReact, onEdit }) {
   const [draft, setDraft] = useState("");
-  // Local drafts for the collaborative fields; persisted on blur. The component
-  // is keyed by task id (see Board), so these reset when a new task opens.
-  const [note, setNote] = useState(task.nextActionNote || "");
+  // Local drafts; persisted on blur. Component is keyed by task id, so these
+  // reset when a new task opens.
   const [blocked, setBlocked] = useState(task.blockedOn || "");
   const [links, setLinksDraft] = useState(task.links || {});
+  const [caption, setCaptionDraft] = useState(task.caption || "");
+  const [postLink, setPostLink] = useState(task.postLink || "");
   const [changeNote, setChangeNote] = useState("");
   const [askChanges, setAskChanges] = useState(false);
   const [warn, setWarn] = useState("");
-  const stageIdx = STAGES.indexOf(task.status);
   const EMOJIS = ["👍","🔥","🙏","👀"];
   const isLink = task.link && task.link.startsWith("http");
+  const phase = statusPhase(task.status);
+  const action = workflowAction(task, me);                 // the single guided step for this user
   const required = requiredLinkKeys(task.type);
-  // Guard the workflow: only QA can approve, and content links are required
-  // before a task can be sent to QA (matches the firestore.rules server-side).
-  const tryStatus = (s) => {
-    if (s==="Approved" && !isQA) { setWarn("Only a QA reviewer can approve content."); return; }
-    const miss = QA_STATUSES.includes(s) ? missingLinks({ ...task, links }) : [];
-    if (miss.length) { setWarn(`Add the required content link${miss.length>1?"s":""} below before sending to QA: ${miss.map(k=>LINK_FIELDS[k]).join(", ")}.`); return; }
-    setWarn(""); onStatus(s);
-  };
+  // Only the type's required links (plus any already filled) — keeps it focused.
+  const linkKeys = Object.keys(LINK_FIELDS).filter(k => required.includes(k) || (links[k]||"").trim());
+  const captionStage = ["Approved","Ready to Post","Posted"].includes(task.status);
+  const postStage = ["Ready to Post","Posted"].includes(task.status);
+  const canCaption = (!!me.captions || isAdmin) && task.status !== "Posted";
+  const lastFeedback = [...(task.activity||[])].reverse().find(e => e.type==="changes_requested")?.note;
   const saveLinks = (next) => { setLinksDraft(next); onLinks(next); };
   const tm = (t) => typeof t === "number" ? new Date(t).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : t;
+
+  // Run the guided action, enforcing its preconditions (same gates as the rules).
+  const doAction = () => {
+    if (!action) return;
+    if (action.requiresLinks) {
+      const miss = missingLinks({ ...task, links });
+      if (miss.length) { setWarn(`Add the required content link${miss.length>1?"s":""} first: ${miss.map(k=>LINK_FIELDS[k]).join(", ")}.`); return; }
+    }
+    if (action.needsCaption && !caption.trim()) { setWarn("Write the caption first."); return; }
+    if (action.needsPostLink && !postLink.trim()) { setWarn("Add the final post link first."); return; }
+    setWarn("");
+    const extra = {};
+    if (action.needsCaption) extra.caption = caption.trim();
+    if (action.needsPostLink) extra.postLink = postLink.trim();
+    onAction(action, extra);
+  };
+
   return (
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
@@ -1308,17 +1968,24 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onReq
           <button className="sb-x" onClick={onClose}>✕</button>
         </div>
         <div className="bd">
-          <h2 style={{fontSize:22,fontWeight:600,lineHeight:1.15,marginBottom:6}}>{task.title}</h2>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-            <span className={"sb-status "+statusClass(task.status)}><span className="pip"/>{task.status}</span>
+          <h2 style={{fontSize:22,fontWeight:600,lineHeight:1.15,marginBottom:8}}>{task.title}</h2>
+
+          {/* Status is the dominant signal; "Next" is small supporting text. */}
+          <div className="sb-statusline">
+            <span className={"sb-status big "+statusClass(task.status)}><span className="pip"/>{task.status}</span>
             {task.priority==="High" && <span className={"sb-pri "+priorityClass(task.priority)}>▲ High</span>}
-            {task.blockedOn && <span className="sb-act blocked" style={{margin:0}}>⛔ {task.blockedOn}</span>}
-            {task.relatedEvent && <span className="sb-tag">{task.relatedEvent}</span>}
             <span className="sb-tag">{task.location==="Both"?"479 + 828":task.location}</span>
+            {task.relatedEvent && <span className="sb-tag">{task.relatedEvent}</span>}
+          </div>
+          <div className="sb-nextline">Next: {nextStep(task.status)}</div>
+
+          {/* Phase progress: Planning → Creating → Review → Posting. */}
+          <div className="sb-phases">
+            {PHASES.map((p,i)=>(
+              <div key={p} className={"sb-phase"+(i<phase?" done":i===phase?" now":"")}><span/>{p}</div>
+            ))}
           </div>
 
-          {/* Creative brief — the "why" behind the content, so anyone joining
-              the task understands what they're making. */}
           {task.brief && (
             <div className="sb-brief">
               <div className="sb-brief-h">Creative brief</div>
@@ -1326,43 +1993,29 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onReq
             </div>
           )}
 
-          <div className="sb-field"><label>Move it along</label>
-            <div className="sb-seg">
-              {STAGES.map((s,i)=>(
-                <button key={s} className={"sb-segbtn"+(task.status===s?" on":"")}
-                  onClick={()=>tryStatus(s)}>{i<=stageIdx?"✓ ":""}{s}</button>))}
+          {/* QA sent it back — show the feedback to the owner. */}
+          {task.status==="Changes Requested" && lastFeedback && (
+            <div className="sb-lerr" style={{marginBottom:12}}><b>Changes requested:</b> {lastFeedback}</div>
+          )}
+
+          {/* The guided primary action for this user (Start work / Submit for QA /
+              Mark ready to post / Mark as posted). */}
+          {action && (
+            <div style={{marginBottom:14}}>
+              <button className="sb-btn" onClick={doAction}>{action.label}</button>
+              {warn && <div className="sb-lerr" style={{marginTop:8}}>{warn}</div>}
             </div>
-            {warn && <div className="sb-lerr" style={{marginTop:8}}>{warn}</div>}
-          </div>
+          )}
+          {!action && task.status==="In Review" && !isQA && (
+            <div className="sb-banner" style={{marginBottom:14}}>⏳ Submitted — awaiting QA review.</div>
+          )}
 
-          {/* Content links — produced by the crew, required before QA. Editable
-              by anyone on the task; persisted as they're entered. */}
-          <div className="sb-shead" style={{marginTop:6}}><h2>Content links</h2></div>
-          {Object.keys(LINK_FIELDS).map(k => {
-            const need = required.includes(k);
-            const val = links[k] || "";
-            return (
-              <div className="sb-field" key={k}>
-                <label>{LINK_FIELDS[k]}{need && <span style={{color:"var(--red)"}}> *</span>}</label>
-                <div className="sb-inline">
-                  <input value={val} placeholder="Paste a Google Drive link…"
-                    onChange={e=>setLinksDraft({...links, [k]: e.target.value})}
-                    onBlur={()=>saveLinks({ ...links, [k]: (links[k]||"").trim() })} />
-                  {val.startsWith("http") &&
-                    <a className="sb-btn ghost compact" style={{textDecoration:"none",display:"flex",alignItems:"center"}}
-                      href={val} target="_blank" rel="noreferrer noopener">Open</a>}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* QA panel — only QA members / admins see approve & request-changes,
-              and only while the task is awaiting review. */}
+          {/* QA panel — Approve / Request changes, only for QA while In Review. */}
           {isQA && task.status==="In Review" && (
-            <div className="sb-banner" style={{flexDirection:"column",alignItems:"stretch",display:"flex",gap:10,background:"var(--violet-soft)",borderColor:"var(--line)",color:"var(--ink)"}}>
+            <div className="sb-qa">
               <b>QA review</b>
               <div className="sb-btnrow">
-                <button className="sb-btn green compact" onClick={()=>tryStatus("Approved")}>Approve</button>
+                <button className="sb-btn green compact" onClick={onApprove}>Approve</button>
                 <button className="sb-btn danger compact" onClick={()=>setAskChanges(v=>!v)}>Request changes</button>
               </div>
               {askChanges && <>
@@ -1375,34 +2028,67 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onReq
             </div>
           )}
 
-          {/* What's next — any member can set this so the team knows the
-              immediate action (it drives the My Day list and card headline). */}
-          <div className="sb-field"><label>What's next?</label>
-            <div className="sb-seg" style={{flexWrap:"wrap"}}>
-              {NEXT_ACTIONS.map(a=>(
-                <button key={a} className={"sb-segbtn"+(task.nextAction===a?" on":"")}
-                  onClick={()=>onNextAction(task.nextAction===a?"":a, note)}>{a}</button>))}
-            </div>
-            <input style={{marginTop:8}}
-              value={note} onChange={e=>setNote(e.target.value)}
-              onBlur={()=>onNextAction(task.nextAction||"", note.trim())}
-              placeholder="Optional note — e.g. “captions by Friday”" />
-          </div>
+          {/* Content links — appear once production has started (not at Planned).
+              Required ones (by type) gate the Submit-for-QA step. */}
+          {phase>=1 && <>
+            <div className="sb-shead" style={{marginTop:6}}><h2>Content links</h2>
+              {required.length>0 && <span className="sb-sub" style={{margin:0}}>* required for QA</span>}</div>
+            {linkKeys.map(k => {
+              const val = links[k] || "";
+              return (
+                <div className="sb-field" key={k}>
+                  <label>{LINK_FIELDS[k]}{required.includes(k) && <span style={{color:"var(--red)"}}> *</span>}</label>
+                  <div className="sb-inline">
+                    <input value={val} placeholder="Paste a Google Drive link…"
+                      onChange={e=>setLinksDraft({...links, [k]: e.target.value})}
+                      onBlur={()=>saveLinks({ ...links, [k]: (links[k]||"").trim() })} />
+                    {val.startsWith("http") &&
+                      <a className="sb-btn ghost compact" style={{textDecoration:"none",display:"flex",alignItems:"center"}}
+                        href={val} target="_blank" rel="noreferrer noopener">Open</a>}
+                  </div>
+                </div>
+              );
+            })}
+          </>}
 
-          <div className="sb-field"><label>Waiting on (leave blank if not blocked)</label>
-            <input value={blocked} onChange={e=>setBlocked(e.target.value)}
-              onBlur={()=>onBlocked(blocked.trim())}
-              placeholder="e.g. Pastor's approval, David's graphics" />
-          </div>
+          {/* Caption — written by the caption/upload team once approved. */}
+          {captionStage && (
+            <div className="sb-field"><label>Caption</label>
+              <textarea rows={3} value={caption} disabled={!canCaption}
+                onChange={e=>setCaptionDraft(e.target.value)} onBlur={()=>onCaption(caption.trim())}
+                placeholder="Write the Instagram caption…" />
+            </div>
+          )}
+
+          {/* Final post link — captured when marking as posted. */}
+          {postStage && (
+            <div className="sb-field"><label>Final post link</label>
+              <div className="sb-inline">
+                <input value={postLink} disabled={task.status==="Posted"}
+                  onChange={e=>setPostLink(e.target.value)} placeholder="Instagram / TikTok post URL…" />
+                {postLink.startsWith("http") &&
+                  <a className="sb-btn ghost compact" style={{textDecoration:"none",display:"flex",alignItems:"center"}}
+                    href={postLink} target="_blank" rel="noreferrer noopener">Open</a>}
+              </div>
+            </div>
+          )}
+
+          {/* Waiting on (blocker) — editable while the task is live. */}
+          {task.status!=="Posted" && (
+            <div className="sb-field"><label>Waiting on (leave blank if not blocked)</label>
+              <input value={blocked} onChange={e=>setBlocked(e.target.value)}
+                onBlur={()=>onBlocked(blocked.trim())}
+                placeholder="e.g. Pastor's approval, David's graphics" />
+            </div>
+          )}
 
           <div className="sb-cap" style={{marginTop:6}}>
-            <Detail k="Owner (lead)" v={task.owner} />
+            <Detail k="Owner (lead)" v={task.owner==="Pending" ? (task.ownerSuggested ? `Pending — ${task.ownerSuggested} (from import)` : "Pending") : task.owner} />
             <Detail k="Priority" v={task.priority || "Medium"} />
             <Detail k="Shoot date" v={fmt(task.shootDate)} />
             <Detail k="Post date" v={fmt(task.postDate)} />
-            {task.nextActionNote && <Detail k="Next-step note" v={task.nextActionNote} />}
             {task.notes && <Detail k="Notes" v={task.notes} />}
-            {task.link && <Detail k="Link" v={isLink ? <a className="sb-link" href={task.link} target="_blank" rel="noreferrer noopener">{task.link}</a> : task.link} />}
+            {task.link && <Detail k="Reference" v={isLink ? <a className="sb-link" href={task.link} target="_blank" rel="noreferrer noopener">{task.link}</a> : task.link} />}
           </div>
 
           <div className="sb-shead" style={{marginTop:18}}><h2>Crew</h2></div>
@@ -1460,8 +2146,18 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onLinks, onReq
           <div className="sb-field" style={{marginTop:10}}>
             <textarea rows={2} placeholder="Add a note for the crew…" value={draft} onChange={e=>setDraft(e.target.value)} />
           </div>
-          <button className="sb-btn" disabled={!draft.trim()} onClick={()=>{ onComment(draft.trim()); setDraft(""); }}>Post note</button>
-          {isAdmin && <button className="sb-btn ghost" style={{marginTop:9}} onClick={onEdit}>Edit task details</button>}
+          <button className="sb-btn compact" disabled={!draft.trim()} onClick={()=>{ onComment(draft.trim()); setDraft(""); }}>Post note</button>
+
+          {/* Admin override — jump the workflow to any status if needed. */}
+          {isAdmin && <>
+            <div className="sb-field" style={{marginTop:18}}><label>Admin · set status</label>
+              <div className="sb-seg" style={{flexWrap:"wrap"}}>
+                {STAGES.map(s=>(
+                  <button key={s} className={"sb-segbtn"+(task.status===s?" on":"")} onClick={()=>onStatus(s)}>{s}</button>))}
+              </div>
+            </div>
+            <button className="sb-btn ghost" style={{marginTop:9}} onClick={onEdit}>Edit content details</button>
+          </>}
         </div>
       </div>
     </div>
@@ -1483,18 +2179,17 @@ function TaskEditor({ task, users, onClose, onSave, onAuto }) {
   const [f, setF] = useState(task || {
     title:"", type:"Reel", location:"828", owner:users[0]?.name||"", ownerSuggested:"",
     shootDate:"", postDate:"", status:"Planned", priority:"Medium",
-    nextAction:"", nextActionNote:"", blockedOn:"", brief:"",
-    relatedEvent:"", link:"", notes:"", support:[], links:{},
+    blockedOn:"", brief:"", relatedEvent:"", link:"", notes:"", support:[], links:{},
   });
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
-  const setLink = (k,v)=>setF(p=>({...p,links:{...(p.links||{}),[k]:v}}));
   const valid = f.title.trim() && f.location && f.type && f.owner;
   return (
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
-        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{task?"Edit task":"New task"}</b>
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{task?"Edit content":"Plan content"}</b>
           <button className="sb-x" onClick={onClose}>✕</button></div>
         <div className="bd">
+          <div className="sb-sub" style={{marginTop:0}}>Plan a piece of content. The team adds the deliverable links later, when it's ready for QA.</div>
           <div className="sb-field"><label>Content title</label>
             <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Sunday welcome reel" /></div>
           <div className="sb-btnrow">
@@ -1525,37 +2220,14 @@ function TaskEditor({ task, users, onClose, onSave, onAuto }) {
             <div className="sb-field" style={{flex:1}}><label>Post date</label>
               <input type="date" value={f.postDate} onChange={e=>set("postDate",e.target.value)} /></div>
           </div>
-          <div className="sb-btnrow">
-            <div className="sb-field" style={{flex:1}}><label>Status</label>
-              <select value={f.status} onChange={e=>set("status",e.target.value)}>{STAGES.map(s=><option key={s}>{s}</option>)}</select></div>
-            <div className="sb-field" style={{flex:1}}><label>Priority</label>
-              <select value={f.priority||"Medium"} onChange={e=>set("priority",e.target.value)}>{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></div>
-          </div>
-          <div className="sb-field"><label>What's next? (the immediate action)</label>
-            <div className="sb-seg" style={{flexWrap:"wrap"}}>
-              {NEXT_ACTIONS.map(a=>(
-                <button type="button" key={a} className={"sb-segbtn"+(f.nextAction===a?" on":"")}
-                  onClick={()=>set("nextAction", f.nextAction===a?"":a)}>{a}</button>))}
-            </div>
-            <input style={{marginTop:8}} value={f.nextActionNote||""} onChange={e=>set("nextActionNote",e.target.value)}
-              placeholder="Optional note — e.g. “captions by Friday”" /></div>
-          <div className="sb-field"><label>Waiting on (if blocked)</label>
-            <input value={f.blockedOn||""} onChange={e=>set("blockedOn",e.target.value)}
-              placeholder="e.g. Pastor's approval, David's graphics" /></div>
+          <div className="sb-field" style={{maxWidth:200}}><label>Priority</label>
+            <select value={f.priority||"Medium"} onChange={e=>set("priority",e.target.value)}>{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></div>
           <div className="sb-field"><label>Related event (optional)</label>
             <input value={f.relatedEvent} onChange={e=>set("relatedEvent",e.target.value)} placeholder="e.g. Easter Service" /></div>
           <div className="sb-field"><label>Reference link (optional)</label>
             <input value={f.link} onChange={e=>set("link",e.target.value)} placeholder="Idea / inspiration / reference" /></div>
           <div className="sb-field"><label>Notes (optional)</label>
             <textarea rows={2} value={f.notes} onChange={e=>set("notes",e.target.value)} /></div>
-
-          <div className="sb-shead"><h2>Content links</h2>
-            <span className="sb-sub" style={{margin:0}}>* required before QA</span></div>
-          {Object.keys(LINK_FIELDS).map(k=>(
-            <div className="sb-field" key={k}>
-              <label>{LINK_FIELDS[k]}{requiredLinkKeys(f.type).includes(k) && <span style={{color:"var(--red)"}}> *</span>}</label>
-              <input value={(f.links||{})[k]||""} onChange={e=>setLink(k,e.target.value)} placeholder="Google Drive link" /></div>
-          ))}
 
           <div className="sb-shead"><h2>Support crew</h2>
             <button className="link" onClick={()=>set("support", onAuto(f))}>⚡ Auto-assign</button></div>
@@ -1612,6 +2284,7 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
     skills: user.skills||[], location: user.location||[], role: user.role||"member",
     deprioritize: !!user.deprioritize, limited: !!user.limited, manualSchedule: !!user.manualSchedule,
     qa: !!user.qa, captions: !!user.captions, name: user.name||"",
+    department: user.department||"", lead: !!user.lead,
   });
   const [resetMsg, setResetMsg] = useState("");
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
@@ -1644,6 +2317,11 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
               <option value="member">Member — can view all tasks</option>
               <option value="admin">Admin — full control</option></select></div>
 
+          <div className="sb-field"><label>Department</label>
+            <select value={f.department} onChange={e=>set("department",e.target.value)}>
+              <option value="">No department yet</option>
+              {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
+
           <div className="sb-field"><label>Skills (what they can do)</label>
             <div className="sb-seg" style={{flexWrap:"wrap"}}>
               {SK.map(s=>(<button key={s} className={"sb-segbtn"+(f.skills.includes(s)?" on":"")}
@@ -1653,7 +2331,8 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
             <div className="sb-seg">{["479","828"].map(l=>(
               <button key={l} className={"sb-segbtn"+(f.location.includes(l)?" on":"")} onClick={()=>toggleLoc(l)}>{l}</button>))}</div></div>
 
-          <div className="sb-field"><label>Roles</label>
+          <div className="sb-field"><label>Roles &amp; permissions</label>
+            <Toggle label="Department lead — leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
             <Toggle label="QA reviewer — can approve content & request changes" v={f.qa} on={()=>set("qa",!f.qa)} />
             <Toggle label="Captions & upload — handles posting after approval" v={f.captions} on={()=>set("captions",!f.captions)} />
           </div>

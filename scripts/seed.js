@@ -76,10 +76,10 @@ const TASK_SEEDS = [
   { title: "Easter poster series",       type: "Poster", location: "Both", owner: "David",        status: "In Progress", shoot: -1, post: 3,  relatedEvent: "Easter", blocked: "Pastor's theme approval" },
   { title: "Youth night recap",          type: "Reel",   location: "479",  owner: "Esther New",   status: "In Review",   shoot: -4, post: 1,  pri: "High", next: "Needs captions",
     brief: "High-energy recap of Friday youth night. Fast cuts, on-screen captions for the worship moment, end on the altar-call shot. Keep under 45s. Reference: last month's recap that performed well." },
-  { title: "Worship moment teaser",      type: "Reel",   location: "828",  owner: "Tunde Bello",  status: "Approved",    shoot: -6, post: -1, next: "Ready to post" },
+  { title: "Worship moment teaser",      type: "Reel",   location: "828",  owner: "Tunde Bello",  status: "Ready to Post", shoot: -6, post: 1 },
   { title: "Baptism highlights",         type: "Reel",   location: "479",  owner: "Mike Adeyemi", status: "Posted",      shoot: -12, post: -8 },
   { title: "Midweek service flyer",      type: "Poster", location: "828",  owner: "Esther New",   status: "Planned",     shoot: 4,  post: 7 },
-  { title: "Volunteer spotlight",        type: "Reel",   location: "Both", owner: "Grace Okafor", status: "In Progress", shoot: 1,  post: 6,  next: "Needs revisions" },
+  { title: "Volunteer spotlight",        type: "Reel",   location: "Both", owner: "Grace Okafor", status: "Changes Requested", shoot: 1, post: 6 },
   { title: "Guest speaker announcement", type: "Poster", location: "479",  owner: "Mike Adeyemi", status: "In Review",   shoot: -2, post: 2,  relatedEvent: "Conference", pri: "High" },
   { title: "Behind the scenes setup",    type: "Reel",   location: "828",  owner: "Tunde Bello",  status: "Planned",     shoot: 3,  post: 8 },
   { title: "Testimony short",            type: "Reel",   location: "479",  owner: "Esther New",   status: "In Progress", shoot: 0,  post: 4,  next: "Needs captions" },
@@ -121,6 +121,9 @@ async function seedTasks() {
   const existing = await db.collection("tasks").get();
   await Promise.all(existing.docs.map((d) => d.ref.delete()));
 
+  // Statuses at/after which content has been produced (so links exist).
+  const PRODUCED = ["In Review", "Changes Requested", "Approved", "Ready to Post", "Posted"];
+  const CAPTIONED = ["Ready to Post", "Posted"];
   for (const s of TASK_SEEDS) {
     const task = {
       title: s.title,
@@ -129,17 +132,17 @@ async function seedTasks() {
       owner: s.owner,
       status: s.status,
       priority: s.pri || "Medium",
-      nextAction: s.next || "",
-      nextActionNote: "",
       blockedOn: s.blocked || "",
       brief: s.brief || "",
+      caption: CAPTIONED.includes(s.status) ? "Come and worship with us this Sunday! 🙌 #IFC" : "",
+      postLink: s.status === "Posted" ? "https://www.instagram.com/p/example" : "",
       shootDate: iso(addDays(s.shoot)),
       postDate: iso(addDays(s.post)),
       relatedEvent: s.relatedEvent || "",
       link: "",
       notes: "",
-      // Content links: give review-stage tasks the link they'd need to pass QA.
-      links: ["In Review", "Approved", "Posted"].includes(s.status)
+      // Content links exist once production has started (required to pass QA).
+      links: PRODUCED.includes(s.status)
         ? (s.type === "Poster"
             ? { ig: "https://drive.google.com/example-ig", landscape: "https://drive.google.com/example-landscape" }
             : s.type === "Photography"
@@ -148,15 +151,21 @@ async function seedTasks() {
         : {},
     };
     task.support = autoAssign(task, assignPool);
-    // Seed a small activity history so the timeline isn't empty.
+    // Seed a plausible activity history for the timeline, based on status.
     const now = Date.now();
     const activity = [{ type: "created", by: s.owner, at: now - 6 * 86400000, note: "" }];
-    if (["In Review", "Approved", "Posted"].includes(s.status))
-      activity.push({ type: "qa_sent", by: s.owner, at: now - 2 * 86400000, note: "In Review" });
-    if (["Approved", "Posted"].includes(s.status))
-      activity.push({ type: "approved", by: "David", at: now - 1 * 86400000, note: "Approved" });
+    if (s.status !== "Planned")
+      activity.push({ type: "started", by: s.owner, at: now - 5 * 86400000, note: "In Progress" });
+    if (PRODUCED.includes(s.status))
+      activity.push({ type: "qa_sent", by: s.owner, at: now - 3 * 86400000, note: "In Review" });
+    if (s.status === "Changes Requested")
+      activity.push({ type: "changes_requested", by: "David", at: now - 2 * 86400000, note: "Tighten the first 3 seconds." });
+    if (["Approved", "Ready to Post", "Posted"].includes(s.status))
+      activity.push({ type: "approved", by: "David", at: now - 2 * 86400000, note: "Approved" });
+    if (CAPTIONED.includes(s.status))
+      activity.push({ type: "ready", by: "Mike Adeyemi", at: now - 1 * 86400000, note: "Ready to Post" });
     if (s.status === "Posted")
-      activity.push({ type: "posted", by: s.owner, at: now - 12 * 3600000, note: "Posted" });
+      activity.push({ type: "posted", by: "Mike Adeyemi", at: now - 12 * 3600000, note: "Posted" });
     await db.collection("tasks").add({
       ...task,
       comments: [],
