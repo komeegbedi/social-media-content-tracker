@@ -1116,16 +1116,26 @@ function Home({ tasks, users, me, goTab }) {
   const greet = hi<12?"Good morning":hi<17?"Good afternoon":"Good evening";
   const fmtEv = (d) => d.toLocaleDateString(undefined,{month:"short",day:"numeric"});
 
+  // A short, meaningful summary — skip zero-value lines so quiet weeks don't
+  // read as "everything is 0". Two lines max: how things are going + what's next.
+  const s1 = pw.thisMonth>0
+    ? `You've helped complete ${pw.thisMonth} project${pw.thisMonth!==1?"s":""} this month.`
+    : thisM.posted>0
+    ? `The team has posted ${thisM.posted} piece${thisM.posted!==1?"s":""} of content this month.`
+    : "The month is just getting started.";
+  const s2 = prepCount>0
+    ? `${prepCount} upcoming event${prepCount!==1?"s":""} need${prepCount===1?"s":""} content preparation.`
+    : readyToPost>0
+    ? `${readyToPost} piece${readyToPost!==1?"s":""} approved and ready to post.`
+    : "You're all caught up — nothing needs prep right now.";
+
   return (
     <div className="sb-page">
       <div className="sb-eyebrow">{greet}</div>
-      <div className="sb-h">{greet}, {me.name.split(" ")[0]} 👋</div>
+      <div className="sb-h">Welcome back, {me.name.split(" ")[0]} 👋</div>
       <div className="sb-sub sb-greet">
-        <span>You helped complete <b>{pw.thisMonth}</b> project{pw.thisMonth!==1?"s":""} this month.</span>
-        <span>The team posted <b>{thisM.posted}</b> piece{thisM.posted!==1?"s":""} of content.</span>
-        <span>{prepCount>0
-          ? <>{prepCount} upcoming event{prepCount!==1?"s":""} need{prepCount===1?"s":""} content preparation.</>
-          : <>You're caught up on prep — nice work.</>}</span>
+        <span>{s1}</span>
+        <span>{s2}</span>
       </div>
 
       {/* Coming up — what's on the ministry horizon */}

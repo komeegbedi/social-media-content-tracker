@@ -95,12 +95,12 @@ a{color:inherit}
 
 .sb-page{padding:18px 16px 8px}
 @media(min-width:900px){ .sb-page{padding:30px 14px 24px} }
-.sb-eyebrow{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}
-.sb-h{font-size:31px;font-weight:600;margin:4px 0 6px;line-height:1.08}
+.sb-eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);opacity:.85}
+.sb-h{font-size:27px;font-weight:600;margin:5px 0 6px;line-height:1.1}
 @media(min-width:900px){ .sb-h{font-size:40px} }
 .sb-sub{color:var(--muted);font-size:14px;line-height:1.5;margin-bottom:22px}
-.sb-greet{font-size:14px;line-height:1.6;max-width:46ch}
-.sb-greet span{display:block;margin-bottom:7px}
+.sb-greet{font-size:14.5px;line-height:1.65;max-width:42ch;margin:10px 0 18px}
+.sb-greet span{display:block;margin-bottom:9px}
 .sb-greet span:last-child{margin-bottom:0}
 
 /* Compact inline stat strip (replaces the old 4-up grid of tiles). */
