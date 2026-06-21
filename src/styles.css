@@ -314,6 +314,8 @@ a{color:inherit}
 .sb-prow-name{font-weight:600;font-size:14.5px}
 .sb-prow-sub{font-size:12px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
 .sb-pendtag{color:var(--gold);font-weight:700}
+.sb-conf{font-weight:700}
+.sb-conf.hi{color:var(--green)} .sb-conf.mid{color:var(--gold)} .sb-conf.lo{color:var(--muted)}
 
 /* ===== People page: team cards ===== */
 .sb-prow-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:9px}
@@ -364,8 +366,11 @@ a{color:inherit}
 .sb-sheet{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;max-height:92vh;overflow-y:auto;animation:rise .22s ease}
 @media(min-width:900px){ .sb-scrim{align-items:center;padding:20px} .sb-sheet{border-radius:20px;max-height:86vh} }
 @keyframes rise{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
-.sb-sheet .hd{position:sticky;top:0;background:var(--paper);padding:16px 18px 12px;border-bottom:1px solid var(--line);
+/* Keep the type badge + ✕ clear of the iPhone Safari URL bar / notch. */
+.sb-sheet .hd{position:sticky;top:0;background:var(--paper);
+  padding:calc(16px + env(safe-area-inset-top)) 18px 12px;border-bottom:1px solid var(--line);
   display:flex;align-items:center;justify-content:space-between;z-index:2}
+@media(max-width:899px){ .sb-sheet .hd{padding-top:calc(22px + env(safe-area-inset-top))} }
 .sb-sheet .bd{padding:16px 18px 26px}
 .sb-x{background:var(--line);border:none;width:30px;height:30px;border-radius:50%;font-size:16px;color:var(--ink)}
 
