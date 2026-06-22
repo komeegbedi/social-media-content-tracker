@@ -316,6 +316,11 @@ a{color:inherit}
 .sb-pendtag{color:var(--gold);font-weight:700}
 .sb-conf{font-weight:700}
 .sb-conf.hi{color:var(--green)} .sb-conf.mid{color:var(--gold)} .sb-conf.lo{color:var(--muted)}
+.sb-prow.ambig{align-items:stretch;border-color:var(--amber);background:var(--amber-soft)}
+.sb-prow.ambig .sb-prow-name{color:var(--amber)}
+[data-theme="dark"] .sb-prow.ambig .sb-prow-name{color:var(--ink)}
+.sb-ambig-opts{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.sb-ambig-opts .sb-skip{color:var(--muted)}
 
 /* ===== People page: team cards ===== */
 .sb-prow-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:9px}

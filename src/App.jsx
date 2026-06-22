@@ -12,7 +12,7 @@ import {
   STAGES, statusClass, roleLabel, initials, emailFor,
   fmt, daysTo, autoAssign, computeCapacity,
   parseCSV, rowToTask, sheetCsvUrl,
-  PRIORITIES, priorityClass, attentionItems, matchUser, reconcileNames,
+  PRIORITIES, priorityClass, attentionItems, matchUser, reconcileNames, matchTier,
   PHASES, statusPhase, nextStep, workflowAction,
   LINK_FIELDS, requiredLinkKeys, missingLinks, QA_STATUSES,
   activityEntry, activityLabel, isApprovalEvent,
@@ -24,7 +24,7 @@ import {
   adminHealth, adminNeedsAttention, adminReadyToMove, recentActivity,
   taskProblem, ADMIN_FILTERS, applyAdminFilter,
   DEPARTMENTS, roleChips, userActiveTasks, PEOPLE_FILTERS, applyPeopleFilter, groupPeople,
-  pendingRoleLabel, eventContentCount,
+  crewRoleLabel, pendingCrewLabel, CREW_ROLES, eventContentCount,
 } from "./data";
 import { upcomingEvents, searchEvents } from "./events";
 import { setView, reportIssue, logIssue } from "./logging";
@@ -53,7 +53,7 @@ function BetaBanner({ onReport }) {
   return (
     <div className="sb-beta">
       <span className="sb-beta-tag">⚡ Beta</span>
-      <span className="sb-beta-txt">We're testing StudioBoard — please report bugs, confusing steps, or feature ideas.</span>
+      <span className="sb-beta-txt">We're testing StudioBoard. Please report bugs, confusing steps, or feature ideas.</span>
       <button className="sb-beta-report" onClick={onReport}>Report</button>
       <button className="sb-beta-x" onClick={dismiss} aria-label="Dismiss beta notice">✕</button>
     </div>
@@ -136,7 +136,7 @@ export class ErrorBoundary extends React.Component {
             onChange={(e)=>this.setState({ note: e.target.value })}
             style={{width:"100%",borderRadius:12,border:"none",padding:"11px 12px",fontSize:16,marginBottom:12}} />
           {this.state.sent
-            ? <p style={{marginTop:0}}>Thanks — your report was sent.</p>
+            ? <p style={{marginTop:0}}>Thanks. Your report was sent.</p>
             : <button onClick={async ()=>{ await reportIssue({ note: this.state.note, action: "crash report" }); this.setState({ sent: true }); }}>Send report</button>}
           <button style={{marginTop:10}} onClick={()=>location.reload()}>Reload app</button>
         </div>
@@ -245,7 +245,7 @@ function Login() {
     const c = (e && e.code) || "";
     if (c.includes("invalid-credential") || c.includes("wrong-password") || c.includes("user-not-found"))
       return "Email or password isn't right.";
-    if (c.includes("email-already-in-use")) return "That email already has an account — try signing in.";
+    if (c.includes("email-already-in-use")) return "That email already has an account. Try signing in.";
     if (c.includes("weak-password")) return "Password should be at least 6 characters.";
     if (c.includes("invalid-email")) return "That doesn't look like a valid email.";
     if (c.includes("popup-closed")) return "Google sign-in was cancelled.";
@@ -344,7 +344,7 @@ function Pending({ profile }) {
         <div className="ic">🪪</div>
         <h1>You're on the list, {profile.name.split(" ")[0]}</h1>
         <p>Your account is waiting for an admin to approve it. Once you're in, you'll see
-           every reel and poster the team is working on. Hang tight — this usually doesn't take long.</p>
+           every reel and poster the team is working on. Hang tight, this usually doesn't take long.</p>
         <button onClick={()=>signOut(auth)}>Sign out</button>
       </div>
     </div>
@@ -670,7 +670,7 @@ function ReportIssue({ onClose }) {
         <div className="bd">
           {state==="sent" ? (
             <div className="sb-empty"><div className="big">✓</div>
-              Thanks — your report was sent. We'll take a look.</div>
+              Thanks. Your report was sent and we'll take a look.</div>
           ) : <>
             <div className="sb-sub" style={{marginTop:0}}>
               Tell us what went wrong or felt off. We'll automatically include your
@@ -678,7 +678,7 @@ function ReportIssue({ onClose }) {
             <div className="sb-field"><label>What happened?</label>
               <textarea rows={5} value={note} onChange={e=>setNote(e.target.value)}
                 placeholder="e.g. I tried to mark a reel Approved and nothing happened." /></div>
-            {state==="error" && <div className="sb-lerr">Couldn't send that — please try again.</div>}
+            {state==="error" && <div className="sb-lerr">Couldn't send that. Please try again.</div>}
             <button className="sb-btn compact" disabled={!note.trim() || state==="sending"} onClick={send}>
               {state==="sending" ? "Sending…" : "Send report"}</button>
           </>}
@@ -715,7 +715,7 @@ function MyDay({ tasks, me, openTask, goTab }) {
         ? `${pq.captions.length + pq.ready.length + pq.overdue.length} item(s) to caption or post.` : "Nothing approved is waiting to post.")
     : (attention.length
         ? `${attention.length} thing${attention.length!==1?"s":""} need${attention.length===1?"s":""} your attention.`
-        : "You're all clear — nothing needs you right now.");
+        : "You're all clear. Nothing needs you right now.");
 
   const stats = [
     { n:myOverdue.length, lbl:"Overdue",   dot:"dot-red" },
@@ -752,7 +752,7 @@ function MyDay({ tasks, me, openTask, goTab }) {
       {/* Caption / upload dashboard — "what's approved and needs posting?" */}
       {me.captions && <>
         <div className="sb-div"><span>Captions &amp; posting</span></div>
-        <QueueSection title="Approved — needs captions" items={pq.captions} me={me} openTask={openTask} />
+        <QueueSection title="Approved: needs captions" items={pq.captions} me={me} openTask={openTask} />
         <QueueSection title="Ready to post" items={pq.ready} me={me} openTask={openTask} />
         <QueueSection title="Overdue posts" items={pq.overdue} me={me} openTask={openTask} />
         {pq.captions.length===0 && pq.ready.length===0 && pq.overdue.length===0 &&
@@ -773,7 +773,7 @@ function MyDay({ tasks, me, openTask, goTab }) {
       <div className="sb-shead sb-shead-strong"><h2>Needs your attention</h2>
         <button className="link subtle" onClick={()=>goTab("mine")}>All my work →</button></div>
       {attention.length===0
-        ? <div className="sb-empty"><div className="big">✓</div>Nothing urgent — enjoy the breather.</div>
+        ? <div className="sb-empty"><div className="big">✓</div>Nothing urgent. Enjoy the breather.</div>
         : <div className="sb-attnlist">{attention.map(t =>
             <AttentionItem key={t.id} t={t} onClick={()=>openTask(t.id)} />)}</div>}
 
@@ -816,7 +816,7 @@ function AttentionItem({ t, onClick }) {
   const reasonCls = (t.blockedOn || (d!==null && d<0) || t.status==="Changes Requested") ? "due-over"
     : (d!==null && d<=2) ? "due-soon" : "due-ok";
   // Lead with the system-derived next step so the row reads as a to-do.
-  const label = `${nextStep(t.status)} — ${t.title}`;
+  const label = `${nextStep(t.status)}: ${t.title}`;
   return (
     <button className="sb-attn" onClick={onClick}>
       <span className={"sb-attn-bar "+reasonCls}/>
@@ -867,7 +867,7 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
         </div>
 
         {!query && <div className="sb-searchhint">
-          Find anything across the whole app — titles, owners &amp; crew, statuses,
+          Find anything across the whole app: titles, owners &amp; crew, statuses,
           types, locations, notes, links, people and upcoming events.
         </div>}
 
@@ -880,7 +880,7 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
               <button key={t.id} className="sb-sresult" onClick={()=>onOpenTask(t.id)}>
                 <span className="r-main">{t.title}</span>
                 <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
-                <span className="r-sub">{t.type} · {t.owner==="Pending"&&t.ownerSuggested?`Pending — ${t.ownerSuggested}`:t.owner}</span>
+                <span className="r-sub">{t.type} · {t.owner==="Pending"&&t.ownerSuggested?`Pending: ${t.ownerSuggested}`:t.owner}</span>
               </button>
             ))}
           </>}
@@ -1019,7 +1019,7 @@ function Mine({ tasks, me, openTask }) {
       <div className="sb-eyebrow">What needs you next</div>
       <div className="sb-h">My work</div>
       <div className="sb-sub">
-        {total===0 ? "You're all clear — nothing assigned to you right now."
+        {total===0 ? "You're all clear. Nothing assigned to you right now."
           : `${total} thing${total!==1?"s":""} with your name on ${total!==1?"them":"it"}, most urgent first.`}
       </div>
 
@@ -1136,7 +1136,7 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent }) {
     ? `${prepCount} upcoming event${prepCount!==1?"s":""} need${prepCount===1?"s":""} content preparation.`
     : readyToPost>0
     ? `${readyToPost} piece${readyToPost!==1?"s":""} approved and ready to post.`
-    : "You're all caught up — nothing needs prep right now.";
+    : "You're all caught up. Nothing needs prep right now.";
 
   return (
     <div className="sb-page">
@@ -1211,7 +1211,7 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent }) {
         <div className="sb-stat"><span className="num dot-violet">{activeContributors}</span><span className="lbl">Active contributors</span></div>
         <div className="sb-stat"><span className="num dot-green">{tw.posted}</span><span className="lbl">Posted all-time</span></div>
         <div className="sb-stat"><span className="num dot-amber">{m.awaiting}</span><span className="lbl">In approval</span></div>
-        <div className="sb-stat"><span className="num dot-blue">{m.avgApprovalHours==null?"—":m.avgApprovalHours+"h"}</span><span className="lbl">Avg approval</span></div>
+        <div className="sb-stat"><span className="num dot-blue">{m.avgApprovalHours==null?"-":m.avgApprovalHours+"h"}</span><span className="lbl">Avg approval</span></div>
       </div>
 
       {/* Team pulse — small, awareness not stress */}
@@ -1226,7 +1226,7 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent }) {
       {/* Recent wins */}
       <div className="sb-shead"><h2>Recent wins</h2></div>
       {recents.length===0
-        ? <div className="sb-empty">Nothing posted yet — your first win is coming!</div>
+        ? <div className="sb-empty">Nothing posted yet. Your first win is coming!</div>
         : <div className="sb-recent">{recents.map((r,i)=>(<div className="sb-recent-row" key={i}>✅ {r.text}</div>))}</div>}
     </div>
   );
@@ -1279,7 +1279,7 @@ function AdminTaskCard({ t, h }) {
   const problem = taskProblem(t);
   const d = daysTo(t.postDate);
   const dueCls = d===null?"due-ok":d<0?"due-over":d<=2?"due-soon":"due-ok";
-  const ownerLabel = t.owner==="Pending" ? (t.ownerSuggested?`Pending — ${t.ownerSuggested}`:"Pending") : (t.owner||"Unassigned");
+  const ownerLabel = t.owner==="Pending" ? (t.ownerSuggested?`Pending: ${t.ownerSuggested}`:"Pending") : (t.owner||"Unassigned");
   const canAuto = h.auto && t.status!=="Posted" && !((t.support||[]).length);
   return (
     <div className="sb-task sb-task-act" role="button" tabIndex={0}
@@ -1393,7 +1393,7 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
         <button className="sb-btn gold" onClick={onAutoAll}>⚡ Auto-assign crew</button>
       </div>
       {eventNote && <div className="sb-assign" style={{marginTop:10}}>
-        📅 Event management is coming soon — pastor birthdays &amp; key dates already power the reminders on Home.</div>}
+        📅 Event management is coming soon. Pastor birthdays &amp; key dates already power the reminders on Home.</div>}
 
       {/* Health overview */}
       <div className="sb-health" style={{marginTop:18}}>
@@ -1489,7 +1489,7 @@ function AdminContent({ tasks, h, filter, setFilter, onNewContent, onAutoAll }) 
       </div>
       <div className="sb-field" style={{marginBottom:10}}>
         <div className="sb-inline">
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Search content — title, owner, event…" />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Search content: title, owner, event…" />
           {searching && <button className="sb-btn ghost compact" onClick={()=>setQ("")}>Clear</button>}
         </div>
       </div>
@@ -1595,7 +1595,7 @@ function AdminPeople({ users, tasks, onEditUser, onDeleteUser, onRemoveUser, onA
       {/* Search + filters */}
       <div className="sb-field" style={{marginBottom:10}}>
         <div className="sb-inline">
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Search people — name, email, department, role, campus…" />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Search people: name, email, department, role, campus…" />
           {searching && <button className="sb-btn ghost compact" onClick={()=>setQ("")}>Clear</button>}
         </div>
       </div>
@@ -1717,7 +1717,7 @@ function IssueLog({ issues, onResolve }) {
       </div>
 
       {list.length===0
-        ? <div className="sb-empty"><div className="big">✓</div>Nothing here — no {show==="open"?"open ":""}issues.</div>
+        ? <div className="sb-empty"><div className="big">✓</div>Nothing here. No {show==="open"?"open ":""}issues.</div>
         : <div className="sb-list" style={{gridTemplateColumns:"1fr"}}>
             {list.map(i => {
               const expanded = openId===i.id;
@@ -1733,7 +1733,7 @@ function IssueLog({ issues, onResolve }) {
                   </div>
                   <div className="sub">
                     <span><b>{i.email||i.uid||"unknown"}</b></span>
-                    <span>on {i.route||"—"}</span>
+                    <span>on {i.route||"-"}</span>
                     <span>{tm(i.createdAt)}</span>
                     {i.taskId && <span>task {i.taskId}</span>}
                   </div>
@@ -1741,8 +1741,8 @@ function IssueLog({ issues, onResolve }) {
                   {expanded && (
                     <div className="sb-issue-meta">
                       {i.action && <div><b>Action:</b> {i.action}</div>}
-                      <div><b>Device:</b> {i.userAgent || "—"}</div>
-                      <div><b>Viewport:</b> {i.viewport || "—"} · <b>URL:</b> {i.url || "—"}</div>
+                      <div><b>Device:</b> {i.userAgent || "-"}</div>
+                      <div><b>Viewport:</b> {i.viewport || "-"} · <b>URL:</b> {i.url || "-"}</div>
                       {i.stack && <pre className="sb-stack">{i.stack}</pre>}
                     </div>
                   )}
@@ -1791,8 +1791,8 @@ function ImportPanel({ users, onImport }) {
     () => reconcileNames(rows, users, mappings).filter((m) => !ignored.has(m.key)),
     [rows, users, mappings, ignored]);
 
-  const confirmMatch = (m) => {
-    const next = { ...mappings, [m.key]: m.user.name };
+  const confirmMatch = (key, user) => {
+    const next = { ...mappings, [key]: user.name };
     setMappings(next);
     savePref("sb-name-mappings", next);   // remember for future imports
   };
@@ -1801,7 +1801,7 @@ function ImportPanel({ users, onImport }) {
   const ingest = (text) => {
     const parsed = parseCSV(text);
     setRawRows(parsed); setIgnored(new Set());
-    setMsg(parsed.length ? "" : "No rows found — check the file has a header row and at least one task.");
+    setMsg(parsed.length ? "" : "No rows found. Check the file has a header row and at least one task.");
   };
 
   const onFile = (e) => {
@@ -1836,7 +1836,7 @@ function ImportPanel({ users, onImport }) {
       setMsg(`✓ Imported ${valid.length} task${valid.length!==1?"s":""}.`);
       setRawRows([]);
     } catch {
-      setMsg("Import failed — please try again.");
+      setMsg("Import failed. Please try again.");
     } finally { setBusy(false); }
   };
 
@@ -1869,22 +1869,46 @@ function ImportPanel({ users, onImport }) {
       {reconcile.length > 0 && <>
         <div className="sb-shead" style={{marginTop:16}}><h2>Match names</h2>
           <span className="sb-tag">{reconcile.length}</span></div>
-        <div className="sb-sub" style={{marginTop:-4}}>These sheet names look like existing people. Confirm to assign their tasks — confirmed matches are remembered for next time.</div>
+        <div className="sb-sub" style={{marginTop:-4}}>These sheet names look like existing people. Confirm to assign their tasks. Confirmed matches are remembered for next time.</div>
         <div className="sb-prowlist">
-          {reconcile.map((m) => (
-            <div className="sb-prow" key={m.key}>
-              <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(m.user.name)}</span>
-              <div className="sb-prow-main">
-                <div className="sb-prow-name">“{m.name}” → {m.user.name}</div>
-                <div className="sb-prow-sub">
-                  <span className={"sb-conf "+(m.confidence>=0.8?"hi":m.confidence>=0.7?"mid":"lo")}>{Math.round(m.confidence*100)}% match</span>
-                  {" · "}{m.reason}
+          {reconcile.map((m) => {
+            // Ambiguous → never auto-pick; make the admin choose the right person.
+            if (m.ambiguous) return (
+              <div className="sb-prow ambig" key={m.key}>
+                <div className="sb-prow-main">
+                  <div className="sb-prow-name">⚠ Multiple people may match “{m.name}”</div>
+                  <div className="sb-prow-sub">Please choose the correct person:</div>
+                  <div className="sb-ambig-opts">
+                    {m.candidates.map((c) => (
+                      <button key={c.user.id} className="sb-btn ghost compact" onClick={()=>confirmMatch(m.key, c.user)}>
+                        {c.user.name}
+                      </button>
+                    ))}
+                    <button className="sb-btn ghost compact sb-skip" onClick={()=>ignoreMatch(m)}>Skip</button>
+                  </div>
                 </div>
               </div>
-              <button className="sb-btn green compact" onClick={()=>confirmMatch(m)}>Assign</button>
+            );
+            const top = m.candidates[0];
+            const tier = matchTier(top.confidence);
+            return (
+            <div className="sb-prow" key={m.key}>
+              <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(top.user.name)}</span>
+              <div className="sb-prow-main">
+                <div className="sb-prow-name">
+                  {tier==="high"
+                    ? <>Possible match: <b>{top.user.name}</b></>
+                    : <>Maybe this is <b>{top.user.name}</b>?</>}
+                </div>
+                <div className="sb-prow-sub">
+                  “{m.name}” · <span className={"sb-conf "+(tier==="high"?"hi":"mid")}>{Math.round(top.confidence*100)}%</span> · {top.reason}
+                </div>
+              </div>
+              <button className="sb-btn green compact" onClick={()=>confirmMatch(m.key, top.user)}>Assign</button>
               <button className="sb-btn ghost compact" onClick={()=>ignoreMatch(m)}>Ignore</button>
             </div>
-          ))}
+            );
+          })}
         </div>
       </>}
 
@@ -1903,7 +1927,7 @@ function ImportPanel({ users, onImport }) {
               {r.error
                 ? <div className="sub"><span style={{color:"var(--red,#c0392b)"}}>{r.error}</span></div>
                 : <>
-                    <div className="sub"><span><b>{r.task.owner||"—"}</b> · {r.task.location} · {r.task.status}</span>
+                    <div className="sub"><span><b>{r.task.owner||"-"}</b> · {r.task.location} · {r.task.status}</span>
                       <span>{fmt(r.task.postDate)}</span></div>
                     {r.task.support?.length>0 && <div className="sub">
                       <span style={{color:"var(--muted)"}}>Crew: {r.task.support.map((s)=>s.name).join(", ")}</span></div>}
@@ -2057,7 +2081,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
             </div>
           )}
           {!action && task.status==="In Review" && !isQA && (
-            <div className="sb-banner" style={{marginBottom:14}}>⏳ Submitted — awaiting QA review.</div>
+            <div className="sb-banner" style={{marginBottom:14}}>⏳ Submitted. Awaiting QA review.</div>
           )}
 
           {/* QA panel — Approve / Request changes, only for QA while In Review. */}
@@ -2133,7 +2157,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
           )}
 
           <div className="sb-cap" style={{marginTop:6}}>
-            <Detail k="Owner (lead)" v={task.owner==="Pending" ? (task.ownerSuggested ? `Pending — ${task.ownerSuggested} (from import)` : "Pending") : task.owner} />
+            <Detail k="Owner (lead)" v={task.owner==="Pending" ? (task.ownerSuggested ? `Pending: ${task.ownerSuggested} (from import)` : "Pending") : task.owner} />
             <Detail k="Priority" v={task.priority || "Medium"} />
             <Detail k="Shoot date" v={fmt(task.shootDate)} />
             <Detail k="Post date" v={fmt(task.postDate)} />
@@ -2150,8 +2174,8 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
               <div className="sb-cmt" key={i} style={{display:"flex",alignItems:"center",gap:10}}>
                 <span className="sb-av">{pending ? "?" : initials(s.name)}</span>
                 {pending
-                  ? <span><b>{pendingRoleLabel(s.role)}</b>{s.suggested && <span style={{color:"var(--muted)"}}> · suggested: {s.suggested}</span>}</span>
-                  : <span><b>{s.name}</b> · <span style={{color:"var(--muted)"}}>{roleLabel(s.role)}{s.loc?` · ${s.loc}`:""}</span></span>}
+                  ? <span><b>{pendingCrewLabel(s)}</b>{s.suggested && <span style={{color:"var(--muted)"}}> · suggested: {s.suggested}</span>}</span>
+                  : <span><b>{s.name}</b> · <span style={{color:"var(--muted)"}}>{crewRoleLabel(s)}{s.loc?` · ${s.loc}`:""}</span></span>}
               </div>
               );
             })}
@@ -2250,20 +2274,20 @@ function TaskEditor({ task, prefill, users, onClose, onSave, onAuto }) {
             <div className="sb-field" style={{flex:1}}><label>Location</label>
               <select value={f.location} onChange={e=>set("location",e.target.value)}><option>479</option><option>828</option><option>Both</option></select></div>
           </div>
-          <div className="sb-field"><label>Owner — who brings the idea / leads</label>
+          <div className="sb-field"><label>Owner: who brings the idea / leads</label>
             <select value={f.owner||"Pending"} onChange={e=>set("owner",e.target.value)}>
-              <option value="Pending">Pending — unassigned</option>
+              <option value="Pending">Pending: unassigned</option>
               {users.map(u=><option key={u.id}>{u.name}</option>)}</select>
             {f.owner==="Pending" && f.ownerSuggested && (() => {
               const m = matchUser(f.ownerSuggested, users);
               return m
                 ? <button type="button" className="link" style={{marginTop:6}}
                     onClick={()=>{ set("owner", m.name); set("ownerSuggested",""); }}>
-                    💡 From the sheet this was “{f.ownerSuggested}” — assign {m.name}?</button>
+                    💡 From the sheet this was “{f.ownerSuggested}”. Assign {m.name}?</button>
                 : <div className="sb-sub" style={{marginTop:6}}>From the sheet: “{f.ownerSuggested}” (no matching account yet)</div>;
             })()}
           </div>
-          <div className="sb-field"><label>Creative brief — what are we making &amp; why</label>
+          <div className="sb-field"><label>Creative brief: what are we making &amp; why</label>
             <textarea rows={3} value={f.brief||""} onChange={e=>set("brief",e.target.value)}
               placeholder="Objective, key message, deliverables, references / creative direction…" /></div>
           <div className="sb-btnrow">
@@ -2284,7 +2308,7 @@ function TaskEditor({ task, prefill, users, onClose, onSave, onAuto }) {
           <div className="sb-shead"><h2>Support crew</h2>
             <button className="link" onClick={()=>set("support", onAuto(f))}>⚡ Auto-assign</button></div>
           {(f.support||[]).length===0
-            ? <div className="sb-sub">No crew yet — tap Auto-assign or add below.</div>
+            ? <div className="sb-sub">No crew yet. Tap Auto-assign or add below.</div>
             : (f.support||[]).map((s,i)=>{
               const pending = s.name==="Pending";
               const m = pending && s.suggested ? matchUser(s.suggested, users) : null;
@@ -2293,8 +2317,8 @@ function TaskEditor({ task, prefill, users, onClose, onSave, onAuto }) {
                 <span className="sb-av">{pending ? "?" : initials(s.name)}</span>
                 <span style={{flex:1,minWidth:0}}>
                   {pending
-                    ? <><b>{pendingRoleLabel(s.role)}</b>{s.suggested && <span style={{color:"var(--muted)"}}> · suggested: {s.suggested}</span>}</>
-                    : <><b>{s.name}</b> · <span style={{color:"var(--muted)"}}>{roleLabel(s.role)}{s.loc?` · ${s.loc}`:""}</span></>}
+                    ? <><b>{pendingCrewLabel(s)}</b>{s.suggested && <span style={{color:"var(--muted)"}}> · suggested: {s.suggested}</span>}</>
+                    : <><b>{s.name}</b> · <span style={{color:"var(--muted)"}}>{crewRoleLabel(s)}{s.loc?` · ${s.loc}`:""}</span></>}
                 </span>
                 {m && <button type="button" className="sb-btn ghost compact"
                   onClick={()=>set("support", f.support.map((x,j)=> j===i ? { name:m.name, role:x.role, ...(x.loc?{loc:x.loc}:{}) } : x))}>
@@ -2314,15 +2338,26 @@ function TaskEditor({ task, prefill, users, onClose, onSave, onAuto }) {
 }
 function AddCrew({ users, onAdd }) {
   const [n,setN] = useState(users[0]?.name||""); const [r,setR] = useState("shoot");
+  const [label,setLabel] = useState("");
   useEffect(()=>{ if(!n && users[0]) setN(users[0].name); },[users]); // keep valid default
+  const isOther = r === "other";
+  const canAdd = !!n && (!isOther || label.trim());      // "Other" requires a custom label
+  const add = () => {
+    onAdd(isOther ? { name:n, role:"other", label:label.trim() } : { name:n, role:r });
+    setLabel("");
+  };
+  const sel = {flex:2,border:"1px solid var(--line)",borderRadius:11,padding:11,background:"var(--card)"};
   return (
-    <div className="sb-btnrow" style={{marginTop:8}}>
-      <select style={{flex:2,border:"1px solid var(--line)",borderRadius:11,padding:11,background:"var(--card)"}}
-        value={n} onChange={e=>setN(e.target.value)}>{users.map(u=><option key={u.id}>{u.name}</option>)}</select>
-      <select style={{flex:2,border:"1px solid var(--line)",borderRadius:11,padding:11,background:"var(--card)"}}
-        value={r} onChange={e=>setR(e.target.value)}>
-        {["shoot","edit","coordinate","design","shadow"].map(x=><option key={x} value={x}>{roleLabel(x)}</option>)}</select>
-      <button className="sb-btn compact" disabled={!n} onClick={()=>onAdd({name:n,role:r})}>Add</button>
+    <div style={{marginTop:8}}>
+      <div className="sb-btnrow">
+        <select style={sel} value={n} onChange={e=>setN(e.target.value)}>{users.map(u=><option key={u.id}>{u.name}</option>)}</select>
+        <select style={sel} value={r} onChange={e=>setR(e.target.value)}>
+          {CREW_ROLES.map(x=><option key={x} value={x}>{roleLabel(x)}</option>)}</select>
+        <button className="sb-btn compact" disabled={!canAdd} onClick={add}>Add</button>
+      </div>
+      {isOther && <input value={label} onChange={e=>setLabel(e.target.value)}
+        placeholder="Custom task, e.g. Caption Writing, Voiceover, Lighting"
+        style={{width:"100%",marginTop:8,border:"1px solid var(--line)",borderRadius:11,padding:11,background:"var(--card)",color:"var(--ink)"}} />}
     </div>
   );
 }
@@ -2366,8 +2401,8 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
 
           <div className="sb-field"><label>Access level</label>
             <select value={f.role} onChange={e=>set("role",e.target.value)}>
-              <option value="member">Member — can view all tasks</option>
-              <option value="admin">Admin — full control</option></select></div>
+              <option value="member">Member: can view all tasks</option>
+              <option value="admin">Admin: full control</option></select></div>
 
           <div className="sb-field"><label>Department</label>
             <select value={f.department} onChange={e=>set("department",e.target.value)}>
@@ -2384,15 +2419,15 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
               <button key={l} className={"sb-segbtn"+(f.location.includes(l)?" on":"")} onClick={()=>toggleLoc(l)}>{l}</button>))}</div></div>
 
           <div className="sb-field"><label>Roles &amp; permissions</label>
-            <Toggle label="Department lead — leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
-            <Toggle label="QA reviewer — can approve content & request changes" v={f.qa} on={()=>set("qa",!f.qa)} />
-            <Toggle label="Captions & upload — handles posting after approval" v={f.captions} on={()=>set("captions",!f.captions)} />
+            <Toggle label="Department lead: leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
+            <Toggle label="QA reviewer: can approve content & request changes" v={f.qa} on={()=>set("qa",!f.qa)} />
+            <Toggle label="Captions & upload: handles posting after approval" v={f.captions} on={()=>set("captions",!f.captions)} />
           </div>
 
           <div className="sb-field"><label>Special handling</label>
-            <Toggle label="Deprioritize — only assign if no one else free" v={f.deprioritize} on={()=>set("deprioritize",!f.deprioritize)} />
-            <Toggle label="Coordinate only — can't shoot/edit after church" v={f.limited} on={()=>set("limited",!f.limited)} />
-            <Toggle label="Manual schedule — confirm availability each time" v={f.manualSchedule} on={()=>set("manualSchedule",!f.manualSchedule)} />
+            <Toggle label="Deprioritize: only assign if no one else free" v={f.deprioritize} on={()=>set("deprioritize",!f.deprioritize)} />
+            <Toggle label="Coordinate only: can't shoot/edit after church" v={f.limited} on={()=>set("limited",!f.limited)} />
+            <Toggle label="Manual schedule: confirm availability each time" v={f.manualSchedule} on={()=>set("manualSchedule",!f.manualSchedule)} />
           </div>
 
           {isPending
