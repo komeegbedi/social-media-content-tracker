@@ -49,7 +49,12 @@ a{color:inherit}
   .sb-content{max-width:1000px;padding:0 10px}
 }
 
-.sb-sbrand{font-family:Fraunces;font-weight:600;font-size:21px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
+.sb-sbrand{font-family:Fraunces;font-weight:600;font-size:19px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
+.sb-brandtext{display:flex;flex-direction:column;line-height:1.05}
+.sb-brandtext .ifc{font-family:Inter;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);font-weight:700}
+.sb-brandfoot{margin-top:14px;padding-top:11px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;font-size:11px;color:var(--muted);line-height:1.5}
+.sb-brandfoot b{color:var(--ink);font-weight:600;font-size:12px;font-family:Fraunces}
 .sb-snav{display:flex;flex-direction:column;gap:3px}
 .sb-snav button{display:flex;align-items:center;gap:11px;background:none;border:none;width:100%;
   padding:11px 12px;border-radius:11px;color:var(--muted);font-size:14px;font-weight:600;text-align:left}
@@ -437,7 +442,8 @@ a{color:inherit}
 .sb-login .logo{width:54px;height:54px;border-radius:16px;background:var(--gold);color:#3a2a06;
   display:flex;align-items:center;justify-content:center;font-family:Fraunces;font-weight:700;font-size:26px;margin-bottom:20px}
 .sb-login h1{color:#fff;font-size:30px;font-weight:600;line-height:1.08}
-.sb-login p{color:rgba(255,255,255,.72);font-size:14px;margin:8px 0 24px}
+.sb-tagline{color:var(--gold);font-weight:700;font-size:13px;letter-spacing:.04em;margin-top:7px}
+.sb-login p{color:rgba(255,255,255,.72);font-size:14px;margin:6px 0 24px}
 .sb-lcard{background:var(--card);border-radius:18px;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
 .sb-lerr{background:var(--red-soft);color:var(--red);font-size:12.5px;font-weight:600;padding:9px 12px;border-radius:10px;margin-bottom:12px}
 .sb-lok{background:var(--green-soft);color:var(--green);font-size:12.5px;font-weight:600;padding:9px 12px;border-radius:10px;margin-bottom:12px}

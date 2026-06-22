@@ -1,6 +1,8 @@
-# StudioBoard
+# IFC Creatives Board
 
-A content operating system for the **IFC (Immanuel Fellowship Church) social media team** — replacing a Google Sheet + WhatsApp workflow with a focused web app for planning, producing, reviewing, and posting content.
+**Plan. Create. Review. Publish.** The digital home of the **IFC (Immanuel Fellowship Church) Creative Team** — a content operating system replacing a Google Sheet + WhatsApp workflow with a focused web app for planning, producing, reviewing, and posting content.
+
+> _Internal note: powered by StudioBoard architecture._
 
 > **For contributors:** what do I need to do?
 > **For leads:** what needs attention?
@@ -11,7 +13,7 @@ A content operating system for the **IFC (Immanuel Fellowship Church) social med
 
 ## Project Overview
 
-**What it is.** StudioBoard tracks each piece of content (a reel, poster/graphic, or photo set) from idea → production → QA → approval → posting, with ownership, content links, approvals, and a celebration/visibility layer on top.
+**What it is.** IFC Creatives Board tracks each piece of content (a reel, poster/graphic, or photo set) from idea → production → QA → approval → posting, with ownership, content links, approvals, and a celebration/visibility layer on top.
 
 **The problem it solves.** The team previously ran on a shared Google Sheet plus a WhatsApp group. That meant:
 - People didn't know what they were responsible for or what to do next.
@@ -172,7 +174,7 @@ Roles are flags/fields on the `users` doc; a person can hold more than one. Dash
 
 ## Intelligent Name Matching (import reconciliation)
 
-Church volunteers sign up with their full name (e.g. *Jonathan Smith*) but the Google Sheet refers to them by a short/alternate name (*Jon*). On import, StudioBoard tries to recognize that these refer to the same account, so tasks land on real people instead of staying "Pending."
+Church volunteers sign up with their full name (e.g. *Jonathan Smith*) but the Google Sheet refers to them by a short/alternate name (*Jon*). On import, IFC Creatives Board tries to recognize that these refer to the same account, so tasks land on real people instead of staying "Pending."
 
 **How it scores a match.** `matchCandidates(name, users, mappings)` in `src/data.js` scores **every** plausible user `0–1` with a reason, best first (collecting *all* candidates is what makes ambiguity detectable). It combines exact/email signals with genuine fuzzy matching (`nameSim`, backed by Levenshtein `editDistance`):
 

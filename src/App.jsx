@@ -1,3 +1,5 @@
+/* IFC Creatives Board — the digital home of the IFC Creative Team.
+   (Internal note: powered by StudioBoard architecture.) */
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   onAuthStateChanged, signOut,
@@ -53,7 +55,7 @@ function BetaBanner({ onReport }) {
   return (
     <div className="sb-beta">
       <span className="sb-beta-tag">⚡ Beta</span>
-      <span className="sb-beta-txt">We're testing StudioBoard. Please report bugs, confusing steps, or feature ideas.</span>
+      <span className="sb-beta-txt">We're testing IFC Creatives Board. Please report bugs, confusing steps, or feature ideas.</span>
       <button className="sb-beta-report" onClick={onReport}>Report</button>
       <button className="sb-beta-x" onClick={dismiss} aria-label="Dismiss beta notice">✕</button>
     </div>
@@ -103,6 +105,7 @@ function ProfileDrawer({ me, isAdmin, onClose, onReport }) {
         <button className="sb-drawer-item danger" onClick={()=>signOut(auth)}>
           <span className="i">⇥</span>Sign out
         </button>
+        <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
       </div>
     </div>
   );
@@ -224,7 +227,7 @@ export default function App() {
   return <Board profile={profile} isAdmin={isAdmin} />;
 }
 
-function Loading({ label = "Loading StudioBoard…" }) {
+function Loading({ label = "Loading IFC Creatives Board…" }) {
   return <div className="sb-loading"><div><div className="sb-spin" />{label}</div></div>;
 }
 
@@ -280,10 +283,11 @@ function Login() {
     <div className="sb-login">
       <div className="sb-loginbox">
         <div className="logo">✦</div>
-        <h1>StudioBoard</h1>
+        <h1>IFC Creatives Board</h1>
+        <div className="sb-tagline">Plan. Create. Review. Publish.</div>
         <p>{mode === "register"
-          ? "Create your account for the IFC media team."
-          : "Sign in to see what's on your plate."}</p>
+          ? "Create your account for the IFC Creative Team."
+          : "The home of the IFC Creative Team."}</p>
 
         <div className="sb-lcard">
           {err && <div className="sb-lerr">{err}</div>}
@@ -542,7 +546,8 @@ function Board({ profile, isAdmin }) {
     <div className="sb-root">
       <div className="sb-shell">
         <aside className="sb-side">
-          <div className="sb-sbrand"><span className="sb-spark">✦</span>StudioBoard</div>
+          <div className="sb-sbrand"><span className="sb-spark">✦</span>
+            <span className="sb-brandtext"><span className="ifc">IFC</span>Creatives Board</span></div>
           <button className="sb-searchbtn" onClick={()=>setSearchOpen(true)}>
             <span className="ico">🔍</span>Search…<kbd className="sb-kbd">/</kbd>
           </button>
@@ -563,12 +568,13 @@ function Board({ profile, isAdmin }) {
             <ThemeToggle />
             <button className="sb-report" onClick={()=>setShowReport(true)}>⚠︎ Report an issue</button>
             <button className="sb-signout" onClick={()=>signOut(auth)}>Sign out</button>
+            <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
           </div>
         </aside>
 
         <div className="sb-main">
           <header className="sb-top">
-            <span className="brand"><span className="sb-spark">✦</span>StudioBoard</span>
+            <span className="brand"><span className="sb-spark">✦</span>Creatives Board</span>
             <span style={{display:"flex",alignItems:"center",gap:10}}>
               <button className="sb-report-top" onClick={()=>setSearchOpen(true)} aria-label="Search">🔍</button>
               <button className="sb-avbtn" onClick={()=>setShowDrawer(true)} aria-label="Profile and settings">
@@ -1023,7 +1029,7 @@ function Mine({ tasks, me, openTask }) {
           : `${total} thing${total!==1?"s":""} with your name on ${total!==1?"them":"it"}, most urgent first.`}
       </div>
 
-      {total===0 && <div className="sb-empty"><div className="big">✓</div>You have no active assignments. Enjoy the breather.</div>}
+      {total===0 && <div className="sb-empty"><div className="big">✓</div>No assignments yet. Your creative work will appear here.</div>}
 
       {sections.length>1 && <div className="sb-collapserow">
         <button className="sb-collapselink" onClick={()=>setAll(!allOpen)}>{allOpen?"Collapse all":"Expand all"}</button>
