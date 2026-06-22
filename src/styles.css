@@ -436,24 +436,42 @@ a{color:inherit}
 .sb-reactbtn{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 9px;font-size:13px}
 .sb-reactbtn.on{background:var(--violet-soft);border-color:var(--violet)}
 
-.sb-login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:26px;
-  background:linear-gradient(160deg,var(--violet-deep),var(--violet))}
-.sb-loginbox{width:100%;max-width:400px}
-.sb-login .logo{width:54px;height:54px;border-radius:16px;background:var(--gold);color:#3a2a06;
-  display:flex;align-items:center;justify-content:center;font-family:Fraunces;font-weight:700;font-size:26px;margin-bottom:20px}
-.sb-login h1{color:#fff;font-size:30px;font-weight:600;line-height:1.08}
-.sb-tagline{color:var(--gold);font-weight:700;font-size:13px;letter-spacing:.04em;margin-top:7px}
-.sb-login p{color:rgba(255,255,255,.72);font-size:14px;margin:6px 0 24px}
-.sb-lcard{background:var(--card);border-radius:18px;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
-.sb-lerr{background:var(--red-soft);color:var(--red);font-size:12.5px;font-weight:600;padding:9px 12px;border-radius:10px;margin-bottom:12px}
-.sb-lok{background:var(--green-soft);color:var(--green);font-size:12.5px;font-weight:600;padding:9px 12px;border-radius:10px;margin-bottom:12px}
-.sb-gbtn{width:100%;background:#fff;border:1px solid var(--line);border-radius:12px;padding:11px;
-  font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--ink)}
+.sb-login{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;
+  padding:24px 20px calc(24px + env(safe-area-inset-bottom));
+  background:radial-gradient(120% 120% at 50% 0%, var(--violet) 0%, var(--violet-deep) 70%)}
+.sb-loginbox{width:100%;max-width:440px}
+/* Branding block — prominent, centered, brand-coloured */
+.sb-lbrand{text-align:center;margin-bottom:22px}
+.sb-login .logo{width:72px;height:72px;border-radius:20px;background:var(--gold);color:#3a2a06;
+  display:inline-flex;align-items:center;justify-content:center;font-family:Fraunces;font-weight:700;
+  font-size:40px;margin:0 auto 18px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+.sb-login h1{color:#fff;font-size:34px;font-weight:600;line-height:1.05;font-family:Fraunces}
+.sb-tagline{color:var(--gold);font-weight:700;font-size:16px;letter-spacing:.02em;margin-top:10px}
+.sb-login p{color:rgba(255,255,255,.78);font-size:14.5px;margin:8px 0 0}
+@media(min-width:560px){ .sb-login h1{font-size:40px} .sb-login .logo{width:78px;height:78px;font-size:44px} }
+
+.sb-lcard{background:var(--card);border-radius:20px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.32)}
+.sb-lcardhd{font-family:Fraunces;font-size:19px;font-weight:600;color:var(--ink);margin-bottom:16px}
+.sb-lerr{background:var(--red-soft);color:var(--red);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
+.sb-lok{background:var(--green-soft);color:var(--green);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
+.sb-gbtn{width:100%;background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px;
+  font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--ink);cursor:pointer}
+.sb-gbtn:hover{border-color:var(--violet)}
 .sb-gicon{width:18px;height:18px;display:inline-block}
-.sb-ldiv{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:11px;margin:14px 0}
+.sb-ldiv{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:11px;margin:16px 0}
 .sb-ldiv::before,.sb-ldiv::after{content:"";height:1px;background:var(--line);flex:1}
-.sb-ltoggle{text-align:center;margin-top:14px;font-size:13px;color:rgba(255,255,255,.85)}
-.sb-ltoggle button{background:none;border:none;color:#fff;font-weight:700;text-decoration:underline}
+/* Taller, roomier inputs */
+.sb-lcard .sb-field{margin-bottom:14px}
+.sb-lcard .sb-field input{padding:13px 14px;font-size:15px;border-radius:12px}
+/* Vivid primary sign-in button */
+.sb-lprimary{margin-top:6px;padding:14px;font-size:15.5px;font-weight:700;
+  box-shadow:0 8px 22px rgba(76,58,140,.38)}
+.sb-lprimary:disabled{opacity:.7}
+/* Prominent create-account / switch CTA, directly beneath sign-in */
+.sb-lswitch{margin-top:18px;padding-top:16px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;gap:10px}
+.sb-lswitch span{font-size:13.5px;color:var(--muted);font-weight:600}
+.sb-lswitch .sb-btn{width:100%;margin-top:0}
 
 .sb-pending{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:26px;
   background:linear-gradient(160deg,var(--violet-deep),var(--violet));text-align:center}

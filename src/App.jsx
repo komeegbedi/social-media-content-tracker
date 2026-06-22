@@ -279,17 +279,19 @@ function Login() {
     finally { setBusy(false); }
   };
 
+  const toggleMode = () => { setMode(m=>m==="register"?"signin":"register"); setErr(""); setOk(""); };
   return (
     <div className="sb-login">
       <div className="sb-loginbox">
-        <div className="logo">✦</div>
-        <h1>IFC Creatives Board</h1>
-        <div className="sb-tagline">Plan. Create. Review. Publish.</div>
-        <p>{mode === "register"
-          ? "Create your account for the IFC Creative Team."
-          : "The home of the IFC Creative Team."}</p>
+        <div className="sb-lbrand">
+          <div className="logo">✦</div>
+          <h1>IFC Creatives Board</h1>
+          <div className="sb-tagline">Plan. Create. Review. Publish.</div>
+          <p>The home of the IFC Creative Team.</p>
+        </div>
 
         <div className="sb-lcard">
+          <div className="sb-lcardhd">{mode === "register" ? "Create your account" : "Welcome back"}</div>
           {err && <div className="sb-lerr">{err}</div>}
           {ok && <div className="sb-lok">{ok}</div>}
 
@@ -310,16 +312,16 @@ function Login() {
               value={pw} onChange={(e)=>setPw(e.target.value)} placeholder="••••••••"
               onKeyDown={(e)=>{ if(e.key==="Enter") doEmail(); }} /></div>
 
-          <button className="sb-btn" onClick={doEmail} disabled={busy || !email || !pw}>
+          <button className="sb-btn sb-lprimary" onClick={doEmail} disabled={busy}>
             {busy ? "Please wait…" : mode === "register" ? "Create account" : "Sign in"}
           </button>
-        </div>
 
-        <div className="sb-ltoggle">
-          {mode === "register" ? "Already have an account? " : "New to the team? "}
-          <button onClick={()=>{ setMode(m=>m==="register"?"signin":"register"); setErr(""); setOk(""); }}>
-            {mode === "register" ? "Sign in" : "Create one"}
-          </button>
+          <div className="sb-lswitch">
+            <span>{mode === "register" ? "Already have an account?" : "New to the creative team?"}</span>
+            <button className="sb-btn ghost" type="button" onClick={toggleMode}>
+              {mode === "register" ? "Sign in instead" : "Create your account"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
