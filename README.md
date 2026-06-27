@@ -1,6 +1,8 @@
-# StudioBoard
+# IFC Creatives Board
 
-A content operating system for the **IFC (Immanuel Fellowship Church) social media team** — replacing a Google Sheet + WhatsApp workflow with a focused web app for planning, producing, reviewing, and posting content.
+**Plan. Create. Review. Publish.** The digital home of the **IFC (Immanuel Fellowship Church) Creative Team** — a content operating system replacing a Google Sheet + WhatsApp workflow with a focused web app for planning, producing, reviewing, and posting content.
+
+> _Internal note: powered by StudioBoard architecture._
 
 > **For contributors:** what do I need to do?
 > **For leads:** what needs attention?
@@ -11,7 +13,7 @@ A content operating system for the **IFC (Immanuel Fellowship Church) social med
 
 ## Project Overview
 
-**What it is.** StudioBoard tracks each piece of content (a reel, poster/graphic, or photo set) from idea → production → QA → approval → posting, with ownership, content links, approvals, and a celebration/visibility layer on top.
+**What it is.** IFC Creatives Board tracks each piece of content (a reel, poster/graphic, or photo set) from idea → production → QA → approval → posting, with ownership, content links, approvals, and a celebration/visibility layer on top.
 
 **The problem it solves.** The team previously ran on a shared Google Sheet plus a WhatsApp group. That meant:
 - People didn't know what they were responsible for or what to do next.
@@ -141,22 +143,27 @@ Roles are flags/fields on the `users` doc; a person can hold more than one. Dash
 ## MVP Features
 
 **Built today:**
-- **Task management** — owner + support crew, priority, dates, brief, statuses (Planned → Posted), comments, reactions; an auto-assign helper that mirrors the team's crewing rules.
+- **System-driven 7-stage workflow** — Planned → In Progress → In Review → Changes Requested → Approved → Ready to Post → Posted (grouped into 4 phases for the progress bar). The app derives the **next action / next owner** for each task; contributors never pick the next step manually.
+- **Task management** — owner + support crew, priority, dates, creative brief, comments, reactions; an auto-assign helper that mirrors the team's crewing rules (skill + workload).
+- **Flexible crew tasks** — Shooting / Editing / Getting People / Graphic Design / Shadowing, plus an **"Other"** type with a free-text custom label (e.g. Caption Writing, Voiceover, Lighting). Unknown roles from a CSV import keep their wording as *Other* instead of being mislabeled.
 - **QA workflow** — QA role, Approve / Request changes (bounces back with a note), approval history.
 - **Content links** — typed Drive links (IG + landscape for graphics, video for reels, folder for photography); **required before a task can be sent to QA**.
 - **Activity timeline** — created / status changes / QA / approvals / comments, newest first.
-- **Role-based dashboards** — Home (celebration), My Day (operational, role-aware), My Work, Team load.
+- **Role-based dashboards** — Home (celebration), My Day (operational, role-aware), My Work (urgency-ordered), Team load.
+- **Admin leadership dashboard** — quick actions, severity-coded health cards, "needs attention", "ready to move", and a cross-task **activity feed**.
 - **Wins & metrics** — personal + team wins, avg approval time, most active contributors (folded into Home).
-- **Upcoming events** — pastor birthdays + Mother's/Father's Day on Home, with content-prep lead times.
+- **Events → content** — Upcoming events on Home/Admin show whether content exists ("1 content item planned" vs "⚠ no content assigned"); admins get a **Create content** button that opens a new task **pre-filled** with the event.
 - **Global search & archive** — search every task across all statuses; posted/completed work moves to an Archive view.
-- **CSV / Google Sheet import** with **intelligent name matching** — bulk-create tasks; unknown owners/crew import as **Pending**, and the importer reconciles shortened/alternate sheet names against real accounts (see [Intelligent Name Matching](#intelligent-name-matching-import-reconciliation)).
+- **CSV / Google Sheet import** with **intelligent name matching** — bulk-create tasks; unknown owners/crew import as **Pending**, and the importer reconciles shortened/alternate/ambiguous sheet names against real accounts (see [Intelligent Name Matching](#intelligent-name-matching-import-reconciliation)).
 - **Issue reporting & error tracking** — see [Logging & Monitoring](#logging--monitoring).
+- **Beta mode** — a dismissible in-app banner inviting bug/feedback reports during the test phase.
+- **Mobile-first** — slim header + account drawer, role-aware nav, collapsible filters/sections, and safe-area handling so modals clear the iPhone Safari/Chrome URL bar.
 - **Dark mode** — system preference + manual toggle, remembered.
 
 **Planned (not yet built):**
 - **Notifications** — in-app center for assignments, QA requests, approvals, overdue, mentions.
 - **Department-lead dashboards** and a full **Events calendar** page (creating/editing events; today they're hardcoded in `events.js`).
-- **Preferred names / nicknames** — store a legal name + a preferred name (e.g. "Oghenekome Egbedi" → display **"Kome"**) and show the preferred name everywhere; global search matches all forms. _(The import-side matching below already exists; this is the in-app display half.)_
+- **Preferred names / nicknames** — store a legal name + a preferred name (e.g. "Jonathan Smith" → display **"Jon"**) and show the preferred name everywhere; global search matches all forms. _(The import-side matching below already exists; this is the in-app display half.)_
 - **Workload-aware crew suggestions** in the manual picker — rank people by skill match **and** current active-assignment count, steering work away from overloaded volunteers (`autoAssign`/`computeCapacity`/`userActiveTasks` already model this).
 - **Self-service profiles** — let users edit their own name/nickname/email/avatar and trigger a password reset (needs a scoped rules change; members currently can't self-edit).
 - **Simpler auth** — evaluate passwordless sign-in (magic link → email code → passkeys / Face ID / Touch ID) to cut password friction for volunteers.
@@ -167,30 +174,41 @@ Roles are flags/fields on the `users` doc; a person can hold more than one. Dash
 
 ## Intelligent Name Matching (import reconciliation)
 
-Church volunteers sign up with their full name (e.g. *Oghenekome Egbedi*) but the Google Sheet refers to them by a short/alternate name (*Kome*). On import, StudioBoard tries to recognize that these refer to the same account, so tasks land on real people instead of staying "Pending."
+Church volunteers sign up with their full name (e.g. *Jonathan Smith*) but the Google Sheet refers to them by a short/alternate name (*Jon*). On import, IFC Creatives Board tries to recognize that these refer to the same account, so tasks land on real people instead of staying "Pending."
 
-**How it scores a match** (`matchUserScored` in `src/data.js` → `{ user, confidence, reason }`):
+**How it scores a match.** `matchCandidates(name, users, mappings)` in `src/data.js` scores **every** plausible user `0–1` with a reason, best first (collecting *all* candidates is what makes ambiguity detectable). It combines exact/email signals with genuine fuzzy matching (`nameSim`, backed by Levenshtein `editDistance`):
 
 | Signal | Confidence | Example |
 | --- | --- | --- |
-| Remembered mapping (admin-confirmed before) | 100% | "Kome" once you've confirmed it |
-| Exact full name | 100% | "Oghenekome Egbedi" |
-| Email / email handle | 92–98% | `tofunmi@…` → Oluwatofunmi |
-| Exact first name | 90% | "David" → David Okafor |
-| Contained / partial token | ~65–88% | **"Kome" ⊂ Oghenekome**, **"Dola" ⊂ Dolabomi** |
-| Initials | 78% | **"OE"** → Oghenekome Egbedi |
+| Remembered mapping (admin-confirmed before) | 100% | "Jon" once you've confirmed it |
+| Exact full name | 100% | "Jonathan Smith" |
+| Email / email handle | 92–98% | `jordan@…` → Jordan Lee |
+| Exact first name | 90% | "Alex" → Alex Johnson |
+| Contained name | ~65–84% | **"Sam" ⊂ Samuel** |
+| Shared prefix | ~72–88% | **"Dan" → Daniel**, **"Dola" → Dolapo** |
+| Shortened name w/ spelling drift | ~65–75% | **"Anji" → Anjolaoluwa** (shares "anj", drifts i↔o) |
+| Typo / similar spelling | ~70–80% | **"Ester" → Esther** |
+| Initials | 78% | **"JS"** → Jonathan Smith |
 
-**Auto vs. confirm.** Strong matches (**≥ 90%** — exact, remembered, email, exact first name) resolve **automatically** during import. Fuzzy guesses (partial / initials) deliberately stay **Pending** so they're never silently mis-assigned.
+**Confidence tiers** (`matchTier`): **high ≥ 80%**, **medium ≥ 60%**, **low < 60%** (not suggested). The "Match names" step phrases them as *"Possible match: …"* (high) or *"Maybe this is …?"* (medium).
 
-**The "Match names" step.** Above the import preview, any fuzzy guesses appear for review:
+**Auto vs. confirm.** A name auto-resolves **only when there is a single, clearly-best match ≥ 90%** (exact / remembered / email / exact first name). Everything fuzzier, *and anything ambiguous*, stays **Pending** so a person is never silently mis-assigned.
+
+**Ambiguity guard.** If two candidates are within `0.1` of each other (e.g. **"Esther"** when both *Esther Orizu* and *Esther Tunde* exist), `isAmbiguous()` flags it and refuses to auto-pick. The Match-names step shows a warning and asks the admin to choose:
 ```
-“Kome” → Oghenekome Egbedi
-71% match · partial name        [Assign] [Ignore]
+⚠ Multiple people may match “Esther” — please choose the correct person:
+[ Esther Orizu ]  [ Esther Tunde ]  [ Skip ]
 ```
-- **Assign** resolves that name across all rows **and remembers it** — stored in `localStorage` under `sb-name-mappings` as `{ matchKey(name): userName }`.
-- **Ignore** leaves the entry Pending.
 
-**Remembered for next time.** Once confirmed, future imports containing that name auto-assign (the remembered mapping scores 100%). The preview re-derives live as confirmations are made (`reconcileNames` collects the still-pending names + best guesses; `rowToTask`/`parseSupport` accept the `mappings` map).
+**The "Match names" step.** Above the import preview, fuzzy/ambiguous guesses appear for review:
+```
+“Jon” → Possible match: Jonathan Smith
+71% · shared prefix              [Assign] [Ignore]
+```
+- **Assign** (or picking a person in the ambiguous case) resolves that name across all rows **and remembers it** — stored in `localStorage` under `sb-name-mappings` as `{ matchKey(name): userName }`.
+- **Ignore / Skip** leaves the entry Pending.
+
+**Remembered for next time.** Once confirmed, future imports containing that name auto-assign (the remembered mapping scores 100%). The preview re-derives live as confirmations are made (`reconcileNames` returns `{ name, candidates, ambiguous }` per pending name; `rowToTask`/`parseSupport` accept the `mappings` map).
 
 > **Current scope.** This is purely an **import reconciliation** system — it helps the app understand that different spellings of a name may be the same account. It is _not_ yet a stored preferred-name/nickname on the user profile (that's a planned feature above). Confirmed mappings live per-browser in `localStorage`, not in Firestore.
 
@@ -295,10 +313,10 @@ Seeded logins (shared password `password123`):
 
 | Login | Role |
 | --- | --- |
-| `grace@ifc.app` | Admin |
-| `david@ifc.app` | Member · **QA** |
-| `mike@ifc.app`  | Member · **Captions/Upload** |
-| `joy@ifc.app`   | Pending (approval screen) |
+| `jane@example.com`  | Admin |
+| `john@example.com`  | Member · **QA** |
+| `sam@example.com`   | Member · **Captions/Upload** |
+| `riley@example.com` | Pending (approval screen) |
 
 Re-run `npm run seed` anytime to reset. If emulator ports get stuck: `pkill -9 -f firebase` and free 4000/4400/4500/8080/9099.
 

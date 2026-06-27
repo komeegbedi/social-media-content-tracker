@@ -49,7 +49,12 @@ a{color:inherit}
   .sb-content{max-width:1000px;padding:0 10px}
 }
 
-.sb-sbrand{font-family:Fraunces;font-weight:600;font-size:21px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
+.sb-sbrand{font-family:Fraunces;font-weight:600;font-size:19px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
+.sb-brandtext{display:flex;flex-direction:column;line-height:1.05}
+.sb-brandtext .ifc{font-family:Inter;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);font-weight:700}
+.sb-brandfoot{margin-top:14px;padding-top:11px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;font-size:11px;color:var(--muted);line-height:1.5}
+.sb-brandfoot b{color:var(--ink);font-weight:600;font-size:12px;font-family:Fraunces}
 .sb-snav{display:flex;flex-direction:column;gap:3px}
 .sb-snav button{display:flex;align-items:center;gap:11px;background:none;border:none;width:100%;
   padding:11px 12px;border-radius:11px;color:var(--muted);font-size:14px;font-weight:600;text-align:left}
@@ -316,6 +321,11 @@ a{color:inherit}
 .sb-pendtag{color:var(--gold);font-weight:700}
 .sb-conf{font-weight:700}
 .sb-conf.hi{color:var(--green)} .sb-conf.mid{color:var(--gold)} .sb-conf.lo{color:var(--muted)}
+.sb-prow.ambig{align-items:stretch;border-color:var(--amber);background:var(--amber-soft)}
+.sb-prow.ambig .sb-prow-name{color:var(--amber)}
+[data-theme="dark"] .sb-prow.ambig .sb-prow-name{color:var(--ink)}
+.sb-ambig-opts{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.sb-ambig-opts .sb-skip{color:var(--muted)}
 
 /* ===== People page: team cards ===== */
 .sb-prow-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:9px}
@@ -362,17 +372,26 @@ a{color:inherit}
 .sb-overload{font-size:10.5px;color:var(--red);font-weight:700;margin-left:6px}
 .sb-idle{font-size:10.5px;color:var(--amber);font-weight:700;margin-left:6px}
 
-.sb-scrim{position:fixed;inset:0;background:rgba(33,27,51,.45);z-index:50;display:flex;align-items:flex-end;justify-content:center}
-.sb-sheet{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;max-height:92vh;overflow-y:auto;animation:rise .22s ease}
-@media(min-width:900px){ .sb-scrim{align-items:center;padding:20px} .sb-sheet{border-radius:20px;max-height:86vh} }
+.sb-scrim{position:fixed;inset:0;height:100dvh;background:rgba(33,27,51,.45);z-index:50;
+  display:flex;align-items:flex-end;justify-content:center}
+/* Cap the sheet to the *visible* viewport (dvh), minus the top safe-area, so a
+   bottom-anchored sheet's top can never hide under the iPhone Safari/Chrome URL
+   bar. `vh` is the fallback for browsers without dvh. */
+.sb-sheet{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+  max-height:calc(100vh - 48px);
+  max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
+  overflow-y:auto;-webkit-overflow-scrolling:touch;animation:rise .22s ease}
+@media(min-width:900px){ .sb-scrim{align-items:center;padding:20px}
+  .sb-sheet{border-radius:20px;max-height:86dvh} }
 @keyframes rise{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
-/* Keep the type badge + ✕ clear of the iPhone Safari URL bar / notch. */
+/* Sticky header pins the type badge + ✕ to the top of the panel, always
+   visible and tappable; extra top padding clears the notch/home indicator. */
 .sb-sheet .hd{position:sticky;top:0;background:var(--paper);
-  padding:calc(16px + env(safe-area-inset-top)) 18px 12px;border-bottom:1px solid var(--line);
-  display:flex;align-items:center;justify-content:space-between;z-index:2}
-@media(max-width:899px){ .sb-sheet .hd{padding-top:calc(22px + env(safe-area-inset-top))} }
-.sb-sheet .bd{padding:16px 18px 26px}
-.sb-x{background:var(--line);border:none;width:30px;height:30px;border-radius:50%;font-size:16px;color:var(--ink)}
+  padding:16px 18px 12px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;z-index:3}
+@media(max-width:899px){ .sb-sheet .hd{padding-top:calc(18px + env(safe-area-inset-top))} }
+.sb-sheet .bd{padding:16px 18px calc(26px + env(safe-area-inset-bottom))}
+.sb-x{background:var(--line);border:none;width:36px;height:36px;border-radius:50%;font-size:17px;color:var(--ink);flex:none;cursor:pointer}
 
 /* Creative brief callout in the task detail sheet. */
 .sb-brief{background:var(--violet-soft);border:1px solid var(--line);border-radius:13px;
@@ -417,23 +436,42 @@ a{color:inherit}
 .sb-reactbtn{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 9px;font-size:13px}
 .sb-reactbtn.on{background:var(--violet-soft);border-color:var(--violet)}
 
-.sb-login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:26px;
-  background:linear-gradient(160deg,var(--violet-deep),var(--violet))}
-.sb-loginbox{width:100%;max-width:400px}
-.sb-login .logo{width:54px;height:54px;border-radius:16px;background:var(--gold);color:#3a2a06;
-  display:flex;align-items:center;justify-content:center;font-family:Fraunces;font-weight:700;font-size:26px;margin-bottom:20px}
-.sb-login h1{color:#fff;font-size:30px;font-weight:600;line-height:1.08}
-.sb-login p{color:rgba(255,255,255,.72);font-size:14px;margin:8px 0 24px}
-.sb-lcard{background:var(--card);border-radius:18px;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
-.sb-lerr{background:var(--red-soft);color:var(--red);font-size:12.5px;font-weight:600;padding:9px 12px;border-radius:10px;margin-bottom:12px}
-.sb-lok{background:var(--green-soft);color:var(--green);font-size:12.5px;font-weight:600;padding:9px 12px;border-radius:10px;margin-bottom:12px}
-.sb-gbtn{width:100%;background:#fff;border:1px solid var(--line);border-radius:12px;padding:11px;
-  font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--ink)}
+.sb-login{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;
+  padding:24px 20px calc(24px + env(safe-area-inset-bottom));
+  background:radial-gradient(120% 120% at 50% 0%, var(--violet) 0%, var(--violet-deep) 70%)}
+.sb-loginbox{width:100%;max-width:440px}
+/* Branding block — prominent, centered, brand-coloured */
+.sb-lbrand{text-align:center;margin-bottom:22px}
+.sb-login .logo{width:72px;height:72px;border-radius:20px;background:var(--gold);color:#3a2a06;
+  display:inline-flex;align-items:center;justify-content:center;font-family:Fraunces;font-weight:700;
+  font-size:40px;margin:0 auto 18px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+.sb-login h1{color:#fff;font-size:34px;font-weight:600;line-height:1.05;font-family:Fraunces}
+.sb-tagline{color:var(--gold);font-weight:700;font-size:16px;letter-spacing:.02em;margin-top:10px}
+.sb-login p{color:rgba(255,255,255,.78);font-size:14.5px;margin:8px 0 0}
+@media(min-width:560px){ .sb-login h1{font-size:40px} .sb-login .logo{width:78px;height:78px;font-size:44px} }
+
+.sb-lcard{background:var(--card);border-radius:20px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.32)}
+.sb-lcardhd{font-family:Fraunces;font-size:19px;font-weight:600;color:var(--ink);margin-bottom:16px}
+.sb-lerr{background:var(--red-soft);color:var(--red);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
+.sb-lok{background:var(--green-soft);color:var(--green);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
+.sb-gbtn{width:100%;background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px;
+  font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--ink);cursor:pointer}
+.sb-gbtn:hover{border-color:var(--violet)}
 .sb-gicon{width:18px;height:18px;display:inline-block}
-.sb-ldiv{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:11px;margin:14px 0}
+.sb-ldiv{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:11px;margin:16px 0}
 .sb-ldiv::before,.sb-ldiv::after{content:"";height:1px;background:var(--line);flex:1}
-.sb-ltoggle{text-align:center;margin-top:14px;font-size:13px;color:rgba(255,255,255,.85)}
-.sb-ltoggle button{background:none;border:none;color:#fff;font-weight:700;text-decoration:underline}
+/* Taller, roomier inputs */
+.sb-lcard .sb-field{margin-bottom:14px}
+.sb-lcard .sb-field input{padding:13px 14px;font-size:15px;border-radius:12px}
+/* Vivid primary sign-in button */
+.sb-lprimary{margin-top:6px;padding:14px;font-size:15.5px;font-weight:700;
+  box-shadow:0 8px 22px rgba(76,58,140,.38)}
+.sb-lprimary:disabled{opacity:.7}
+/* Prominent create-account / switch CTA, directly beneath sign-in */
+.sb-lswitch{margin-top:18px;padding-top:16px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;gap:10px}
+.sb-lswitch span{font-size:13.5px;color:var(--muted);font-weight:600}
+.sb-lswitch .sb-btn{width:100%;margin-top:0}
 
 .sb-pending{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:26px;
   background:linear-gradient(160deg,var(--violet-deep),var(--violet));text-align:center}
@@ -443,6 +481,12 @@ a{color:inherit}
 .sb-pending p{color:rgba(255,255,255,.8);font-size:14px;margin:10px 0 22px;line-height:1.55}
 .sb-pending button{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);color:#fff;
   padding:11px 18px;border-radius:12px;font-weight:600;font-size:14px}
+
+/* Connectivity banner (offline / back-online) */
+.sb-netbar{position:fixed;top:0;left:0;right:0;z-index:90;text-align:center;font-weight:600;font-size:12.5px;
+  padding:calc(7px + env(safe-area-inset-top)) 12px 7px;background:var(--amber);color:#3a2a06;
+  box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.sb-netbar.ok{background:var(--green);color:#fff}
 
 .sb-loading{min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px}
 .sb-spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--violet);

@@ -24,6 +24,7 @@ function context() {
     uid: u?.uid || "anonymous",
     email: u?.email || "",
     route: currentView,
+    online: typeof navigator !== "undefined" ? navigator.onLine : true,
     userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
     viewport: typeof window !== "undefined" ? `${window.innerWidth}x${window.innerHeight}` : "",
     url: typeof location !== "undefined" ? location.href : "",
@@ -32,7 +33,7 @@ function context() {
 
 // Core writer. `kind` is "error" (auto-captured) or "report" (user-filed).
 // Returns true on success. Never throws.
-export async function logIssue({ kind, message = "", stack = "", action = "", taskId = "", note = "" }) {
+export async function logIssue({ kind, message = "", stack = "", action = "", taskId = "", note = "", code = "" }) {
   // We can only write when signed in (rules require it + uid must match).
   if (!auth.currentUser) {
     console.warn("[issue not logged — no signed-in user]", { kind, message, note });
@@ -44,6 +45,7 @@ export async function logIssue({ kind, message = "", stack = "", action = "", ta
       message: String(message).slice(0, 2000),
       stack: String(stack).slice(0, 6000),
       action: String(action).slice(0, 300),
+      code: String(code).slice(0, 200),
       taskId,
       note: String(note).slice(0, 2000),
       status: "open",
@@ -83,6 +85,7 @@ export function initErrorCapture() {
       kind: "error",
       message: reason?.message || String(reason) || "Unhandled promise rejection",
       stack: reason?.stack || "",
+      code: reason?.code || "",
       action: "unhandled promise rejection",
     });
   });

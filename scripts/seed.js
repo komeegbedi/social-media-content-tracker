@@ -34,26 +34,27 @@ const iso = (d) => d.toISOString().slice(0, 10);
 /* ===================================================================
    FAKE PEOPLE
    - 1 admin (approved), 5 approved members, 2 pending
-   - "David" is a designer so the Poster auto-assign path resolves
+   - "John Smith" is a designer so the Poster auto-assign path resolves
    =================================================================== */
+// All fake/demo accounts for local emulator testing only (never production).
 const PEOPLE = [
-  { uid: "seed-grace",  name: "Grace Okafor",   email: "grace@ifc.app",
+  { uid: "seed-jane",   name: "Jane Doe",       email: "jane@example.com",
     role: "admin",  status: "approved", skills: ["shoot", "edit", "coordinate"], location: ["479", "828"] },
-  { uid: "seed-david",  name: "David",          email: "david@ifc.app",
+  { uid: "seed-john",   name: "John Smith",     email: "john@example.com",
     role: "member", status: "approved", skills: ["design", "shoot"],            location: ["828"], qa: true },
-  { uid: "seed-esther", name: "Esther New",     email: "esther@ifc.app",
+  { uid: "seed-alex",   name: "Alex Johnson",   email: "alex@example.com",
     role: "member", status: "approved", skills: ["shoot", "edit"],              location: ["479"] },
-  { uid: "seed-mike",   name: "Mike Adeyemi",   email: "mike@ifc.app",
+  { uid: "seed-sam",    name: "Sam Taylor",     email: "sam@example.com",
     role: "member", status: "approved", skills: ["edit", "coordinate"],         location: ["828"], captions: true },
-  { uid: "seed-tunde",  name: "Tunde Bello",    email: "tunde@ifc.app",
+  { uid: "seed-jordan", name: "Jordan Lee",     email: "jordan@example.com",
     role: "member", status: "approved", skills: ["shoot", "shadow"],            location: ["479", "828"] },
-  { uid: "seed-amaka",  name: "Amaka Eze",      email: "amaka@ifc.app",
+  { uid: "seed-casey",  name: "Casey Kim",      email: "casey@example.com",
     role: "member", status: "approved", skills: ["coordinate"],                 location: ["479"],
     limited: true },
-  // Pending — show up in Admin → People for approval testing.
-  { uid: "seed-joy",    name: "Joy Williams",   email: "joy@ifc.app",
+  // Pending accounts: show up in Admin / People for approval testing.
+  { uid: "seed-riley",  name: "Riley Brown",    email: "riley@example.com",
     role: "member", status: "pending",  skills: [], location: [] },
-  { uid: "seed-sam",    name: "Sam Idris",      email: "sam@ifc.app",
+  { uid: "seed-morgan", name: "Morgan Diaz",    email: "morgan@example.com",
     role: "member", status: "pending",  skills: [], location: [] },
 ];
 
@@ -71,25 +72,25 @@ const assignPool = PEOPLE
 // `pri`/`next`/`blocked` are optional — they exercise the priority,
 // next-action and waiting-on features so My Day has real content to show.
 const TASK_SEEDS = [
-  { title: "Sunday welcome reel",        type: "Reel",   location: "828",  owner: "Grace Okafor", status: "Planned",     shoot: 2,  post: 5,  relatedEvent: "Sunday Service", pri: "High", next: "Needs footage",
+  { title: "Sunday welcome reel",        type: "Reel",   location: "828",  owner: "Jane Doe", status: "Planned",     shoot: 2,  post: 5,  relatedEvent: "Sunday Service", pri: "High", next: "Needs footage",
     brief: "Goal: make first-time guests feel expected, not just welcomed. 20–30s, warm tone, capture the door greeting + a packed room. Deliverable: 1 vertical reel for IG + a 9:16 cut for stories." },
-  { title: "Easter poster series",       type: "Poster", location: "Both", owner: "David",        status: "In Progress", shoot: -1, post: 3,  relatedEvent: "Easter", blocked: "Pastor's theme approval" },
-  { title: "Youth night recap",          type: "Reel",   location: "479",  owner: "Esther New",   status: "In Review",   shoot: -4, post: 1,  pri: "High", next: "Needs captions",
+  { title: "Easter poster series",       type: "Poster", location: "Both", owner: "John Smith",        status: "In Progress", shoot: -1, post: 3,  relatedEvent: "Easter", blocked: "Pastor's theme approval" },
+  { title: "Youth night recap",          type: "Reel",   location: "479",  owner: "Alex Johnson",   status: "In Review",   shoot: -4, post: 1,  pri: "High", next: "Needs captions",
     brief: "High-energy recap of Friday youth night. Fast cuts, on-screen captions for the worship moment, end on the altar-call shot. Keep under 45s. Reference: last month's recap that performed well." },
-  { title: "Worship moment teaser",      type: "Reel",   location: "828",  owner: "Tunde Bello",  status: "Ready to Post", shoot: -6, post: 1 },
-  { title: "Baptism highlights",         type: "Reel",   location: "479",  owner: "Mike Adeyemi", status: "Posted",      shoot: -12, post: -8 },
-  { title: "Midweek service flyer",      type: "Poster", location: "828",  owner: "Esther New",   status: "Planned",     shoot: 4,  post: 7 },
-  { title: "Volunteer spotlight",        type: "Reel",   location: "Both", owner: "Grace Okafor", status: "Changes Requested", shoot: 1, post: 6 },
-  { title: "Guest speaker announcement", type: "Poster", location: "479",  owner: "Mike Adeyemi", status: "In Review",   shoot: -2, post: 2,  relatedEvent: "Conference", pri: "High" },
-  { title: "Behind the scenes setup",    type: "Reel",   location: "828",  owner: "Tunde Bello",  status: "Planned",     shoot: 3,  post: 8 },
-  { title: "Testimony short",            type: "Reel",   location: "479",  owner: "Esther New",   status: "In Progress", shoot: 0,  post: 4,  next: "Needs captions" },
-  { title: "New series cover art",       type: "Poster", location: "Both", owner: "David",        status: "Approved",    shoot: -3, post: 0,  next: "Ready to post" },
-  { title: "Kids ministry promo",        type: "Reel",   location: "828",  owner: "Grace Okafor", status: "Planned",     shoot: 6,  post: 10, pri: "Low" },
-  { title: "Outreach event recap",       type: "Reel",   location: "479",  owner: "Tunde Bello",  status: "In Review",   shoot: -5, post: -2, relatedEvent: "Community Outreach", blocked: "David's graphics" },
-  { title: "Prayer week graphic",        type: "Poster", location: "828",  owner: "Mike Adeyemi", status: "Posted",      shoot: -15, post: -10 },
-  { title: "Sunday sermon clip",         type: "Reel",   location: "Both", owner: "Grace Okafor", status: "In Progress", shoot: 2,  post: 5,  pri: "High", next: "Awaiting approval" },
-  { title: "Welcome team feature",       type: "Reel",   location: "828",  owner: "Esther New",   status: "Planned",     shoot: 5,  post: 9 },
-  { title: "Baptism photo gallery",      type: "Photography", location: "479", owner: "Tunde Bello", status: "Approved",  shoot: -7, post: 1, relatedEvent: "Baptism", next: "Ready to post" },
+  { title: "Worship moment teaser",      type: "Reel",   location: "828",  owner: "Jordan Lee",  status: "Ready to Post", shoot: -6, post: 1 },
+  { title: "Baptism highlights",         type: "Reel",   location: "479",  owner: "Sam Taylor", status: "Posted",      shoot: -12, post: -8 },
+  { title: "Midweek service flyer",      type: "Poster", location: "828",  owner: "Alex Johnson",   status: "Planned",     shoot: 4,  post: 7 },
+  { title: "Volunteer spotlight",        type: "Reel",   location: "Both", owner: "Jane Doe", status: "Changes Requested", shoot: 1, post: 6 },
+  { title: "Guest speaker announcement", type: "Poster", location: "479",  owner: "Sam Taylor", status: "In Review",   shoot: -2, post: 2,  relatedEvent: "Conference", pri: "High" },
+  { title: "Behind the scenes setup",    type: "Reel",   location: "828",  owner: "Jordan Lee",  status: "Planned",     shoot: 3,  post: 8 },
+  { title: "Testimony short",            type: "Reel",   location: "479",  owner: "Alex Johnson",   status: "In Progress", shoot: 0,  post: 4,  next: "Needs captions" },
+  { title: "New series cover art",       type: "Poster", location: "Both", owner: "John Smith",        status: "Approved",    shoot: -3, post: 0,  next: "Ready to post" },
+  { title: "Kids ministry promo",        type: "Reel",   location: "828",  owner: "Jane Doe", status: "Planned",     shoot: 6,  post: 10, pri: "Low" },
+  { title: "Outreach event recap",       type: "Reel",   location: "479",  owner: "Jordan Lee",  status: "In Review",   shoot: -5, post: -2, relatedEvent: "Community Outreach", blocked: "John Smith's graphics" },
+  { title: "Prayer week graphic",        type: "Poster", location: "828",  owner: "Sam Taylor", status: "Posted",      shoot: -15, post: -10 },
+  { title: "Sunday sermon clip",         type: "Reel",   location: "Both", owner: "Jane Doe", status: "In Progress", shoot: 2,  post: 5,  pri: "High", next: "Awaiting approval" },
+  { title: "Welcome team feature",       type: "Reel",   location: "828",  owner: "Alex Johnson",   status: "Planned",     shoot: 5,  post: 9 },
+  { title: "Baptism photo gallery",      type: "Photography", location: "479", owner: "Jordan Lee", status: "Approved",  shoot: -7, post: 1, relatedEvent: "Baptism", next: "Ready to post" },
 ];
 
 async function seedUsers() {
@@ -159,13 +160,13 @@ async function seedTasks() {
     if (PRODUCED.includes(s.status))
       activity.push({ type: "qa_sent", by: s.owner, at: now - 3 * 86400000, note: "In Review" });
     if (s.status === "Changes Requested")
-      activity.push({ type: "changes_requested", by: "David", at: now - 2 * 86400000, note: "Tighten the first 3 seconds." });
+      activity.push({ type: "changes_requested", by: "John Smith", at: now - 2 * 86400000, note: "Tighten the first 3 seconds." });
     if (["Approved", "Ready to Post", "Posted"].includes(s.status))
-      activity.push({ type: "approved", by: "David", at: now - 2 * 86400000, note: "Approved" });
+      activity.push({ type: "approved", by: "John Smith", at: now - 2 * 86400000, note: "Approved" });
     if (CAPTIONED.includes(s.status))
-      activity.push({ type: "ready", by: "Mike Adeyemi", at: now - 1 * 86400000, note: "Ready to Post" });
+      activity.push({ type: "ready", by: "Sam Taylor", at: now - 1 * 86400000, note: "Ready to Post" });
     if (s.status === "Posted")
-      activity.push({ type: "posted", by: "Mike Adeyemi", at: now - 12 * 3600000, note: "Posted" });
+      activity.push({ type: "posted", by: "Sam Taylor", at: now - 12 * 3600000, note: "Posted" });
     await db.collection("tasks").add({
       ...task,
       comments: [],
@@ -185,9 +186,9 @@ async function main() {
   await seedUsers();
   await seedTasks();
   console.log("\nDone. Sign in at the app with any of these:");
-  console.log(`  Admin:   grace@ifc.app  /  ${PASSWORD}`);
-  console.log(`  Member:  david@ifc.app  /  ${PASSWORD}`);
-  console.log(`  Pending: joy@ifc.app    /  ${PASSWORD}  (waits for approval)`);
+  console.log(`  Admin:   jane@example.com   /  ${PASSWORD}`);
+  console.log(`  Member:  john@example.com   /  ${PASSWORD}`);
+  console.log(`  Pending: riley@example.com  /  ${PASSWORD}  (waits for approval)`);
   process.exit(0);
 }
 

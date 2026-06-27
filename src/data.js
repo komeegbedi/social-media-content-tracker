@@ -22,7 +22,7 @@ export const nextStep = (status) =>
      "Changes Requested": "Revise & resubmit for QA",
      "Approved": "Write the caption",
      "Ready to Post": "Post to Instagram",
-     "Posted": "Done — posted" }[status] || "");
+     "Posted": "Done, posted" }[status] || "");
 
 // Task priority. Defaults to "Medium" so only High (and Low) stand out.
 export const PRIORITIES = ["Low", "Medium", "High"];
@@ -55,7 +55,21 @@ export function eventContentCount(eventName, tasks) {
 // support-crew role code → human label.
 export const roleLabel = (r) =>
   ({ shoot:"Shooting", edit:"Editing", coordinate:"Getting People",
-     design:"Graphic Design", shadow:"Shadowing" }[r] || r);
+     design:"Graphic Design", shadow:"Shadowing", other:"Other" }[r] || r);
+
+// The crew task picker; "other" carries a free-text custom label on the entry.
+export const CREW_ROLES = ["shoot", "edit", "coordinate", "design", "shadow", "other"];
+
+// Human label for a support-crew entry — shows the custom label for "Other".
+export function crewRoleLabel(s) {
+  if (s && s.role === "other") return (s.label || "").trim() || "Other";
+  return roleLabel(s && s.role);
+}
+// Same, for an unfilled (Pending) slot: "Pending editor" / "Pending · Voiceover".
+export const pendingCrewLabel = (s) =>
+  s && s.role === "other"
+    ? `Pending · ${(s.label || "").trim() || "Other"}`
+    : pendingRoleLabel(s && s.role);
 
 // Content links a task can carry (Drive links, by kind). Required ones must
 // be attached before the task can be sent to QA — see requiredLinkKeys().
@@ -143,7 +157,7 @@ export const emailFor = (name="") =>
 export const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
 export const addDays = (n) => { const d=today(); d.setDate(d.getDate()+n); return d; };
 export const iso = (d) => d.toISOString().slice(0,10);
-export const fmt = (s) => { if(!s) return "—"; const d=new Date(s+"T00:00:00");
+export const fmt = (s) => { if(!s) return "-"; const d=new Date(s+"T00:00:00");
   return d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); };
 export const daysTo = (s) => { if(!s) return null; const d=new Date(s+"T00:00:00");
   return Math.round((d-today())/86400000); };
@@ -261,67 +275,116 @@ const normName = (s) => sanitizeName(s).toLowerCase();
 // Stable key for remembering an admin-confirmed name → user mapping.
 export const matchKey = (s) => normName(s);
 
-const ratio = (a, b) => Math.min(a, b) / Math.max(a, b);
+// Levenshtein edit distance — for small spelling differences / typos.
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1]
+        : 1 + Math.min(prev[j], cur[j - 1], prev[j - 1]);
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
 
-/* Intelligently guess which registered user a (often shortened/alternate) name
-   refers to — "Kome" → Oghenekome Egbedi, "Dola" → Dolabomi Bello. Returns
-   { user, confidence (0–1), reason } or null. `mappings` is the remembered
-   { matchKey(csvName): userName } map an admin has confirmed before. */
-export function matchUserScored(name, users = [], mappings = {}) {
+/* How likely two name fragments refer to the same person, 0–1 (with a short
+   reason). Handles: contained names, shared prefixes, shortened names with a
+   little spelling drift (Jon ~ Jonathan), and small typos. Fuzzy guesses
+   are capped below 1 so they always require confirmation. */
+function nameSim(s, t) {
+  if (!s || !t) return { score: 0, reason: "" };
+  if (s === t) return { score: 1, reason: "exact" };
+  const short = s.length <= t.length ? s : t;
+  const long = s.length <= t.length ? t : s;
+  if (short.length < 3) return { score: 0, reason: "" };   // too short to fuzz safely
+  let best = 0, why = "similar name";
+  const bump = (c, label) => { if (c > best) { best = c; why = label; } };
+
+  if (long.startsWith(short)) bump(0.72 + 0.2 * (short.length / long.length), "shared prefix");
+  else if (long.includes(short)) bump(0.64 + 0.2 * (short.length / long.length), "contained name");
+
+  // Shortened name vs the other's leading chars, allowing a little drift.
+  const lead = long.slice(0, short.length);
+  const leadSim = 1 - editDistance(short, lead) / short.length;
+  if (leadSim >= 0.6) bump(0.5 + 0.28 * leadSim * (short.length >= 4 ? 1 : 0.75), "shortened name");
+
+  // Whole-word typo similarity (best for similar-length names).
+  const overall = 1 - editDistance(s, t) / Math.max(s.length, t.length);
+  if (overall >= 0.75) bump(0.6 + 0.35 * ((overall - 0.75) / 0.25), "similar spelling");
+
+  return { score: Math.min(best, 0.95), reason: why };
+}
+
+/* Confidence → suggestion tier for the import UI: high = "Possible match",
+   medium = "Maybe this is …?", low = don't suggest. */
+export const matchTier = (c) => (c >= 0.8 ? "high" : c >= 0.6 ? "medium" : "low");
+
+/* All plausible users a (shortened/alternate) name could refer to, each scored
+   0–1 with a reason, best first. Collecting ALL candidates (not just the best)
+   is what lets us detect ambiguity — e.g. "Sam" matching two Sams.
+   `mappings` is the remembered { matchKey(csvName): userName } map. */
+export function matchCandidates(name, users = [], mappings = {}) {
   const n = normName(name);
-  if (!n) return null;
-  const find = (pred) => users.find(pred);
+  if (!n) return [];
 
-  // 1. A previously confirmed manual mapping wins outright.
+  // A previously confirmed manual mapping is definitive — one candidate.
   const remembered = mappings[n];
   if (remembered) {
-    const u = find((x) => normName(x.name) === normName(remembered));
-    if (u) return { user: u, confidence: 1, reason: "remembered" };
+    const u = users.find((x) => normName(x.name) === normName(remembered));
+    if (u) return [{ user: u, confidence: 1, reason: "remembered" }];
   }
-  // 2. Exact full name.
-  let u = find((x) => normName(x.name) === n);
-  if (u) return { user: u, confidence: 1, reason: "exact name" };
-  // 3. Email — value is an email, or matches a user's email handle.
-  if (n.includes("@")) {
-    u = find((x) => normName(x.email) === n);
-    if (u) return { user: u, confidence: 0.98, reason: "email" };
-  }
-  u = find((x) => (x.email || "").toLowerCase().split("@")[0] === n);
-  if (u) return { user: u, confidence: 0.92, reason: "email handle" };
 
   const csvFirst = n.split(" ")[0];
   const csvTokens = n.split(" ").filter(Boolean);
-
-  // 4. Exact first name.
-  u = find((x) => normName(x.name).split(" ")[0] === csvFirst);
-  if (u) return { user: u, confidence: 0.9, reason: "first name" };
-
-  // 5. Contained / partial token — handles Kome⊂Oghenekome, Dola⊂Dolabomi.
-  let best = null;
+  const out = [];
   for (const x of users) {
-    for (const tok of normName(x.name).split(" ").filter(Boolean)) {
-      if (csvFirst.length < 3 || tok.length < 3) continue;
-      let conf = 0, why = "partial name";
-      if (tok === csvFirst) { conf = 0.9; why = "first name"; }
-      else if (tok.startsWith(csvFirst) || csvFirst.startsWith(tok)) conf = 0.72 + 0.18 * ratio(tok.length, csvFirst.length);
-      else if (tok.includes(csvFirst) || csvFirst.includes(tok)) conf = 0.64 + 0.18 * ratio(tok.length, csvFirst.length);
-      if (conf > (best?.confidence || 0)) best = { user: x, confidence: Math.round(conf * 100) / 100, reason: why };
-    }
+    const full = normName(x.name);
+    const handle = (x.email || "").toLowerCase().split("@")[0];
+    const tokens = full.split(" ").filter(Boolean);
+    let sc = 0, reason = "similar name";
+    const bump = (c, r) => { if (c > sc) { sc = c; reason = r; } };
+
+    if (full === n) bump(1, "exact name");
+    if (n.includes("@") && normName(x.email) === n) bump(0.98, "email");
+    if (handle && handle === n) bump(0.92, "email handle");
+    if (tokens[0] === csvFirst) bump(0.9, "first name");
+    for (const tok of tokens) { const r = nameSim(csvFirst, tok); if (r.score > 0) bump(r.score, r.reason); }
+    if (csvTokens.length === 1 && /^[a-z]{2,4}$/.test(csvFirst) &&
+        tokens.map((t) => t[0]).join("") === csvFirst) bump(0.78, "initials");
+
+    if (sc >= 0.6) out.push({ user: x, confidence: Math.round(sc * 100) / 100, reason });
   }
-  // 6. Initials — "OE" → Oghenekome Egbedi.
-  if ((!best || best.confidence < 0.75) && csvTokens.length === 1 && /^[a-z]{2,4}$/.test(csvFirst)) {
-    u = find((x) => normName(x.name).split(" ").map((t) => t[0]).join("") === csvFirst);
-    if (u && 0.78 > (best?.confidence || 0)) best = { user: u, confidence: 0.78, reason: "initials" };
-  }
-  return best && best.confidence >= 0.6 ? best : null;
+  return out.sort((a, b) => b.confidence - a.confidence || a.user.name.localeCompare(b.user.name));
 }
 
-// Auto-resolve a name to a user only when we're confident (exact, remembered,
-// email, or exact first name ≥0.9). Fuzzy/partial guesses are left "Pending"
-// so the import reconciliation UI can confirm them before assigning.
+// Best single guess (back-compat) — { user, confidence, reason } or null.
+export function matchUserScored(name, users = [], mappings = {}) {
+  return matchCandidates(name, users, mappings)[0] || null;
+}
+
+// Two candidates are "ambiguous" when the runner-up is nearly as strong as the
+// best — i.e. we can't safely tell them apart (two Sams, etc.).
+const AMBIGUITY_GAP = 0.1;
+export function isAmbiguous(candidates) {
+  return candidates.length >= 2
+    && candidates[0].confidence >= 0.7
+    && candidates[1].confidence >= candidates[0].confidence - AMBIGUITY_GAP;
+}
+
+// Auto-resolve a name to a user ONLY when there's a single, clearly-best,
+// high-confidence match. Remembered mappings always resolve; otherwise we
+// refuse when confidence is low (<0.9) OR the match is ambiguous, leaving the
+// task Pending for the admin to confirm. Prevents wrong-person assignment.
 export function matchUser(name, users = [], mappings = {}) {
-  const m = matchUserScored(name, users, mappings);
-  return m && m.confidence >= 0.9 ? m.user : null;
+  const c = matchCandidates(name, users, mappings);
+  if (!c.length) return null;
+  if (c[0].reason === "remembered") return c[0].user;
+  if (c[0].confidence >= 0.9 && !isAmbiguous(c)) return c[0].user;
+  return null;
 }
 
 // "2/15/2026" or "2026-02-15" → "2026-02-15"; anything else → "".
@@ -355,7 +418,7 @@ function detectRoles(text) {
   const roles = [];
   if (/shoot|film|record/.test(n)) roles.push("shoot");
   if (/edit/.test(n)) roles.push("edit");
-  if (/coordinate|get ?people|people|interview/.test(n)) roles.push("coordinate");
+  if (/coordinate|get(ting)? ?people/.test(n)) roles.push("coordinate");
   if (/design|graphic/.test(n)) roles.push("design");
   if (/shadow/.test(n)) roles.push("shadow");
   return [...new Set(roles)];
@@ -374,13 +437,17 @@ export function parseSupport(raw, users = [], mappings = {}) {
     if (!seg || seg === "-") return;
     const dash = seg.indexOf("-");
     const namesPart = dash >= 0 ? seg.slice(0, dash) : seg;
-    let roles = detectRoles(dash >= 0 ? seg.slice(dash + 1) : "");
-    if (!roles.length) roles = ["coordinate"];        // sensible default
+    const roleText = sanitizeName(dash >= 0 ? seg.slice(dash + 1) : "");
+    const roles = detectRoles(roleText);              // known roles only
     namesPart.split(/&|,/).forEach((rawName) => {
       const nm = sanitizeName(rawName);
       if (!nm) return;
       const u = matchUser(nm, users, mappings);
-      roles.forEach((role) => out.push(u ? { name: u.name, role } : { name: "Pending", role, suggested: nm }));
+      const base = u ? { name: u.name } : { name: "Pending", suggested: nm };
+      // Don't force unknown roles to "Getting People" — keep them as a custom
+      // "Other" task with the sheet's wording (e.g. "Caption Writing").
+      if (roles.length) roles.forEach((role) => out.push({ ...base, role }));
+      else out.push({ ...base, role: "other", label: roleText });
     });
   });
   return out;
@@ -438,8 +505,9 @@ export function rowToTask(row, users = [], mappings = {}) {
 }
 
 /* Collect the distinct still-"Pending" names across parsed import rows (owner +
-   crew), each with the best-guess match — drives the import reconciliation UI.
-   Returns [{ name, key, user, confidence, reason }] (only names with a guess). */
+   crew), each with its candidate match(es) — drives the import reconciliation UI.
+   Returns [{ name, key, candidates: [{user,confidence,reason}], ambiguous }]
+   (only names that have at least one plausible guess). */
 export function reconcileNames(rows, users = [], mappings = {}) {
   const seen = new Map();
   for (const r of rows || []) {
@@ -450,11 +518,11 @@ export function reconcileNames(rows, users = [], mappings = {}) {
     for (const nm of names) {
       const key = matchKey(nm);
       if (!key || seen.has(key)) continue;
-      const m = matchUserScored(nm, users, mappings);
-      if (m) seen.set(key, { name: nm, key, user: m.user, confidence: m.confidence, reason: m.reason });
+      const candidates = matchCandidates(nm, users, mappings);
+      if (candidates.length) seen.set(key, { name: nm, key, candidates: candidates.slice(0, 5), ambiguous: isAmbiguous(candidates) });
     }
   }
-  return [...seen.values()].sort((a, b) => b.confidence - a.confidence);
+  return [...seen.values()].sort((a, b) => b.candidates[0].confidence - a.candidates[0].confidence);
 }
 
 /* Convert a Google Sheets URL to its CSV-export URL. Pass through any URL
