@@ -482,6 +482,12 @@ a{color:inherit}
 .sb-pending button{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);color:#fff;
   padding:11px 18px;border-radius:12px;font-weight:600;font-size:14px}
 
+/* Connectivity banner (offline / back-online) */
+.sb-netbar{position:fixed;top:0;left:0;right:0;z-index:90;text-align:center;font-weight:600;font-size:12.5px;
+  padding:calc(7px + env(safe-area-inset-top)) 12px 7px;background:var(--amber);color:#3a2a06;
+  box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.sb-netbar.ok{background:var(--green);color:#fff}
+
 .sb-loading{min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px}
 .sb-spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--violet);
   animation:spin .8s linear infinite;margin:0 auto 14px}

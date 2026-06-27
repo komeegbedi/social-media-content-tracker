@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, connectAuthEmulator } from "firebase/auth";
-import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
+import { initializeFirestore, connectFirestoreEmulator } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -13,7 +13,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// Auto-detect long-polling instead of the default streaming transport. On
+// Safari / iOS and flaky mobile networks the streaming channel can get stuck in
+// a half-open state after a connection drop; long-polling recovers more
+// reliably.
+export const db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
 export const googleProvider = new GoogleAuthProvider();
 
 // Local testing: route Auth + Firestore to the Firebase Emulator Suite.

@@ -152,6 +152,27 @@ export class ErrorBoundary extends React.Component {
    DATA LAYER — Firebase Auth + Firestore (real-time)
    =================================================================== */
 
+// Is this failure a transient network/offline problem (vs. a real app error)?
+function isNetworkError(e) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+  const c = (e && e.code) || "";
+  const m = (e && e.message) || "";
+  return /unavailable|deadline-exceeded|network|offline/i.test(c)
+      || /offline|network|unavailable|failed to get document/i.test(m);
+}
+
+// Track browser connectivity so we can show an offline banner + react to it.
+function useOnline() {
+  const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
+  useEffect(() => {
+    const on = () => setOnline(true), off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
+  return online;
+}
+
 function useAuthUser() {
   const [user, setUser] = useState(undefined); // undefined=loading, null=signed out
   useEffect(() => onAuthStateChanged(auth, setUser), []);
@@ -159,6 +180,7 @@ function useAuthUser() {
 }
 
 // Make sure a signed-in user has a profile doc. First sign-in → pending.
+// Throws on network failure; callers must catch (no floating promises).
 async function ensureProfile(user) {
   const ref = doc(db, "users", user.uid);
   const snap = await getDoc(ref);
@@ -177,29 +199,38 @@ async function ensureProfile(user) {
 }
 
 // Live-subscribe to the signed-in user's own profile doc. Re-renders whenever
-// an admin approves them or edits their skills, etc. onSnapshot returns its
-// unsubscribe fn, which useEffect calls on cleanup.
-function useProfile(uid) {
-  const [profile, setProfile] = useState(undefined);
+// an admin approves them or edits their skills, etc. Returns explicit states:
+//   profile: undefined (loading) | null (no doc yet) | object
+//   error: null | the Firestore error (e.g. offline) — so a network failure
+//          surfaces a friendly retry screen instead of looking like "no profile".
+function useProfile(uid, retryKey) {
+  const [state, setState] = useState({ profile: undefined, error: null });
   useEffect(() => {
-    if (!uid) { setProfile(null); return; }
+    if (!uid) { setState({ profile: null, error: null }); return; }
+    setState({ profile: undefined, error: null });
     return onSnapshot(doc(db, "users", uid),
-      (s) => setProfile(s.exists() ? { id: s.id, ...s.data() } : null),
-      () => setProfile(null));
-  }, [uid]);
-  return profile;
+      (s) => setState({ profile: s.exists() ? { id: s.id, ...s.data() } : null, error: null }),
+      (err) => {
+        logIssue({ kind: "error", action: "login: profile read failed",
+          message: err.message, code: err.code, note: "authenticated=true (Firestore read failed)" });
+        setState({ profile: undefined, error: err });
+      });
+  }, [uid, retryKey]);
+  return state;
 }
 
 // Live-subscribe to a whole collection ("users" or "tasks"). `canRead` gates
 // the subscription so we don't query before the user is allowed (Firestore
-// rules would reject it). Every connected client stays in sync in real time.
+// rules would reject it). A listener error leaves the last data in place and is
+// logged — it never throws or crashes the dashboard.
 function useCollection(path, canRead) {
   const [docs, setDocs] = useState([]);
   useEffect(() => {
     if (!canRead) { setDocs([]); return; }
     return onSnapshot(collection(db, path),
       (snap) => setDocs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      (err) => console.error(path, err));
+      (err) => logIssue({ kind: "error", action: `collection read failed: ${path}`,
+        message: err.message, code: err.code }));
   }, [path, canRead]);
   return docs;
 }
@@ -211,20 +242,103 @@ const Ic = { home:"♡", day:"◉", board:"▦", mine:"✓", team:"♦", admin:"
 
 export default function App() {
   const user = useAuthUser();                          // Firebase Auth user (or null)
-  useEffect(() => { if (user) ensureProfile(user); }, [user]); // first sign-in → pending profile
-  const profile = useProfile(user?.uid);               // their Firestore profile doc
+  const online = useOnline();
+  const [retryKey, setRetryKey] = useState(0);         // bump to re-subscribe / re-create
+  const [setupError, setSetupError] = useState(null);  // profile-creation failure (offline)
+  const [slow, setSlow] = useState(false);             // profile load is taking too long
+  const creating = useRef(false);
+  const { profile, error: profileError } = useProfile(user?.uid, retryKey);
 
-  // Gating ladder, in order: still loading → not signed in → profile not ready
-  // → signed in but not yet approved → full app.
-  if (user === undefined || (user && profile === undefined)) return <Loading />;
-  if (!user) return <Login />;
-  if (!profile) return <Loading label="Setting up your account…" />;
+  // First sign-in: create the pending profile doc if it doesn't exist yet.
+  // Properly awaited + caught so an offline failure can never become an
+  // unhandled promise rejection (the original crash).
+  useEffect(() => {
+    if (!(user && profile === null) || creating.current) return;
+    creating.current = true;
+    ensureProfile(user)
+      .then(() => setSetupError(null))
+      .catch((e) => {
+        logIssue({ kind: "error", action: "login: create profile failed",
+          message: e.message, code: e.code, note: "authenticated=true (Firestore write failed)" });
+        setSetupError(e);
+      })
+      .finally(() => { creating.current = false; });
+  }, [user, profile, retryKey]);
 
-  const isAdmin = profile.role === "admin";
-  const approved = profile.status === "approved" || isAdmin;
-  if (!approved) return <Pending profile={profile} />;
+  // If we're stuck loading for a while — whether resolving the auth session
+  // (Google sign-in / token refresh) OR reading the profile — surface the retry
+  // screen instead of an endless spinner. This also covers iOS "zombie
+  // connection" hangs after a mid-request network drop, where the SDK can sit on
+  // a dead socket for minutes.
+  useEffect(() => {
+    setSlow(false);
+    const loading = user === undefined || (user && profile === undefined && !profileError);
+    if (!loading) return;
+    const t = setTimeout(() => setSlow(true), 15000);
+    return () => clearTimeout(t);
+  }, [user, profile, profileError, retryKey]);
 
-  return <Board profile={profile} isAdmin={isAdmin} />;
+  // Signing out from the error screen should drop any stale profile-setup error.
+  useEffect(() => { if (!user) setSetupError(null); }, [user]);
+
+  // A full reload re-initializes Firebase with fresh connections — the most
+  // reliable way to recover a stuck Auth/Firestore channel.
+  const retry = () => { try { window.location.reload(); } catch { setSetupError(null); setSlow(false); setRetryKey((k) => k + 1); } };
+
+  // Gating ladder. The "stuck/failed" check comes first so a hung Auth or
+  // Firestore connection always yields a retry screen, never an endless spinner.
+  let screen;
+  if (profileError || setupError || slow)
+    screen = <ConnError online={online} onRetry={retry} onSignOut={() => signOut(auth)} />;
+  else if (user === undefined) screen = <Loading />;
+  else if (!user) screen = <Login online={online} />;
+  else if (profile === undefined) screen = <Loading label="Loading your account…" />;
+  else if (profile === null) screen = <Loading label="Setting up your account…" />;
+  else {
+    const isAdmin = profile.role === "admin";
+    const approved = profile.status === "approved" || isAdmin;
+    screen = approved ? <Board profile={profile} isAdmin={isAdmin} /> : <Pending profile={profile} />;
+  }
+
+  return <><OfflineBanner online={online} />{screen}</>;
+}
+
+// A small top banner that announces connectivity changes.
+function OfflineBanner({ online }) {
+  const [show, setShow] = useState(!online);
+  const [back, setBack] = useState(false);
+  const prev = useRef(online);
+  useEffect(() => {
+    if (!online) { setBack(false); setShow(true); }
+    else if (prev.current === false) {
+      setBack(true); setShow(true);
+      const t = setTimeout(() => setShow(false), 3000);
+      prev.current = online;
+      return () => clearTimeout(t);
+    }
+    prev.current = online;
+  }, [online]);
+  if (!show) return null;
+  return <div className={"sb-netbar" + (online ? " ok" : "")}>
+    {online ? "✓ Back online." : "⚠ You appear to be offline."}</div>;
+}
+
+// Friendly, recoverable screen for a login-time network failure.
+function ConnError({ online, onRetry, onSignOut }) {
+  return (
+    <div className="sb-pending">
+      <div className="box">
+        <div className="ic">📡</div>
+        <h1>Can't connect</h1>
+        <p>Unable to connect right now. Please check your internet connection and try again.</p>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+          <button onClick={onRetry}>Try again</button>
+          <button onClick={onSignOut} style={{ background: "rgba(255,255,255,.1)" }}>Sign out</button>
+        </div>
+        {!online && <p style={{ fontSize: 12.5, marginTop: 14 }}>Your device is currently offline.</p>}
+      </div>
+    </div>
+  );
 }
 
 function Loading({ label = "Loading IFC Creatives Board…" }) {
@@ -234,7 +348,7 @@ function Loading({ label = "Loading IFC Creatives Board…" }) {
 /* ===================================================================
    LOGIN  (email/password + register + Google)
    =================================================================== */
-function Login() {
+function Login({ online = true }) {
   useEffect(() => setView("login"), []);
   const [mode, setMode] = useState("signin"); // signin | register
   const [name, setName] = useState("");
@@ -246,11 +360,13 @@ function Login() {
 
   const friendly = (e) => {
     const c = (e && e.code) || "";
+    if (isNetworkError(e)) return "Unable to connect right now. Please check your internet connection and try again.";
     if (c.includes("invalid-credential") || c.includes("wrong-password") || c.includes("user-not-found"))
       return "Email or password isn't right.";
     if (c.includes("email-already-in-use")) return "That email already has an account. Try signing in.";
     if (c.includes("weak-password")) return "Password should be at least 6 characters.";
     if (c.includes("invalid-email")) return "That doesn't look like a valid email.";
+    if (c.includes("too-many-requests")) return "Too many attempts. Please wait a moment and try again.";
     if (c.includes("popup-closed")) return "Google sign-in was cancelled.";
     return "Something went wrong. Please try again.";
   };
@@ -1749,6 +1865,8 @@ function IssueLog({ issues, onResolve }) {
                   {expanded && (
                     <div className="sb-issue-meta">
                       {i.action && <div><b>Action:</b> {i.action}</div>}
+                      {i.code && <div><b>Error code:</b> {i.code}</div>}
+                      {i.online!==undefined && <div><b>Network:</b> {i.online ? "online" : "offline"}</div>}
                       <div><b>Device:</b> {i.userAgent || "-"}</div>
                       <div><b>Viewport:</b> {i.viewport || "-"} · <b>URL:</b> {i.url || "-"}</div>
                       {i.stack && <pre className="sb-stack">{i.stack}</pre>}
