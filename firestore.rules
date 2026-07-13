@@ -36,10 +36,40 @@ service cloud.firestore {
         && request.resource.data.get('captions', false) == false
         && request.resource.data.get('lead', false) == false;
 
-      // Only admins edit profiles (approvals, roles, skills, flags, removal).
-      // Members have no self-edit UI, and letting them change their own
-      // skills/flags could quietly game auto-assignment — so it's locked down.
-      allow update, delete: if isAdmin();
+      // Admins edit profiles (approvals, roles, skills, flags, removal).
+      // Members may self-edit ONLY their notification preferences — nothing
+      // else (changing their own skills/flags could game auto-assignment).
+      allow update: if isAdmin()
+        || (signedIn() && request.auth.uid == uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['notifPrefs']));
+      allow delete: if isAdmin();
+
+      // Web-push device tokens: a user manages only their own.
+      match /fcmTokens/{token} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+    }
+
+    // In-app notifications. Written server-side (Admin SDK bypasses rules);
+    // a user may read only their own and mark them read — nothing else.
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow update: if signedIn() && resource.data.uid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow create, delete: if false;
+    }
+
+    // Materialized reminder queue — entirely server-owned. Admins may read it
+    // for the delivery log; no client ever writes it.
+    match /reminderInstances/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // App-wide settings (e.g. default reminder schedule, leadership roles).
+    match /settings/{docId} {
+      allow read: if isApproved();
+      allow write: if isAdmin();
     }
 
     match /tasks/{taskId} {
@@ -63,6 +93,15 @@ service cloud.firestore {
             && (request.resource.data.status == resource.data.status
                 || !(request.resource.data.status in ['Approved', 'Changes Requested'])
                 || isQA()));
+
+      // Comments as a subcollection (v1.1). Approved members read all and may
+      // post their own; edits/removal are admin-only. Enables the server-side
+      // @mention trigger without bloating the task document.
+      match /comments/{commentId} {
+        allow read: if isApproved();
+        allow create: if isApproved() && request.resource.data.uid == request.auth.uid;
+        allow update, delete: if isAdmin();
+      }
     }
 
     // Issue log: user-filed reports and auto-captured runtime errors.

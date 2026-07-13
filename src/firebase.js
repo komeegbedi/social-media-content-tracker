@@ -11,7 +11,7 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-const app = initializeApp(firebaseConfig);
+export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 // Auto-detect long-polling instead of the default streaming transport. On
 // Safari / iOS and flaky mobile networks the streaming channel can get stuck in

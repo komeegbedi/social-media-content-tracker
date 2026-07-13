@@ -26,9 +26,11 @@ import {
   adminHealth, adminNeedsAttention, adminReadyToMove, recentActivity,
   taskProblem, ADMIN_FILTERS, applyAdminFilter,
   DEPARTMENTS, roleChips, userActiveTasks, PEOPLE_FILTERS, applyPeopleFilter, groupPeople,
-  crewRoleLabel, pendingCrewLabel, CREW_ROLES, eventContentCount,
+  crewRoleLabel, pendingCrewLabel, CREW_ROLES, occurrenceContentCount, occurrenceTasks,
 } from "./data";
-import { upcomingEvents, searchEvents } from "./events";
+import { upcomingEvents, searchEvents, isoDate } from "./events";
+import { useNotifications, NOTIF_META, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
+import { pushState, enablePush, listenForeground } from "./push";
 import { setView, reportIssue, logIssue } from "./logging";
 import { getTheme, setTheme } from "./theme";
 
@@ -44,7 +46,17 @@ const savePref = (key, val) => { try { localStorage.setItem(key, JSON.stringify(
 const ordinal = (n) => { const s = ["th","st","nd","rd"], v = n % 100; return n + (s[(v-20)%10] || s[v] || s[0]); };
 const fmtEventDate = (d) => `${d.toLocaleDateString(undefined,{month:"short"})} ${ordinal(d.getDate())}, ${d.getFullYear()}`;
 /* Sensible starting values when creating content for an event. */
-const eventPrefill = (e) => ({ title: e.name, relatedEvent: e.name, postDate: e.date.toISOString().slice(0,10) });
+// Prefill a new task for a specific event occurrence. We stamp the structured
+// occurrence fields (not just the display name) so content links to THIS
+// occurrence — a recurring event's months never get conflated.
+const eventPrefill = (e) => ({
+  title: e.name,
+  relatedEvent: e.name,
+  relatedEventSeriesId: e.eventSeriesId || "",
+  relatedEventOccurrenceId: e.eventOccurrenceId || "",
+  relatedEventDate: e.eventOccurrenceDate ? isoDate(e.eventOccurrenceDate) : "",
+  postDate: isoDate(e.date),
+});
 
 /* A slim, dismissible beta notice — sets expectations and invites feedback.
    Dismissal is remembered so it doesn't nag returning testers. */
@@ -73,7 +85,7 @@ function ThemeToggle({ compact }) {
 
 /* Mobile account drawer — opened from the header avatar. Pulls the profile,
    theme, report and sign-out off every screen and into one slide-up sheet. */
-function ProfileDrawer({ me, isAdmin, onClose, onReport }) {
+function ProfileDrawer({ me, isAdmin, unread = 0, onClose, onNotifications, onReport }) {
   const [theme, setT] = useState(getTheme());
   const toggleTheme = () => { const next = theme==="dark"?"light":"dark"; setTheme(next); setT(next); };
   useEffect(() => {
@@ -96,9 +108,10 @@ function ProfileDrawer({ me, isAdmin, onClose, onReport }) {
           {theme==="dark"?"Light mode":"Dark mode"}
           <span className="sb-drawer-state">{theme==="dark"?"On":"Off"}</span>
         </button>
-        <div className="sb-drawer-item disabled">
-          <span className="i">🔔</span>Notifications<span className="sb-drawer-state">Soon</span>
-        </div>
+        <button className="sb-drawer-item" onClick={onNotifications}>
+          <span className="i">🔔</span>Notifications
+          {unread>0 && <span className="sb-drawer-state">{unread>9?"9+":unread}</span>}
+        </button>
         <button className="sb-drawer-item" onClick={onReport}>
           <span className="i">⚠︎</span>Report an issue
         </button>
@@ -106,6 +119,126 @@ function ProfileDrawer({ me, isAdmin, onClose, onReport }) {
           <span className="i">⇥</span>Sign out
         </button>
         <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
+      </div>
+    </div>
+  );
+}
+
+/* Notification Center — a slide-over listing the signed-in user's
+   notifications (newest first). Reads via useNotifications; docs are written
+   by the backend (Slice 3), so until then this shows the empty state. */
+function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
+  const { items, unread, hasMore, loadMore, markRead, markAllRead } = notif;
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const open = (n) => {
+    if (!n.read) markRead(n.id);
+    if (n.taskId) { onClose(); onOpenTask(n.taskId); }
+    else if (n.eventOccurrenceId && onViewEvent) {
+      onClose();
+      onViewEvent({ eventOccurrenceId: n.eventOccurrenceId, name: n.eventName || "Event", annual: false });
+    }
+  };
+  return (
+    <div className="sb-scrim" onMouseDown={onClose}>
+      <div className="sb-notifpanel" onMouseDown={e=>e.stopPropagation()}>
+        <div className="sb-notifhd">
+          <b className="sb-serif" style={{fontSize:17}}>Notifications</b>
+          <div className="sb-notifhd-actions">
+            {unread>0 && <button className="link" onClick={markAllRead}>Mark all read</button>}
+            <button className="sb-iconbtn" onClick={onSettings} aria-label="Notification settings">⚙</button>
+            <button className="sb-x" onClick={onClose}>✕</button>
+          </div>
+        </div>
+        {items.length===0
+          ? <div className="sb-empty"><div className="big">🔔</div>You're all caught up. New updates will show here.</div>
+          : <div className="sb-notiflist">
+              {items.map(n => {
+                const meta = NOTIF_META[n.type] || { icon:"🔔", label:"Update" };
+                return (
+                  <button key={n.id} className={"sb-notif"+(n.read?"":" unread")} onClick={()=>open(n)}>
+                    <span className="ic">{meta.icon}</span>
+                    <span className="bd">
+                      <span className="ti">{n.title}</span>
+                      {n.body && <span className="bo">{n.body}</span>}
+                      <span className="mt">{meta.label} · {timeAgo(n.createdAt)}</span>
+                    </span>
+                    {!n.read && <span className="ndot" />}
+                  </button>
+                );
+              })}
+              {hasMore && <div style={{textAlign:"center",padding:"6px 0 12px"}}>
+                <button className="sb-btn ghost compact" onClick={loadMore}>Load more</button></div>}
+            </div>}
+      </div>
+    </div>
+  );
+}
+
+/* Device push enrollment. iOS/iPadOS only allow web push once the app is added
+   to the Home Screen, so we guide the user there first instead of showing a
+   button that silently won't work. */
+function PushControls({ me }) {
+  const [state, setState] = useState("loading");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { pushState().then(setState); }, []);
+  const enable = async () => {
+    setBusy(true);
+    const r = await enablePush(me.id);
+    setState(r.ok ? "granted" : (r.reason === "denied" ? "denied" : await pushState()));
+    setBusy(false);
+  };
+  if (state === "loading") return null;
+  if (state === "granted") return <div className="sb-push ok">✓ Push is on for this device.</div>;
+  if (state === "ios-needs-install") return (
+    <div className="sb-push">
+      <b>Turn on push on your iPhone / iPad</b>
+      <ol>
+        <li>Tap the <b>Share</b> icon, then <b>Add to Home Screen</b>.</li>
+        <li>Open IFC Creatives Board from the new app icon.</li>
+        <li>Come back here and tap <b>Enable push</b>.</li>
+      </ol>
+    </div>
+  );
+  if (state === "denied") return <div className="sb-push">Notifications are blocked. Allow them for this site in your browser settings, then reload.</div>;
+  if (state === "unsupported") return <div className="sb-push">This browser doesn't support push notifications.</div>;
+  if (state === "not-configured") return <div className="sb-push">Push isn't set up yet — an admin needs to finish messaging configuration.</div>;
+  return <button className="sb-btn ghost" disabled={busy} onClick={enable}>{busy ? "Enabling…" : "🔔 Enable push on this device"}</button>;
+}
+
+/* Per-user notification preferences. In-app is always on; push/email and the
+   per-type toggles are configurable. Writes users/{uid}.notifPrefs (allowed by
+   a scoped security rule). */
+function NotifSettings({ me, onSave, onClose }) {
+  const [p, setP] = useState(effectivePrefs(me));
+  const setChannel = (k) => setP(s => ({ ...s, [k]: !s[k] }));
+  const setType = (k) => setP(s => ({ ...s, perType: { ...s.perType, [k]: !s.perType[k] } }));
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="sb-scrim" onClick={onClose}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Notification settings</b>
+          <button className="sb-x" onClick={onClose}>✕</button></div>
+        <div className="bd">
+          <div className="sb-sub" style={{marginTop:0}}>Choose how and what you're notified about. In-app notifications are always on.</div>
+          <div className="sb-mlabel">How you're notified</div>
+          <Toggle label="Push notifications" v={p.push} on={()=>setChannel("push")} />
+          {p.push && <PushControls me={me} />}
+          <Toggle label="Email notifications" v={p.email} on={()=>setChannel("email")} />
+          <div className="sb-mlabel">What you're notified about</div>
+          {PREF_TYPES.map(t => (
+            <Toggle key={t.key} label={t.label} v={p.perType[t.key]!==false} on={()=>setType(t.key)} />
+          ))}
+          <div className="sb-sub" style={{fontSize:12}}>Account and security messages are always sent.</div>
+          <button className="sb-btn" style={{marginTop:14}} onClick={()=>{ onSave(p); onClose(); }}>Save preferences</button>
+        </div>
       </div>
     </div>
   );
@@ -489,6 +622,12 @@ function Board({ profile, isAdmin }) {
   const [editTask, setEditTask] = useState(null);
   const [editPrefill, setEditPrefill] = useState(null);  // defaults for a new task (e.g. from an event)
   const newForEvent = (prefill) => { setEditPrefill(prefill); setEditTask("new"); };
+  // Board scoped to one event occurrence (from Home's "View content →").
+  const [boardEvent, setBoardEvent] = useState(null);
+  const viewEvent = (occ) => {
+    setBoardEvent({ id: occ.eventOccurrenceId, label: occ.name, annual: occ.annual, name: occ.name });
+    setTab("board");
+  };
   const [editUser, setEditUser] = useState(null);
   const [showReport, setShowReport] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -496,6 +635,12 @@ function Board({ profile, isAdmin }) {
 
   // Stamp the active screen onto any error/report logged from here.
   useEffect(() => setView(tab), [tab]);
+
+  // Deep link from a push notification (/?task=<id>) → open that task once.
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("task");
+    if (t) { setOpenId(t); window.history.replaceState({}, "", window.location.pathname); }
+  }, []);
 
   // Global search shortcuts: "/" or ⌘K / Ctrl+K from anywhere (but not while
   // typing in a field, so "/" stays usable in inputs).
@@ -514,6 +659,26 @@ function Board({ profile, isAdmin }) {
 
   const me = profile;
   const pendingCount = allUsers.filter(u => u.status === "pending").length;
+
+  // Notification Center (reads my notifications; backend writes them in Slice 3).
+  const notif = useNotifications(me.id);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
+  const saveNotifPrefs = async (prefs) => {
+    try { await updateDoc(doc(db, "users", me.id), { notifPrefs: prefs }); }
+    catch (e) { logIssue({ kind: "error", action: "save notif prefs", message: e.message, code: e.code }); }
+  };
+  // Foreground push → brief toast (the bell also updates live via onSnapshot).
+  const [toast, setToast] = useState(null);
+  useEffect(() => {
+    let unsub = () => {};
+    listenForeground((payload) => {
+      const n = (payload && payload.notification) || {};
+      setToast(n.title || "New notification");
+      setTimeout(() => setToast(null), 4000);
+    }).then((u) => { unsub = u; });
+    return () => unsub();
+  }, []);
 
   const nav = [
     { id:"home", ico:Ic.home, label:"Home" },
@@ -538,6 +703,8 @@ function Board({ profile, isAdmin }) {
     setEditTask(null);
   };
   const deleteTask = async (id) => { await deleteDoc(doc(db, "tasks", id)); };
+
+  
   // Archive = move to the Posted/completed status (no separate flag in the model).
   const archiveTask = async (task) =>
     updateDoc(doc(db, "tasks", task.id), {
@@ -545,6 +712,7 @@ function Board({ profile, isAdmin }) {
       activity: [...(task.activity||[]), activityEntry("posted", me.name, "Posted")],
       updatedAt: serverTimestamp(),
     });
+
   // Duplicate = fresh copy at the start of the workflow, no produced artifacts.
   const duplicateTask = async (task) => {
     const { id, comments, reactions, activity, createdAt, updatedAt,
@@ -560,6 +728,7 @@ function Board({ profile, isAdmin }) {
     Promise.all(newTasks.map((t) => addDoc(collection(db, "tasks"), {
       ...t, comments: [], reactions: {}, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     })));
+
   // Map a destination status → the activity-timeline event type.
   const eventType = (status) => ({
     "In Progress":"started", "In Review":"qa_sent", "Approved":"approved",
@@ -684,6 +853,9 @@ function Board({ profile, isAdmin }) {
               <span><div className="nm">{me.name}</div><div className="rl">{isAdmin?"Admin":"Member"} · {me.email}</div></span>
             </div>
             <ThemeToggle />
+            <button className="sb-report" onClick={()=>setNotifOpen(true)}>
+              🔔 Notifications{notif.unread>0 && <span className="pill" style={{marginLeft:6}}>{notif.unread>9?"9+":notif.unread}</span>}
+            </button>
             <button className="sb-report" onClick={()=>setShowReport(true)}>⚠︎ Report an issue</button>
             <button className="sb-signout" onClick={()=>signOut(auth)}>Sign out</button>
             <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
@@ -695,6 +867,9 @@ function Board({ profile, isAdmin }) {
             <span className="brand"><span className="sb-spark">✦</span>Creatives Board</span>
             <span style={{display:"flex",alignItems:"center",gap:10}}>
               <button className="sb-report-top" onClick={()=>setSearchOpen(true)} aria-label="Search">🔍</button>
+              <button className="sb-report-top sb-bellbtn" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
+                🔔{notif.unread>0 && <span className="sb-belldot">{notif.unread>9?"9+":notif.unread}</span>}
+              </button>
               <button className="sb-avbtn" onClick={()=>setShowDrawer(true)} aria-label="Profile and settings">
                 <span className="sb-av" style={{width:30,height:30,fontSize:11}}>{initials(me.name)}</span>
               </button>
@@ -703,9 +878,9 @@ function Board({ profile, isAdmin }) {
 
           <div className="sb-content">
             <BetaBanner onReport={()=>setShowReport(true)} />
-            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} />}
+            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} />}
             {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
-            {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} />}
+            {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} />}
             {tab==="mine"  && <Mine tasks={tasks} me={me} openTask={setOpenId} />}
             {tab==="team"  && <Team tasks={tasks} users={users} />}
             {tab==="admin" && isAdmin && (
@@ -734,9 +909,26 @@ function Board({ profile, isAdmin }) {
       )}
 
       {showDrawer && (
-        <ProfileDrawer me={me} isAdmin={isAdmin}
+        <ProfileDrawer me={me} isAdmin={isAdmin} unread={notif.unread}
           onClose={()=>setShowDrawer(false)}
+          onNotifications={()=>{ setShowDrawer(false); setNotifOpen(true); }}
           onReport={()=>{ setShowDrawer(false); setShowReport(true); }} />
+      )}
+
+      {notifOpen && (
+        <NotifCenter notif={notif}
+          onClose={()=>setNotifOpen(false)}
+          onOpenTask={(id)=>{ setNotifOpen(false); setOpenId(id); }}
+          onViewEvent={(occ)=>{ setNotifOpen(false); viewEvent(occ); }}
+          onSettings={()=>{ setNotifOpen(false); setNotifSettingsOpen(true); }} />
+      )}
+
+      {notifSettingsOpen && (
+        <NotifSettings me={me} onSave={saveNotifPrefs} onClose={()=>setNotifSettingsOpen(false)} />
+      )}
+
+      {toast && (
+        <button className="sb-toast" onClick={()=>{ setToast(null); setNotifOpen(true); }}>🔔 {toast}</button>
       )}
 
       {searchOpen && (
@@ -1039,7 +1231,7 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
 /* ===================================================================
    BOARD LIST
    =================================================================== */
-function BoardList({ tasks, openTask, me, isAdmin }) {
+function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilter }) {
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("post-asc");
   const [filtersOpen, setFiltersOpen] = useState(false);  // collapsed by default → content first
@@ -1051,10 +1243,17 @@ function BoardList({ tasks, openTask, me, isAdmin }) {
 
   const availableFilters = useMemo(
     () => BOARD_FILTERS.filter(f => !f.admin || isAdmin), [isAdmin]);
+  // When arriving from an event's "View content", scope the board to that
+  // specific occurrence (occurrence id, with a name fallback for annual events).
+  const scoped = useMemo(() => {
+    if (!eventFilter) return tasks;
+    const occ = { eventOccurrenceId: eventFilter.id, annual: eventFilter.annual, name: eventFilter.name };
+    return occurrenceTasks(occ, tasks);
+  }, [tasks, eventFilter]);
   const groups = useMemo(() => {
-    const filtered = applyBoardFilter(tasks, filter, me);
+    const filtered = applyBoardFilter(scoped, filter, me);
     return groupByStatus(sortTasks(filtered, sort));
-  }, [tasks, filter, sort, me]);
+  }, [scoped, filter, sort, me]);
 
   const total = groups.reduce((n, g) => n + g.items.length, 0);
   const activeFilter = BOARD_FILTERS.find(f => f.id === filter);
@@ -1067,6 +1266,14 @@ function BoardList({ tasks, openTask, me, isAdmin }) {
         {total} piece{total!==1?"s":""} of content{filter!=="all"?` · ${activeFilter?.label}`:""},
         grouped by where each one is in the workflow.
       </div>
+
+      {eventFilter && (
+        <div className="sb-chiprow" style={{marginTop:10}}>
+          <button className="sb-fchip on" onClick={onClearEventFilter}>
+            📅 {eventFilter.label} · Clear ✕
+          </button>
+        </div>
+      )}
 
       {/* Filters — collapsed by default so content shows first */}
       <div className="sb-filterbar">
@@ -1231,7 +1438,7 @@ function WinCard({ n, label, tone }) {
 /* The HOME landing page — a ministry / celebration dashboard, not a task list.
    It answers: what have we accomplished, what's coming up, what should I
    celebrate, what should I be aware of? Operational work lives in My Day. */
-function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent }) {
+function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent }) {
   const pw = personalWins(tasks, me);
   const tw = teamWins(tasks);
   const m = dashboardMetrics(tasks, users);
@@ -1277,19 +1484,24 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent }) {
           <button className="link" onClick={()=>goTab("board")}>Plan content →</button></div>
         <div className="sb-evlist">
           {events.slice(0,3).map((e,i) => {
-            const n = eventContentCount(e.name, tasks);
+            const n = occurrenceContentCount(e, tasks);
             return (
-            <div className="sb-ev" key={i}>
+            <div className="sb-ev" key={e.eventOccurrenceId||i}>
               <span className="sb-ev-ic">{e.kind==="birthday"?"🎂":"📅"}</span>
               <div style={{flex:1,minWidth:0}}>
                 <div className="sb-ev-name">{e.name}</div>
                 <div className="sb-ev-sub">
                   {fmtEventDate(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
-                  {n>0 && ` · ${n} content item${n!==1?"s":""} planned`}
+                  {n>0
+                    ? ` · ${n} content piece${n!==1?"s":""} planned`
+                    : <span className="sb-ev-warn"> · Content has not been planned yet</span>}
                 </div>
               </div>
-              {isAdmin && n===0 && onNewForEvent &&
-                <button className="sb-btn ghost compact" onClick={()=>onNewForEvent(eventPrefill(e))}>Create content</button>}
+              {n===0
+                ? (isAdmin && onNewForEvent &&
+                    <button className="sb-btn ghost compact" onClick={()=>onNewForEvent(eventPrefill(e))}>Create content</button>)
+                : (onViewEvent &&
+                    <button className="sb-btn ghost compact" onClick={()=>onViewEvent(e)}>View content →</button>)}
             </div>
             );
           })}
@@ -1488,7 +1700,7 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
   const [eventNote, setEventNote] = useState(false);
 
   // Does any active task reference this event? Loose token match on relatedEvent.
-  const eventCount = (e) => eventContentCount(e.name, tasks);
+  const eventCount = (e) => occurrenceContentCount(e, tasks);
   const ago = (ms) => {
     const m = Math.round((Date.now()-ms)/60000);
     if (m<1) return "just now"; if (m<60) return `${m}m ago`;

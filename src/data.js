@@ -42,14 +42,28 @@ export const priorityClass = (p) =>
 const PENDING_ROLE = { shoot: "shooter", edit: "editor", coordinate: "coordinator", design: "designer", shadow: "shadow" };
 export const pendingRoleLabel = (role) => PENDING_ROLE[role] ? `Pending ${PENDING_ROLE[role]}` : "Pending assignment";
 
-// How many tasks are tied to an event (loose token match on relatedEvent),
-// so Upcoming can show "1 content item planned" vs "no content assigned".
-export function eventContentCount(eventName, tasks) {
-  const tokens = (eventName || "").toLowerCase().split(/\W+/)
-    .filter((w) => w.length > 3 && !["pastor", "birthday", "conference"].includes(w));
-  if (!tokens.length) return 0;
-  return (tasks || []).filter((t) =>
-    tokens.some((tok) => (t.relatedEvent || "").toLowerCase().includes(tok))).length;
+// Tasks tied to a SPECIFIC event occurrence. Primary match is the structured
+// `relatedEventOccurrenceId` so a recurring event's July content never counts
+// under its August occurrence. For annual events (birthdays/holidays) we keep a
+// loose name-token fallback so legacy content (linked before occurrence ids
+// existed) still shows — that's safe because there's only one per year.
+export function occurrenceTasks(occ, tasks) {
+  if (!occ) return [];
+  const tokens = occ.annual
+    ? (occ.name || "").toLowerCase().split(/\W+/)
+        .filter((w) => w.length > 3 && !["pastor", "birthday", "conference"].includes(w))
+    : [];
+  return (tasks || []).filter((t) => {
+    if (t.relatedEventOccurrenceId) return t.relatedEventOccurrenceId === occ.eventOccurrenceId;
+    if (!tokens.length) return false;
+    return tokens.some((tok) => (t.relatedEvent || "").toLowerCase().includes(tok));
+  });
+}
+
+// How many tasks are planned for an event occurrence, so Upcoming can show
+// "1 content item planned" vs "no content assigned".
+export function occurrenceContentCount(occ, tasks) {
+  return occurrenceTasks(occ, tasks).length;
 }
 
 // support-crew role code → human label.

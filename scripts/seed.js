@@ -43,7 +43,8 @@ const PEOPLE = [
   { uid: "seed-john",   name: "John Smith",     email: "john@example.com",
     role: "member", status: "approved", skills: ["design", "shoot"],            location: ["828"], qa: true },
   { uid: "seed-alex",   name: "Alex Johnson",   email: "alex@example.com",
-    role: "member", status: "approved", skills: ["shoot", "edit"],              location: ["479"] },
+    role: "member", status: "approved", skills: ["shoot", "edit"],              location: ["479"],
+    department: "Videography", lead: true },
   { uid: "seed-sam",    name: "Sam Taylor",     email: "sam@example.com",
     role: "member", status: "approved", skills: ["edit", "coordinate"],         location: ["828"], captions: true },
   { uid: "seed-jordan", name: "Jordan Lee",     email: "jordan@example.com",
@@ -106,6 +107,8 @@ async function seedUsers() {
       status: p.status,
       skills: p.skills || [],
       location: p.location || [],
+      department: p.department || "",
+      lead: !!p.lead,
       deprioritize: !!p.deprioritize,
       limited: !!p.limited,
       manualSchedule: !!p.manualSchedule,
@@ -179,12 +182,36 @@ async function seedTasks() {
   console.log(`✓ ${TASK_SEEDS.length} tasks created`);
 }
 
+async function seedNotifications() {
+  // Demo notifications for the admin so the Notification Center is testable
+  // before Cloud Functions (Slice 3) start writing real ones. Emulator only.
+  const existing = await db.collection("notifications").where("uid", "==", "seed-jane").get();
+  await Promise.all(existing.docs.map((d) => d.ref.delete()));
+
+  const oneTask = await db.collection("tasks").limit(1).get();
+  const taskId = oneTask.empty ? "" : oneTask.docs[0].id;
+  const now = Date.now();
+  const demo = [
+    { type: "assigned", title: "You've been assigned to 'Sunday welcome reel'", body: "You're leading this piece.", taskId, read: false, ago: 18 * 60000 },
+    { type: "reminder", title: "'Easter poster series' is due in 3 days", body: "", taskId, read: false, ago: 3 * 3600000 },
+    { type: "changes", title: "Changes requested on 'Youth night recap'", body: "Tighten the first 3 seconds.", taskId, read: false, ago: 26 * 3600000 },
+    { type: "approved", title: "'New series cover art' has been approved", body: "", taskId, read: true, ago: 2 * 86400000 },
+  ];
+  await Promise.all(demo.map((n) => db.collection("notifications").add({
+    uid: "seed-jane", type: n.type, title: n.title, body: n.body, taskId: n.taskId || "",
+    read: n.read, channels: ["in-app"], dedupeKey: `demo_${n.type}`,
+    createdAt: new Date(now - n.ago),
+  })));
+  console.log(`✓ ${demo.length} demo notifications created (for jane@example.com)`);
+}
+
 async function main() {
   console.log(`Seeding emulator (${PROJECT_ID})…`);
   console.log(`  Firestore: ${process.env.FIRESTORE_EMULATOR_HOST}`);
   console.log(`  Auth:      ${process.env.FIREBASE_AUTH_EMULATOR_HOST}\n`);
   await seedUsers();
   await seedTasks();
+  await seedNotifications();
   console.log("\nDone. Sign in at the app with any of these:");
   console.log(`  Admin:   jane@example.com   /  ${PASSWORD}`);
   console.log(`  Member:  john@example.com   /  ${PASSWORD}`);

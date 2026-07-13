@@ -71,6 +71,15 @@ export function initErrorCapture() {
   installed = true;
 
   window.addEventListener("error", (e) => {
+    // Cross-origin scripts (browser extensions, Google's sign-in script, etc.)
+    // report as an opaque "Script error." with no filename and no Error object
+    // — the browser hides all detail for security. These are unactionable and
+    // aren't our code, so skip them rather than clutter the Issues log.
+    const opaque = !e.error && !e.filename && (!e.message || e.message === "Script error.");
+    if (opaque) {
+      console.debug("[ignored cross-origin script error]", e.message);
+      return;
+    }
     logIssue({
       kind: "error",
       message: e.message || "Uncaught error",

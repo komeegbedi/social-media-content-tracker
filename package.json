@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "emulators": "firebase emulators:start",
     "seed": "node scripts/seed.js",
-    "deploy": "npm run build && firebase deploy --only hosting,firestore:rules"
+    "deploy": "npm run build && firebase deploy --only hosting,firestore:rules,firestore:indexes"
   },
   "dependencies": {
     "firebase": "^10.12.2",

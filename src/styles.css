@@ -393,6 +393,47 @@ a{color:inherit}
 .sb-sheet .bd{padding:16px 18px calc(26px + env(safe-area-inset-bottom))}
 .sb-x{background:var(--line);border:none;width:36px;height:36px;border-radius:50%;font-size:17px;color:var(--ink);flex:none;cursor:pointer}
 
+/* --- Notification Center --- */
+.sb-notifpanel{background:var(--paper);width:100%;max-width:440px;border-radius:22px 22px 0 0;
+  max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
+  display:flex;flex-direction:column;overflow:hidden;animation:rise .22s ease}
+@media(min-width:900px){ .sb-notifpanel{border-radius:20px;max-height:80dvh} }
+.sb-notifhd{position:sticky;top:0;background:var(--paper);padding:16px 16px 12px;
+  border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}
+@media(max-width:899px){ .sb-notifhd{padding-top:calc(18px + env(safe-area-inset-top))} }
+.sb-notifhd-actions{display:flex;align-items:center;gap:8px}
+.sb-iconbtn{background:var(--line);border:none;width:32px;height:32px;border-radius:50%;
+  font-size:15px;color:var(--ink);cursor:pointer}
+.sb-notiflist{overflow-y:auto;-webkit-overflow-scrolling:touch;padding:6px 0 calc(14px + env(safe-area-inset-bottom))}
+.sb-notif{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;
+  background:none;border:none;cursor:pointer;padding:12px 16px;border-bottom:1px solid var(--line)}
+.sb-notif:hover{background:var(--card)}
+.sb-notif.unread{background:color-mix(in srgb,var(--violet) 8%,transparent)}
+.sb-notif .ic{font-size:18px;line-height:1.3;flex:none}
+.sb-notif .bd{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.sb-notif .ti{font-size:13.5px;font-weight:600;color:var(--ink)}
+.sb-notif .bo{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.sb-notif .mt{font-size:11px;color:var(--muted);margin-top:1px}
+.sb-notif .ndot{width:8px;height:8px;border-radius:50%;background:var(--violet);flex:none;margin-top:5px}
+/* Push enrollment note inside notification settings */
+.sb-push{font-size:12.5px;color:var(--muted);background:var(--card);border:1px solid var(--line);
+  border-radius:12px;padding:11px 13px;margin:4px 0 8px}
+.sb-push.ok{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
+.sb-push b{color:var(--ink);display:block;margin-bottom:5px;font-size:13px}
+.sb-push ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+/* Foreground push toast */
+.sb-toast{position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(78px + env(safe-area-inset-bottom));z-index:70;
+  background:var(--ink);color:var(--paper);border:none;border-radius:999px;
+  padding:11px 18px;font-size:13px;font-weight:600;max-width:88vw;cursor:pointer;
+  box-shadow:0 8px 24px rgba(0,0,0,.28);animation:rise .2s ease}
+@media(min-width:900px){ .sb-toast{bottom:24px} }
+/* Bell buttons + unread badge */
+.sb-bellbtn{position:relative}
+.sb-belldot{position:absolute;top:-3px;right:-3px;background:var(--red);color:#fff;
+  font-size:9px;font-weight:700;min-width:15px;height:15px;padding:0 3px;border-radius:999px;
+  display:flex;align-items:center;justify-content:center;line-height:1}
+
 /* Creative brief callout in the task detail sheet. */
 .sb-brief{background:var(--violet-soft);border:1px solid var(--line);border-radius:13px;
   padding:12px 14px;margin-bottom:14px}
