@@ -162,6 +162,7 @@ const seenRelease = () => { try { return localStorage.getItem("sb-seen-release")
 const markReleaseSeen = () => { try { localStorage.setItem("sb-seen-release", LATEST_RELEASE); } catch {} };
 
 function WhatsNew({ onClose }) {
+  useLockBody();
   useEffect(() => { markReleaseSeen(); }, []);
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -193,6 +194,7 @@ function WhatsNew({ onClose }) {
 
 /* Feature-request form — reuses the issues pipeline (kind: feature_request). */
 function FeatureRequestModal({ onClose }) {
+  useLockBody();
   const [f, setF] = useState({ title:"", problem:"", beneficiary:"", link:"" });
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
@@ -652,6 +654,16 @@ function useCollection(path, canRead) {
         message: err.message, code: err.code }));
   }, [path, canRead]);
   return docs;
+}
+
+// Lock body scroll while an overlay is open, so a sheet/drawer is the only
+// scroll region on mobile (no competing background scroll). Ref-counted.
+let _lockCount = 0;
+function useLockBody() {
+  useEffect(() => {
+    _lockCount++; document.body.style.overflow = "hidden";
+    return () => { _lockCount = Math.max(0, _lockCount - 1); if (_lockCount === 0) document.body.style.overflow = ""; };
+  }, []);
 }
 
 // Live subscription to a single document. undefined=loading, null=absent, object=data.
@@ -1848,21 +1860,20 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, op
             const n = occurrenceContentCount(e, tasks);
             return (
             <div className="sb-ev" key={e.eventOccurrenceId||i}>
-              <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
-              <div style={{flex:1,minWidth:0}}>
-                <div className="sb-ev-name">{e.name}</div>
-                <div className="sb-ev-sub">
-                  {fmtEventDate(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
-                  {n>0
-                    ? ` · ${n} content piece${n!==1?"s":""} planned`
-                    : <span className="sb-ev-warn"> · Content has not been planned yet</span>}
+              <div className="sb-ev-top">
+                <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div className="sb-ev-name">{e.name}</div>
+                  <div className="sb-ev-sub">{fmtEventDate(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}</div>
+                  <div className={"sb-ev-status"+(n>0?" ok":"")}>
+                    {n>0 ? `${n} content piece${n!==1?"s":""} planned` : "No content planned yet"}</div>
                 </div>
               </div>
               {n===0
                 ? (isAdmin && onNewForEvent &&
-                    <button className="sb-btn ghost compact" onClick={()=>onNewForEvent(eventPrefill(e))}>Create content</button>)
+                    <button className="sb-btn ghost compact sb-ev-act" onClick={()=>onNewForEvent(eventPrefill(e))}>Create content</button>)
                 : (onViewEvent &&
-                    <button className="sb-btn ghost compact" onClick={()=>onViewEvent(e)}>View content →</button>)}
+                    <button className="sb-btn ghost compact sb-ev-act" onClick={()=>onViewEvent(e)}>View content</button>)}
             </div>
             );
           })}
@@ -2043,6 +2054,7 @@ function AdminEvents({ series }) {
   );
 }
 function EventSeriesEditor({ doc: d, onSave, onClose }) {
+  useLockBody();
   const [f, setF] = useState(d ? { ...d } : { name:"", emoji:"", description:"", frequency:"monthly-weekday",
     interval:1, anchorDate:"", endDate:"", active:true, showOnHome:true });
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
@@ -2791,6 +2803,7 @@ function TaskCard({ t, me, onClick }) {
    TASK DETAIL
    =================================================================== */
 function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onApprove, onLinks, onCaption, onRequestChanges, onBlocked, onComment, onReact, onEdit }) {
+  useLockBody();
   const [draft, setDraft] = useState("");
   // Local drafts; persisted on blur. Component is keyed by task id, so these
   // reset when a new task opens.
@@ -2799,6 +2812,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
   const [caption, setCaptionDraft] = useState(task.caption || "");
   const [postLink, setPostLink] = useState(task.postLink || "");
   const [changeNote, setChangeNote] = useState("");
+  const [showOverride, setShowOverride] = useState(false);
   const [askChanges, setAskChanges] = useState(false);
   const [warn, setWarn] = useState("");
   const EMOJIS = ["👍","🔥","🙏","👀"];
@@ -3033,15 +3047,18 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
           </div>
           <button className="sb-btn compact" disabled={!draft.trim()} onClick={()=>{ onComment(draft.trim()); setDraft(""); }}>Post note</button>
 
-          {/* Admin override — jump the workflow to any status if needed. */}
+          {/* Workflow moves through the explicit action above; admins keep a
+              tucked-away manual override for corrections (not a duplicate field). */}
           {isAdmin && <>
-            <div className="sb-field" style={{marginTop:18}}><label>Admin · set status</label>
+            <button className="sb-btn ghost" style={{marginTop:18}} onClick={onEdit}>Edit content details</button>
+            <button className="sb-quietlink" style={{marginTop:10}} onClick={()=>setShowOverride(o=>!o)} aria-expanded={showOverride}>
+              {showOverride ? "Hide manual status override" : "Change status manually"}</button>
+            {showOverride && <div className="sb-field" style={{marginTop:8}}>
               <div className="sb-seg" style={{flexWrap:"wrap"}}>
                 {STAGES.map(s=>(
                   <button key={s} className={"sb-segbtn"+(task.status===s?" on":"")} onClick={()=>onStatus(s)}>{s}</button>))}
               </div>
-            </div>
-            <button className="sb-btn ghost" style={{marginTop:9}} onClick={onEdit}>Edit content details</button>
+            </div>}
           </>}
         </div>
       </div>
@@ -3139,6 +3156,7 @@ function ReminderSummary({ reminders, defaults, postDate, onCustomize }) {
 }
 
 function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
+  useLockBody();
   const rem = reminders || [];
   const [openId, setOpenId] = useState(null);
   useEffect(() => {
@@ -3238,6 +3256,7 @@ function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
 }
 
 function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, onAuto }) {
+  useLockBody();
   const [f, setF] = useState(() => {
     const base = task ? { ...task } : {
       title:"", type:"Reel", location:"828", owner:users[0]?.name||"", ownerSuggested:"",

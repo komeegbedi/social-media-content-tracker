@@ -373,12 +373,24 @@ a{color:var(--primary)}
 .sb-mlabel{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:12px 2px 8px}
 /* Upcoming events list on Home. */
 .sb-evlist{display:flex;flex-direction:column;gap:8px}
-.sb-ev{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
-  border-radius:13px;padding:12px 14px;box-shadow:var(--shadow)}
-.sb-ev-ic{font-size:22px;flex:none}
-.sb-ev-name{font-weight:600;font-size:14.5px}
-.sb-ev-sub{font-size:12px;color:var(--muted);margin-top:2px}
-.sb-ev-warn{color:var(--red);font-weight:700}
+/* Event cards (v1.1.2 mobile): stacked info + a single action that spans the
+   card on mobile and sits inline on desktop. Quiet status, minimal shadow. */
+.sb-ev{display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;padding:14px}
+.sb-ev-top{display:flex;align-items:flex-start;gap:11px}
+.sb-ev-ic{font-size:22px;flex:none;line-height:1.2;color:var(--text-muted)}
+.sb-ev-name{font-weight:600;font-size:15px;line-height:1.3;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sb-ev-sub{font-size:12.5px;color:var(--text-muted);margin-top:3px}
+.sb-ev-status{font-size:12px;margin-top:5px;font-weight:600;color:var(--text-secondary)}
+.sb-ev-status.ok{color:var(--success)}
+.sb-ev-act{width:100%;justify-content:center}
+@media(min-width:560px){
+  .sb-ev{flex-direction:row;align-items:center}
+  .sb-ev-top{flex:1;min-width:0}
+  .sb-ev-act{width:auto}
+}
+.sb-ev-warn{color:var(--danger);font-weight:700}
 
 /* ===== Admin activity feed ===== */
 .sb-actfeed{display:flex;flex-direction:column}
@@ -473,17 +485,19 @@ a{color:var(--primary)}
 .sb-sheet{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
   max-height:calc(100vh - 48px);
   max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
-  overflow-y:auto;-webkit-overflow-scrolling:touch;animation:rise .22s ease}
+  display:flex;flex-direction:column;overflow:hidden;-webkit-overflow-scrolling:touch;
+  animation:rise .22s ease;overscroll-behavior:contain}
 @media(min-width:900px){ .sb-scrim{align-items:center;padding:20px}
   .sb-sheet{border-radius:20px;max-height:86dvh} }
 @keyframes rise{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
 /* Sticky header pins the type badge + ✕ to the top of the panel, always
    visible and tappable; extra top padding clears the notch/home indicator. */
-.sb-sheet .hd{position:sticky;top:0;background:var(--surface-elevated);
+.sb-sheet .hd{flex:0 0 auto;background:var(--surface-elevated);
   padding:16px 18px 12px;border-bottom:1px solid var(--line);
   display:flex;align-items:center;justify-content:space-between;z-index:3}
 @media(max-width:899px){ .sb-sheet .hd{padding-top:calc(18px + env(safe-area-inset-top))} }
-.sb-sheet .bd{padding:16px 18px calc(26px + env(safe-area-inset-bottom))}
+.sb-sheet .bd{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  padding:16px 18px calc(26px + env(safe-area-inset-bottom))}
 .sb-x{background:var(--surface-muted);border:1px solid var(--border);width:40px;height:40px;border-radius:50%;
   color:var(--text-primary);flex:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 @media(max-width:899px){ .sb-x{width:44px;height:44px} }
