@@ -1121,3 +1121,10 @@ body,.sb-side,.sb-nav,.sb-sheet,.sb-drawer,.sb-notifpanel,.sb-ev,.sb-attn,.sb-pr
 .sb-pwtoggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:36px;height:36px;
   display:flex;align-items:center;justify-content:center;background:none;border:none;color:var(--text-muted);cursor:pointer}
 .sb-pwtoggle:hover{color:var(--text-secondary)}
+
+/* Admin push-status badge (People) — text + tone, not colour alone */
+.sb-pushbadge{font-size:11px;font-weight:600;padding:2px 9px;border-radius:var(--r-pill);
+  border:1px solid var(--border)}
+.sb-pushbadge.on{background:var(--success-muted);color:var(--success);border-color:transparent}
+.sb-pushbadge.off{background:var(--surface-muted);color:var(--text-muted)}
+.sb-pushbadge.none{background:var(--warning-muted);color:var(--warning);border-color:transparent}

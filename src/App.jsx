@@ -2357,6 +2357,14 @@ function PendingRow({ u, tasks, onReview, onReject, onAssignSuggested }) {
   );
 }
 
+// Privacy-safe push status from the user doc summary (no token exposure).
+function pushStatus(u) {
+  if (u.notifPrefs && u.notifPrefs.push === false) return { label: "Push off", cls: "off" };
+  const n = u.pushDeviceCount || 0;
+  if (n > 0) return { label: `Push on · ${n} device${n!==1?"s":""}`, cls: "on" };
+  return { label: "No active device", cls: "none" };
+}
+
 /* A team member card — identity, campus, department, permissions, and a live
    active-task count. Edit is primary; Remove lives in the kebab (safer). */
 function PersonCard({ u, tasks, onEdit, onRemove }) {
@@ -2378,6 +2386,7 @@ function PersonCard({ u, tasks, onEdit, onRemove }) {
       <div className="sub"><span>{campus} · {dept}</span></div>
       <div className="sb-prow-chips">
         {chips.map(c => <span key={c} className={"sb-rolechip rc-"+c.toLowerCase()}>{c}</span>)}
+        {(() => { const ps = pushStatus(u); return <span className={"sb-pushbadge "+ps.cls}>{ps.label}</span>; })()}
         <span className="sb-activecount">{active} active task{active!==1?"s":""}</span>
       </div>
     </div>
@@ -2387,6 +2396,7 @@ function PersonCard({ u, tasks, onEdit, onRemove }) {
 /* People = approvals + team management: search, filters, grouped roster. */
 function AdminPeople({ users, tasks, onEditUser, onDeleteUser, onRemoveUser, onAssignSuggested }) {
   const [q, setQ] = useState("");
+  const [pushFilter, setPushFilter] = useState("all");
   const [filter, setFilter] = useState("all");
   const [removing, setRemoving] = useState(null);   // user pending removal
   const searching = q.trim().length > 0;
@@ -2394,6 +2404,9 @@ function AdminPeople({ users, tasks, onEditUser, onDeleteUser, onRemoveUser, onA
   const pending = users.filter(u => u.status === "pending");
   const allApproved = users.filter(u => u.status === "approved" || u.role === "admin");
   let team = searching ? searchPeople(allApproved, q) : applyPeopleFilter(allApproved, filter);
+  if (pushFilter !== "all") team = team.filter(u => pushFilter === "on"
+    ? (u.notifPrefs?.push !== false && (u.pushDeviceCount || 0) > 0)
+    : (u.notifPrefs?.push === false || !(u.pushDeviceCount || 0)));
   const groups = groupPeople(team);
   const teamTotal = team.length;
   const activeLabel = PEOPLE_FILTERS.find(f => f.id === filter)?.label;
@@ -2421,6 +2434,11 @@ function AdminPeople({ users, tasks, onEditUser, onDeleteUser, onRemoveUser, onA
       {!searching && <div className="sb-chiprow">
         {PEOPLE_FILTERS.map(f => (
           <button key={f.id} className={"sb-fchip"+(filter===f.id?" on":"")} onClick={()=>setFilter(f.id)}>{f.label}</button>
+        ))}
+      </div>}
+      {!searching && <div className="sb-chiprow" style={{marginTop:6}} role="group" aria-label="Filter by push notifications">
+        {[["all","All push"],["on","Push enabled"],["off","Push not enabled"]].map(([id,lbl]) => (
+          <button key={id} className={"sb-fchip"+(pushFilter===id?" on":"")} onClick={()=>setPushFilter(id)}>{lbl}</button>
         ))}
       </div>}
 
