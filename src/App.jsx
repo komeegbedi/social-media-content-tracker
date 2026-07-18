@@ -2788,7 +2788,9 @@ function ReminderEditor({ reminders, onChange }) {
             <select value={r.when} onChange={e => upd(i, { when: e.target.value })}>
               <option value="before">before due</option><option value="after">after due</option>
             </select>
-            <label className="sb-remtog"><input type="checkbox" checked={r.enabled !== false} onChange={() => upd(i, { enabled: r.enabled === false })} />on</label>
+            <button type="button" className={"sb-sw"+(r.enabled!==false?" on":"")} role="switch"
+              aria-checked={r.enabled!==false} aria-label="Reminder enabled"
+              onClick={() => upd(i, { enabled: r.enabled === false })}><span/></button>
             <button type="button" className="sb-rem-x" onClick={() => onChange(rem.filter((_, j) => j !== i))} aria-label="Remove reminder"><XMarkIcon className="hi" aria-hidden="true" /></button>
           </div>
           <div className="chips">
@@ -2808,6 +2810,139 @@ function ReminderEditor({ reminders, onChange }) {
   );
 }
 
+/* ---- Reminder redesign (v1.1.2) ------------------------------------
+   The task form shows only a concise SUMMARY; the full schedule opens in
+   a bottom sheet rendered as an ordered timeline in Winnipeg time. */
+const remPhrase = (r) => r.offset===0 ? "On the due date"
+  : `${r.offset} day${r.offset!==1?"s":""} ${r.when==="after"?"overdue":"before"}`;
+const remDate = (postDate, r) => {
+  if (!postDate) return null;
+  const [y,m,d] = postDate.split("-").map(Number);
+  const dt = new Date(y, m-1, d);
+  dt.setDate(dt.getDate() + (r.when==="after" ? r.offset : -r.offset));
+  return dt.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}) + " at 9:00 AM";
+};
+const remChrono = (r) => (r.when==="after" ? 1 : -1) * (Number(r.offset)||0);
+const sameSchedule = (a, b) => JSON.stringify(a||[]) === JSON.stringify(b||[]);
+const CH_LABEL = { "in-app":"In-app", push:"Push", email:"Email" };
+const RCP_LABEL = { owner:"Owner", crew:"Crew", lead:"Lead", admins:"Admins" };
+
+function ReminderSummary({ reminders, defaults, postDate, onCustomize }) {
+  const rem = reminders || [];
+  const enabled = rem.filter(r => r.enabled !== false);
+  const isDefault = sameSchedule(rem, defaults);
+  const phrases = [...enabled].sort((a,b)=>remChrono(a)-remChrono(b)).map(remPhrase);
+  return (
+    <div className="sb-remsum">
+      <div className="bd">
+        <b>{isDefault ? "Using team default" : "Custom schedule"} · {enabled.length} reminder{enabled.length!==1?"s":""}</b>
+        <span>{enabled.length ? phrases.join(", ") : "Reminders are off for this content item."}</span>
+      </div>
+      <button type="button" className="sb-btn ghost compact" onClick={onCustomize}>
+        {enabled.length ? "Customize reminders" : "Enable reminders"}</button>
+    </div>
+  );
+}
+
+function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
+  const rem = reminders || [];
+  const [openId, setOpenId] = useState(null);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const upd = (id, patch) => onChange(rem.map(r => r.id===id ? { ...r, ...patch } : r));
+  const toggleArr = (id, key, val) => {
+    const r = rem.find(x=>x.id===id); const s = new Set(r[key]||[]);
+    s.has(val) ? s.delete(val) : s.add(val); upd(id, { [key]: [...s] });
+  };
+  const add = () => { if (rem.length >= MAX_REMINDERS) return;
+    const nr = { id:`r${Date.now()}`, offset:1, when:"before", channels:[...REMINDER_CHANNELS], recipients:["owner"], enabled:true };
+    onChange([...rem, nr]); setOpenId(nr.id); };
+  const sorted = [...rem].sort((a,b)=>remChrono(a)-remChrono(b));
+  const isDefault = sameSchedule(rem, defaults);
+  return (
+    <div className="sb-scrim" onClick={onClose}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Reminder schedule">
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Reminders</b>
+          <button className="sb-x" onClick={onClose} aria-label="Close reminders"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
+        <div className="bd">
+          <div className="sb-sub" style={{marginTop:0}}>All reminder times are shown in Winnipeg time.</div>
+          {rem.length===0 && <div className="sb-empty compact">
+            Reminders are off for this content item. Turn reminders on to notify the assigned team before the due date.</div>}
+          <div className="sb-remtl">
+            {sorted.map(r => {
+              const off = r.enabled===false;
+              const invalid = !off && (!(r.channels||[]).length || !(r.recipients||[]).length);
+              const expanded = openId===r.id;
+              const when = remDate(postDate, r);
+              return (
+                <div key={r.id} className={"sb-tlrow"+(off?" off":"")}>
+                  <span className="tl-dot" aria-hidden="true"/>
+                  <div className="tl-main">
+                    <button type="button" className="tl-head" onClick={()=>setOpenId(expanded?null:r.id)}
+                      aria-expanded={expanded}>
+                      <span className="tl-when">
+                        <b>{remPhrase(r)}</b>
+                        {when && <span className="tl-date">{when}</span>}
+                        <span className="tl-meta">
+                          {(r.channels||[]).map(c=>CH_LABEL[c]||c).join(" · ") || "No channels"}
+                          {" — "}{(r.recipients||[]).map(c=>RCP_LABEL[c]||c).join(" and ") || "no recipients"}
+                        </span>
+                      </span>
+                      <span className={"sb-chev"+(expanded?" open":"")}><ChevronRightIcon className="hi hi-sm" aria-hidden="true"/></span>
+                    </button>
+                    {invalid && <div className="tl-err" role="alert">Choose at least one channel and one recipient.</div>}
+                    {expanded && (
+                      <div className="tl-adv">
+                        <div className="tl-time">
+                          <input type="number" min="0" max="60" value={r.offset} aria-label="Days"
+                            onChange={e=>upd(r.id,{offset:Math.max(0,Math.min(60,Number(e.target.value)||0))})}/>
+                          <span>day{r.offset===1?"":"s"}</span>
+                          <select value={r.when} aria-label="Before or after due date"
+                            onChange={e=>upd(r.id,{when:e.target.value})}>
+                            <option value="before">before due</option><option value="after">after due</option>
+                          </select>
+                        </div>
+                        <div className="tl-lbl">Delivery options</div>
+                        <div className="chips">
+                          {REMINDER_CHANNELS.map(c => <button type="button" key={c}
+                            className={"sb-rchip"+((r.channels||[]).includes(c)?" on":"")}
+                            aria-pressed={(r.channels||[]).includes(c)}
+                            onClick={()=>toggleArr(r.id,"channels",c)}>{CH_LABEL[c]||c}</button>)}
+                        </div>
+                        <div className="chips">
+                          {REMINDER_RECIPIENTS.map(c => <button type="button" key={c}
+                            className={"sb-rchip"+((r.recipients||[]).includes(c)?" on":"")}
+                            aria-pressed={(r.recipients||[]).includes(c)}
+                            onClick={()=>toggleArr(r.id,"recipients",c)}>{RCP_LABEL[c]||c}</button>)}
+                        </div>
+                        <button type="button" className="link danger" onClick={()=>{ onChange(rem.filter(x=>x.id!==r.id)); setOpenId(null); }}>
+                          Remove this reminder</button>
+                      </div>
+                    )}
+                  </div>
+                  <button type="button" className={"sb-sw"+(!off?" on":"")} role="switch" aria-checked={!off}
+                    aria-label={`Reminder ${remPhrase(r)} enabled`}
+                    onClick={()=>upd(r.id,{enabled:off})}><span/></button>
+                </div>
+              );
+            })}
+          </div>
+          {rem.length<MAX_REMINDERS
+            ? <button type="button" className="sb-btn ghost compact" onClick={add}><PlusIcon className="hi hi-sm" aria-hidden="true"/> Add reminder</button>
+            : <div className="sb-sub">Maximum {MAX_REMINDERS} reminders.</div>}
+          <div className="sb-btnrow" style={{marginTop:14}}>
+            {!isDefault && <button type="button" className="sb-btn ghost" onClick={()=>onChange([...(defaults||[])])}>Use team default</button>}
+            <button type="button" className="sb-btn" onClick={onClose}>Done</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, onAuto }) {
   const [f, setF] = useState(() => {
     const base = task ? { ...task } : {
@@ -2822,6 +2957,8 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
   });
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
   const valid = f.title.trim() && f.location && f.type && f.owner;
+  const [remOpen, setRemOpen] = useState(false);
+  const remDefaults = (defaultReminders && defaultReminders.length) ? defaultReminders : DEFAULT_REMINDERS;
   return (
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
@@ -2893,10 +3030,12 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
           <AddCrew users={users} onAdd={(c)=>set("support",[...(f.support||[]),c])} />
 
           <div className="sb-field" style={{marginTop:18}}>
-            <label>Reminder schedule</label>
-            <div className="sb-sub" style={{marginTop:0}}>Reminders fire at 9:00 AM (Winnipeg) relative to the post date. New content starts from the default schedule.</div>
-            <ReminderEditor reminders={f.reminders} onChange={(r)=>set("reminders",r)} />
+            <label>Reminders</label>
+            <ReminderSummary reminders={f.reminders} defaults={remDefaults}
+              postDate={f.postDate} onCustomize={()=>setRemOpen(true)} />
           </div>
+          {remOpen && <ReminderSheet reminders={f.reminders} defaults={remDefaults}
+            postDate={f.postDate} onChange={(r)=>set("reminders",r)} onClose={()=>setRemOpen(false)} />}
 
           <button className="sb-btn" style={{marginTop:14}} disabled={!valid} onClick={()=>onSave(f)}>{task?"Save changes":"Create task"}</button>
           {!valid && <div className="sb-sub" style={{marginTop:8,textAlign:"center"}}>Title, type, location and owner are required.</div>}
