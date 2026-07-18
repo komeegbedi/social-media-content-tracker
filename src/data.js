@@ -7,6 +7,16 @@ export const STAGES = [
   "Planned", "In Progress", "In Review", "Changes Requested", "Approved", "Ready to Post", "Posted",
 ];
 
+// Email format validation (client). Trims, rejects missing @ / domain,
+// spaces, and multiple @. Mirrors the server-side EMAIL_RE in emailService.
+// Not a deliverability guarantee — format only.
+export function isValidEmail(raw) {
+  const e = (raw || "").trim();
+  if (!e || /\s/.test(e)) return false;
+  if ((e.match(/@/g) || []).length !== 1) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+}
+
 // Reminder-schedule building blocks (v1.1). Mirrors the server default in
 // functions/lib.js; the server falls back to this if settings aren't set.
 export const REMINDER_CHANNELS = ["in-app", "push", "email"];

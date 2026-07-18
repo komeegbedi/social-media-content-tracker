@@ -28,7 +28,7 @@ import {
   taskProblem, ADMIN_FILTERS, applyAdminFilter,
   DEPARTMENTS, roleChips, userActiveTasks, PEOPLE_FILTERS, applyPeopleFilter, groupPeople,
   crewRoleLabel, pendingCrewLabel, CREW_ROLES, occurrenceContentCount, occurrenceTasks,
-  DEFAULT_REMINDERS, REMINDER_CHANNELS, REMINDER_RECIPIENTS, MAX_REMINDERS,
+  DEFAULT_REMINDERS, REMINDER_CHANNELS, REMINDER_RECIPIENTS, MAX_REMINDERS, isValidEmail,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
@@ -38,7 +38,7 @@ import {
   HomeIcon, ClockIcon, ViewColumnsIcon, ClipboardDocumentListIcon, UserGroupIcon,
   Cog6ToothIcon, BellIcon, MagnifyingGlassIcon, XMarkIcon, ChevronRightIcon,
   EllipsisHorizontalIcon, ExclamationTriangleIcon, SunIcon, MoonIcon, FunnelIcon,
-  BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, SparklesIcon,
+  BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, SparklesIcon, EyeIcon, EyeSlashIcon,
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
@@ -473,6 +473,7 @@ function AdminEmailTest() {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
   const send = async () => {
+    if (!isValidEmail(to)) { setStatus({ ok:false, msg:"Enter a valid recipient email address before sending the test." }); return; }
     setBusy(true); setStatus(null);
     try {
       const res = await httpsCallable(functions, "sendTestEmail")({ to: to.trim() });
@@ -808,6 +809,8 @@ function Login({ online = true }) {
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
   const [busy, setBusy] = useState(false);
+  const [emailErr, setEmailErr] = useState("");
+  const [showPw, setShowPw] = useState(false);
 
   const friendly = (e) => {
     const c = (e && e.code) || "";
@@ -823,7 +826,9 @@ function Login({ online = true }) {
   };
 
   const doEmail = async () => {
-    setErr(""); setOk(""); setBusy(true);
+    setErr(""); setOk(""); setEmailErr("");
+    if (!isValidEmail(email)) { setEmailErr("Enter a valid email address, such as name@example.com."); return; }
+    setBusy(true);
     try {
       if (mode === "register") {
         if (!name.trim()) throw { code: "name" };
@@ -846,7 +851,13 @@ function Login({ online = true }) {
     finally { setBusy(false); }
   };
 
-  const toggleMode = () => { setMode(m=>m==="register"?"signin":"register"); setErr(""); setOk(""); };
+  const toggleMode = () => { setMode(m=>m==="register"?"signin":"register"); setErr(""); setOk(""); setEmailErr(""); };
+  const doReset = async () => {
+    setErr(""); setOk("");
+    if (!isValidEmail(email)) { setEmailErr("Enter your email above first, then tap reset."); return; }
+    try { await sendPasswordResetEmail(auth, email.trim()); setOk("Password reset email sent. Check your inbox."); }
+    catch (e) { setErr(friendly(e)); }
+  };
   return (
     <div className="sb-login">
       <div className="sb-loginbox">
@@ -872,12 +883,19 @@ function Login({ online = true }) {
               <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="e.g. John Smith" /></div>
           )}
           <div className="sb-field"><label>Email</label>
-            <input type="email" autoComplete="username" value={email}
-              onChange={(e)=>setEmail(e.target.value)} placeholder="you@email.com" /></div>
-          <div className="sb-field"><label>Password</label>
-            <input type="password" autoComplete={mode==="register"?"new-password":"current-password"}
-              value={pw} onChange={(e)=>setPw(e.target.value)} placeholder="••••••••"
-              onKeyDown={(e)=>{ if(e.key==="Enter") doEmail(); }} /></div>
+            <input type="email" inputMode="email" autoComplete="username" value={email}
+              aria-invalid={!!emailErr} aria-describedby={emailErr?"login-email-err":undefined}
+              onChange={(e)=>{ setEmail(e.target.value); if(emailErr) setEmailErr(""); }} placeholder="you@email.com" />
+            {emailErr && <div className="sb-fielderr" id="login-email-err" role="alert">{emailErr}</div>}</div>
+          <div className="sb-field">
+            <label>Password{mode!=="register" && <button type="button" className="sb-fieldlink" onClick={doReset}>Forgot?</button>}</label>
+            <div className="sb-pwwrap">
+              <input type={showPw?"text":"password"} autoComplete={mode==="register"?"new-password":"current-password"}
+                value={pw} onChange={(e)=>setPw(e.target.value)} placeholder="••••••••"
+                onKeyDown={(e)=>{ if(e.key==="Enter") doEmail(); }} />
+              <button type="button" className="sb-pwtoggle" onClick={()=>setShowPw(v=>!v)} aria-label={showPw?"Hide password":"Show password"}>
+                {showPw ? <EyeSlashIcon className="hi hi-sm" aria-hidden="true"/> : <EyeIcon className="hi hi-sm" aria-hidden="true"/>}</button>
+            </div></div>
 
           <button className="sb-btn sb-lprimary" onClick={doEmail} disabled={busy}>
             {busy ? "Please wait…" : mode === "register" ? "Create account" : "Sign in"}

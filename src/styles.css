@@ -1110,3 +1110,14 @@ body,.sb-side,.sb-nav,.sb-sheet,.sb-drawer,.sb-notifpanel,.sb-ev,.sb-attn,.sb-pr
 .sb-relitem span{font-size:13px;color:var(--text-secondary);line-height:1.5}
 .sb-newbadge{margin-left:auto;background:var(--primary);color:#fff;font-size:10px;font-weight:700;
   border-radius:var(--r-pill);padding:2px 8px}
+
+/* Login field refinements (v1.1.2) */
+.sb-fielderr{font-size:12px;color:var(--danger);margin-top:5px}
+.sb-fieldlink{background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;
+  margin-left:auto;cursor:pointer;padding:0}
+.sb-field label{display:flex;align-items:center}
+.sb-pwwrap{position:relative;display:flex}
+.sb-pwwrap input{flex:1;padding-right:44px}
+.sb-pwtoggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:36px;height:36px;
+  display:flex;align-items:center;justify-content:center;background:none;border:none;color:var(--text-muted);cursor:pointer}
+.sb-pwtoggle:hover{color:var(--text-secondary)}
