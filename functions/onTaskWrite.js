@@ -87,18 +87,31 @@ exports.onTaskWrite = onDocumentWritten(
     if (after.status !== before?.status) {
       const owner = byName[after.owner];
       const keyBase = `status_${taskId}_${statusKey(after.status)}`;
-      if (after.status === "In Review")
-        await notifyUsers([...qaUsers, ...admins], { type: "qa", taskId, keyBase,
+      if (after.status === "In Review") {
+        // QA reviewers own the next action (review). Admins get in-app only,
+        // and only if they aren't already reviewers, so they aren't push-spammed.
+        const reviewers = qaUsers;
+        const reviewerIds = new Set(reviewers.map((u) => u.uid));
+        await notifyUsers(reviewers, { type: "qa", taskId, keyBase,
           title: `'${after.title}' is awaiting review` });
-      else if (after.status === "Changes Requested")
+        const otherAdmins = admins.filter((u) => !reviewerIds.has(u.uid));
+        if (otherAdmins.length) await notifyUsers(otherAdmins, { type: "qa", taskId, keyBase: `${keyBase}_admin`,
+          channels: ["in-app"], title: `'${after.title}' was submitted for review` });
+      } else if (after.status === "Changes Requested") {
         await notifyUsers(owner ? [owner] : [], { type: "changes", taskId, keyBase,
           title: `Changes requested on '${after.title}'` });
-      else if (after.status === "Approved")
-        await notifyUsers([owner, ...captionUsers], { type: "approved", taskId, keyBase,
+      } else if (after.status === "Approved") {
+        // Owner: informational (in-app only). Caption/posting team: action —
+        // approval is their cue to caption, so they get push.
+        if (owner) await notifyUsers([owner], { type: "approved", taskId, keyBase, channels: ["in-app"],
           title: `'${after.title}' has been approved` });
-      else if (after.status === "Ready to Post")
+        const captioners = captionUsers.filter((u) => !owner || u.uid !== owner.uid);
+        if (captioners.length) await notifyUsers(captioners, { type: "ready", taskId, keyBase: `${keyBase}_caption`,
+          title: `'${after.title}' is approved — ready to caption` });
+      } else if (after.status === "Ready to Post") {
         await notifyUsers(captionUsers, { type: "ready", taskId, keyBase,
           title: `'${after.title}' is ready to publish` });
+      }
     }
 
     // --- reminder materialization ---

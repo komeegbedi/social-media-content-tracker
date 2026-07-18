@@ -19,7 +19,7 @@ exports.onUserWrite = onDocumentWritten(
       const { list } = await loadUsers();
       const admins = list.filter((u) => u.role === "admin" && u.uid !== uid);
       await notifyUsers(admins, {
-        type: "leadership", required: true, priority: "critical", keyBase: `pending_${uid}`,
+        type: "leadership", required: true, priority: "critical", channels: ["in-app", "email"], keyBase: `pending_${uid}`,
         title: `${after.name || "A new member"} is awaiting approval`,
         body: "Review them in Admin → People.",
       });

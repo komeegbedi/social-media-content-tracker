@@ -97,10 +97,33 @@ async function writeNotification({ id, uid, type, title, body = "", taskId = "",
 // when newly created and allowed, sends a web push. Honors per-type prefs
 // (unless `required`) and the notification's `channels` (default: push allowed).
 // `keyBase` yields one deterministic doc per recipient.
+// Per-type channel + priority policy (v1.2). "Notify the person who owns the
+// next action" — email is reserved for blocked/required/escalation cases so
+// routine events don't fill inboxes. Callers may override `channels` (e.g. the
+// reminder dispatcher strips email to batch a digest; the Approved handler
+// gives the caption team push while the owner gets an in-app-only heads-up).
+const NOTIFY_POLICY = {
+  assigned:         { channels: ["in-app", "push"],           priority: "critical" },
+  qa:               { channels: ["in-app", "push"],           priority: "action" },
+  changes:          { channels: ["in-app", "push", "email"],  priority: "critical" },
+  approved:         { channels: ["in-app"],                    priority: "standard" },
+  ready:            { channels: ["in-app", "push"],            priority: "action" },
+  reminder:         { channels: ["in-app", "push"],            priority: "action" },
+  overdue:          { channels: ["in-app", "push"],            priority: "critical" },
+  mention:          { channels: ["in-app", "push"],            priority: "action" },
+  account_approved: { channels: ["in-app", "email"],          priority: "critical" },
+  leadership:       { channels: ["in-app"],                    priority: "standard" },
+  weeklyTaskCheck:  { channels: ["in-app", "push"],            priority: "standard" },
+};
+const policyFor = (type) => NOTIFY_POLICY[type] || { channels: ["in-app", "push"], priority: "standard" };
+
 async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, keyBase, required = false, channels = null, whenText = "", priority = "" }) {
+  const pol = policyFor(type);
+  const chans = channels || pol.channels;              // explicit override wins
+  const pri = priority || pol.priority;
   const url = taskId ? `/?task=${taskId}` : "/";
-  const pushChannel = !channels || channels.includes("push");
-  const emailChannel = !channels || channels.includes("email");
+  const pushChannel = chans.includes("push");
+  const emailChannel = chans.includes("email");
   const seen = new Set();
   await Promise.all(recipients.filter(Boolean).map(async (u) => {
     if (seen.has(u.uid)) return; seen.add(u.uid);
@@ -112,7 +135,7 @@ async function notifyUsers(recipients, { type, title, body, taskId, eventOccurre
     if (pushChannel && pushAllow(u)) await sendPush(u.uid, { title, body, url });
     if (emailChannel && emailAllow(u) && isActive(u)) {
       const { sendNotificationEmail } = require("./emailService"); // lazy → avoid load-order cycle
-      await sendNotificationEmail({ user: u, type, title, body, taskId, eventId: eventOccurrenceId, url, notificationId, whenText, priority });
+      await sendNotificationEmail({ user: u, type, title, body, taskId, eventId: eventOccurrenceId, url, notificationId, whenText, priority: pri });
     }
   }));
 }
