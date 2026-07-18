@@ -45,9 +45,12 @@
   /* -- elevation (soft, low opacity; prefer borders + spacing) -- */
   --shadow-sm:0 1px 2px rgba(33,27,51,.05),0 2px 8px rgba(33,27,51,.05);
   --shadow-lg:0 2px 6px rgba(33,27,51,.07),0 12px 32px rgba(33,27,51,.10);
-  /* -- motion -- */
-  --motion-micro:150ms; --motion-standard:220ms; --motion-overlay:280ms;
-  --ease-out:cubic-bezier(.22,1,.36,1); --ease-inout:cubic-bezier(.45,0,.25,1);
+  /* -- motion (v1.2 shared system) -- */
+  --motion-instant:100ms; --motion-fast:160ms; --motion-standard:220ms; --motion-slow:280ms;
+  --ease-standard:cubic-bezier(.22,1,.36,1); --ease-enter:cubic-bezier(.16,1,.3,1); --ease-exit:cubic-bezier(.4,0,1,1);
+  /* legacy aliases so existing rules keep resolving to the shared scale */
+  --motion-micro:var(--motion-fast); --motion-overlay:var(--motion-slow);
+  --ease-out:var(--ease-standard); --ease-inout:var(--ease-standard);
   /* -- icon sizes -- */
   --icon-xs:14px; --icon-sm:16px; --icon-md:18px; --icon-nav:19px; --icon-empty:40px;
   /* -- layout -- */
@@ -988,12 +991,8 @@ a{color:var(--primary)}
 .sb-emoji{font-size:19px;line-height:1;flex:none;display:inline-flex;align-items:center;justify-content:center;
   width:var(--icon-md);height:var(--icon-md)}
 
-/* Smooth theme switching + calm surface motion. */
-body,.sb-side,.sb-nav,.sb-sheet,.sb-drawer,.sb-notifpanel,.sb-ev,.sb-attn,.sb-progress,.sb-remsum{
-  transition:background-color var(--motion-standard) var(--ease-out),
-             border-color var(--motion-standard) var(--ease-out),
-             color var(--motion-standard) var(--ease-out)}
-@media (prefers-reduced-motion:reduce){body,.sb-side,.sb-nav{transition:none}}
+/* (Theme switching now uses the one-shot .theme-anim cross-fade — see the
+   motion pass — instead of permanent per-element colour transitions.) */
 
 /* Card hover: quiet lift, no heavy shadow. */
 @media(hover:hover){
@@ -1165,3 +1164,73 @@ body,.sb-side,.sb-nav,.sb-sheet,.sb-drawer,.sb-notifpanel,.sb-ev,.sb-attn,.sb-pr
 .sb-confirm .sb-btnrow .sb-btn{margin-top:0}
 .sb-btn.danger{background:var(--danger);color:#fff}
 .sb-btn.danger:hover{background:var(--danger);filter:brightness(.94)}
+
+/* =================================================================
+   MOTION PASS (v1.2) — one shared system, transform/opacity only.
+   All of this is disabled by the global prefers-reduced-motion rule.
+   ================================================================= */
+
+/* Page enter: each tab's content fades + rises once on mount (tab switch).
+   Does NOT replay on Firestore refresh (the page stays mounted). */
+.sb-page{animation:pageIn var(--motion-standard) var(--ease-enter)}
+@keyframes pageIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* Buttons: responsive press feedback + smooth state colour changes. */
+.sb-btn,.sb-btn.ghost,.sb-btn.gold,.sb-btn.green,.sb-tertiary,.sb-fchip,.sb-segbtn,.sb-rchip,.sb-viewtoggle button,.sb-markall,.link{
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             color var(--motion-fast) var(--ease-standard),
+             box-shadow var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-btn:active,.sb-tertiary:active,.sb-gbtn:active{transform:translateY(1px) scale(.99)}
+.sb-btn:disabled{opacity:.6;cursor:default}
+.sb-btn:disabled:active{transform:none}
+.sb-fab:active{transform:scale(.94)}
+/* Loading buttons keep their width (no layout shift). */
+.sb-lprimary,.sb-gbtn{min-width:0}
+
+/* Interactive cards / rows: restrained hover + clear press. */
+.sb-task-act,.sb-listrow,.sb-attn,.sb-ev,.sb-notif,.sb-drawer-item{
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-task-act:active,.sb-listrow:active,.sb-attn:active,.sb-notif:active{transform:scale(.995)}
+@media(hover:hover){ .sb-task-act:hover{border-color:var(--border-strong)} }
+
+/* Overlays: backdrop fade + token-eased entrances. */
+.sb-scrim{animation:scrimIn var(--motion-fast) var(--ease-standard)}
+@keyframes scrimIn{from{opacity:0}to{opacity:1}}
+.sb-sheet{animation:sheetUp var(--motion-slow) var(--ease-enter)}
+@keyframes sheetUp{from{transform:translateY(24px);opacity:.4}to{transform:none;opacity:1}}
+.sb-drawer{animation:sheetUp var(--motion-slow) var(--ease-enter)}
+.sb-confirm{animation:modalIn var(--motion-standard) var(--ease-enter)}
+@keyframes modalIn{from{opacity:0;transform:scale(.98) translateY(8px)}to{opacity:1;transform:none}}
+@media(min-width:900px){ .sb-scrim-right .sb-notifpanel{animation:drawerIn var(--motion-slow) var(--ease-enter)} }
+@keyframes drawerIn{from{transform:translateX(100%);opacity:.96}to{transform:none;opacity:1}}
+
+/* Notification mark-as-read: tint + dot fade smoothly (no row-height animation). */
+.sb-notif{transition:background-color var(--motion-standard) var(--ease-standard)}
+.sb-notif .ndot{transition:opacity var(--motion-standard) var(--ease-standard),transform var(--motion-standard) var(--ease-standard)}
+.sb-notif .ti{transition:font-weight var(--motion-fast) var(--ease-standard)}
+
+/* Accordion / disclosure content: fade+rise the revealed content, animate chevron. */
+.sb-chev,.sb-navbtn .ico,.sb-rchip{will-change:auto}
+.sb-list,.sb-listrows,.tl-adv,.sb-remsum{animation:revealIn var(--motion-standard) var(--ease-enter)}
+@keyframes revealIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+
+/* Form validation: gentle error appearance, stable field positions. */
+.sb-fielderr,.sb-lerr,.tl-err{animation:revealIn var(--motion-fast) var(--ease-enter)}
+input,textarea,select{transition:border-color var(--motion-fast) var(--ease-standard),
+  background-color var(--motion-fast) var(--ease-standard)}
+
+/* Theme switch: a brief one-shot colour cross-fade (added on <html> during
+   toggle, then removed) — avoids permanent per-element transitions + flashing. */
+.theme-anim,.theme-anim *{transition:background-color var(--motion-standard) var(--ease-standard),
+  border-color var(--motion-standard) var(--ease-standard),
+  color var(--motion-standard) var(--ease-standard),
+  fill var(--motion-standard) var(--ease-standard)!important}
+
+/* Skeletons fade into content. */
+.sb-skel{transition:opacity var(--motion-standard) var(--ease-standard)}
+/* Unread dot fades + scales out when a notification is marked read. */
+.sb-notif .ndot.read{opacity:0;transform:scale(0)}

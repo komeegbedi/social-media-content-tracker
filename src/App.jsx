@@ -351,7 +351,7 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
                           {n.body && <span className="bo">{n.body}</span>}
                           <span className="mt">{meta.label} · {timeAgo(n.createdAt)}</span>
                         </span>
-                        {!n.read && <span className="ndot top" aria-label="Unread" />}
+                        <span className={"ndot top"+(n.read?" read":"")} aria-label={n.read?undefined:"Unread"} />
                       </button>
                     );
                   })}
