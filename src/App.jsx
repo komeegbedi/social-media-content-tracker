@@ -37,14 +37,9 @@ import {
   HomeIcon, ClockIcon, ViewColumnsIcon, ClipboardDocumentListIcon, UserGroupIcon,
   Cog6ToothIcon, BellIcon, MagnifyingGlassIcon, XMarkIcon, ChevronRightIcon,
   EllipsisHorizontalIcon, ExclamationTriangleIcon, SunIcon, MoonIcon, FunnelIcon,
-  BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, CakeIcon,
+  BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon,
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon,
 } from "@heroicons/react/24/outline";
-import {
-  HomeIcon as HomeSolid, ClockIcon as ClockSolid, ViewColumnsIcon as ViewColumnsSolid,
-  ClipboardDocumentListIcon as ClipboardSolid, UserGroupIcon as UserGroupSolid,
-  Cog6ToothIcon as CogSolid,
-} from "@heroicons/react/24/solid";
 import { setView, reportIssue, logIssue } from "./logging";
 import { getTheme, setTheme } from "./theme";
 
@@ -202,7 +197,7 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
         <div className="sb-notifhd">
           <b className="sb-serif" style={{fontSize:17}}>Notifications{unread>0 && <span className="sb-unreadct"> · {unread} unread</span>}</b>
           <div className="sb-notifhd-actions">
-            {unread>0 && <button className="link" onClick={markAllRead}>Mark all read</button>}
+            {unread>0 && <button className="sb-markall" onClick={markAllRead}>Mark all read</button>}
             <button className="sb-iconbtn" onClick={onSettings} aria-label="Notification settings"><Cog6ToothIcon className="hi" aria-hidden="true"/></button>
             <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button>
           </div>
@@ -869,18 +864,17 @@ function Board({ profile, isAdmin }) {
   // Navigation model (v1.1.2): outline icon at rest, solid when active.
   // Mobile bottom nav = the 4 main destinations + Profile (Team/Admin live in
   // the profile sheet); desktop sidebar shows Main + Management groups.
-  const navIco = (Out, Solid, active) => active
-    ? <Solid className="hi hi-nav" aria-hidden="true" />
-    : <Out className="hi hi-nav" aria-hidden="true" />;
+  // Outline icons throughout (active state = colour + soft background).
+  const navIco = (Out) => <Out className="hi hi-nav" aria-hidden="true" />;
   const mainNav = [
-    { id:"home",  label:"Home",    ico:(a)=>navIco(HomeIcon, HomeSolid, a) },
-    { id:"myday", label:"My Day",  ico:(a)=>navIco(ClockIcon, ClockSolid, a) },
-    { id:"board", label:"Board",   ico:(a)=>navIco(ViewColumnsIcon, ViewColumnsSolid, a) },
-    { id:"mine",  label:"My Work", ico:(a)=>navIco(ClipboardDocumentListIcon, ClipboardSolid, a) },
+    { id:"home",  label:"Home",    ico:()=>navIco(HomeIcon) },
+    { id:"myday", label:"My Day",  ico:()=>navIco(ClockIcon) },
+    { id:"board", label:"Board",   ico:()=>navIco(ViewColumnsIcon) },
+    { id:"mine",  label:"My Work", ico:()=>navIco(ClipboardDocumentListIcon) },
   ];
   const mgmtNav = [
-    { id:"team", label:"Team", ico:(a)=>navIco(UserGroupIcon, UserGroupSolid, a) },
-    ...(isAdmin ? [{ id:"admin", label:"Admin", badge: pendingCount, ico:(a)=>navIco(Cog6ToothIcon, CogSolid, a) }] : []),
+    { id:"team", label:"Team", ico:()=>navIco(UserGroupIcon) },
+    ...(isAdmin ? [{ id:"admin", label:"Admin", badge: pendingCount, ico:()=>navIco(Cog6ToothIcon) }] : []),
   ];
 
   /* ---- task writes ---- */
@@ -1056,10 +1050,10 @@ function Board({ profile, isAdmin }) {
             </div>
             <ThemeToggle />
             <button className="sb-report" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
-              <BellIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl"> Notifications</span>{notif.unread>0 && <span className="pill" style={{marginLeft:6}}>{notif.unread>9?"9+":notif.unread}</span>}
+              <BellIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">Notifications</span>{notif.unread>0 && <span className="pill" style={{marginLeft:6}}>{notif.unread>9?"9+":notif.unread}</span>}
             </button>
-            <button className="sb-report" onClick={()=>setShowReport(true)} aria-label="Report an issue"><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl"> Report an issue</span></button>
-            <button className="sb-signout" onClick={()=>signOut(auth)} aria-label="Sign out"><ArrowRightStartOnRectangleIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl"> Sign out</span></button>
+            <button className="sb-report" onClick={()=>setShowReport(true)} aria-label="Report an issue"><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">Report an issue</span></button>
+            <button className="sb-signout" onClick={()=>signOut(auth)} aria-label="Sign out"><ArrowRightStartOnRectangleIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">Sign out</span></button>
             <div className="sb-brandfoot lbl"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
           </div>
         </aside>
@@ -1423,7 +1417,7 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
             <div className="sb-searchsec">Events · {eventHits.length}</div>
             {eventHits.map((e,i) => (
               <button key={i} className="sb-sresult" onClick={()=>goTab("home")}>
-                <span className="r-icon">{e.kind==="birthday"?<CakeIcon className="hi" aria-hidden="true"/>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+                <span className="r-icon">{e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
                 <span className="r-main">{e.name}</span>
                 <span className="r-sub">{e.daysAway===0?"Today":`in ${e.daysAway} day${e.daysAway!==1?"s":""}`}</span>
               </button>
@@ -1709,13 +1703,13 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, op
       {/* Coming up — what's on the ministry horizon */}
       {events.length>0 && <>
         <div className="sb-shead"><h2>Coming up</h2>
-          <button className="link" onClick={()=>goTab("board")}>Plan content →</button></div>
+          <button className="link subtle" onClick={()=>goTab("board")}>Open board →</button></div>
         <div className="sb-evlist">
           {events.slice(0,3).map((e,i) => {
             const n = occurrenceContentCount(e, tasks);
             return (
             <div className="sb-ev" key={e.eventOccurrenceId||i}>
-              <span className="sb-ev-ic">{e.kind==="birthday"?<CakeIcon className="hi" aria-hidden="true"/>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+              <span className="sb-ev-ic">{e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
               <div style={{flex:1,minWidth:0}}>
                 <div className="sb-ev-name">{e.name}</div>
                 <div className="sb-ev-sub">
@@ -1982,7 +1976,7 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
             const n = eventCount(e);
             return (
               <div className="sb-ev" key={i}>
-                <span className="sb-ev-ic">{e.kind==="birthday"?<CakeIcon className="hi" aria-hidden="true"/>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+                <span className="sb-ev-ic">{e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div className="sb-ev-name">{e.name}</div>
                   <div className="sb-ev-sub">

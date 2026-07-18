@@ -67,20 +67,31 @@
 
 /* ---- Dark theme (set via data-theme on <html>): tints darken, strong
    colours brighten so chips, progress and text stay readable. ---- */
+/* Dark mode (v1.1.2 polish): a deliberate LAYERED surface system —
+   app background < sidebar/cards < overlays/sheets — separated by tone
+   and hairline borders rather than heavy shadows. Accent brightens for
+   contrast but stays soft; text has three clear steps. */
 [data-theme="dark"]{
-  --background:#141019; --background-muted:#191424;
-  --surface:#1E1A29; --surface-elevated:#262133; --surface-muted:#231E30;
-  --text-primary:#ECE9F6; --text-secondary:#B4ACC8; --text-muted:#9E96B2;
-  --border:#2F2A3E; --border-strong:#413A55;
-  --primary:#8E78D6; --primary-hover:#A18EE2; --primary-pressed:#7A64C8; --primary-muted:#2A2442;
-  --success:#41BA80; --success-muted:#163026;
-  --warning:#E0A53A; --warning-muted:#3A2E15;
-  --danger:#E76E6E; --danger-muted:#3B1E1E;
-  --info:#73A0E0;   --info-muted:#172739;
-  --focus-ring:#A18EE2;
-  --overlay:rgba(0,0,0,.55);
-  --shadow-sm:0 1px 2px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.35);
-  --shadow-lg:0 2px 6px rgba(0,0,0,.5),0 12px 32px rgba(0,0,0,.5);
+  --background:#0F0C15;          /* deepest: app canvas */
+  --background-muted:#141020;
+  --surface:#181322;             /* level 1: sidebar, cards, rows */
+  --surface-elevated:#201A2E;    /* level 2: sheets, drawers, popovers */
+  --surface-muted:#1C1728;       /* inputs, wells, chips */
+  --text-primary:#F1EEF9;
+  --text-secondary:#B8B0CC;
+  --text-muted:#8D85A3;
+  --border:#272134;
+  --border-strong:#3B3452;
+  --primary:#9D8BFF; --primary-hover:#AC9CFF; --primary-pressed:#8A76F0;
+  --primary-muted:#2A2347;
+  --success:#4CC38A; --success-muted:#132A1F;
+  --warning:#E3AC4F; --warning-muted:#302412;
+  --danger:#EC7B7B;  --danger-muted:#331B1B;
+  --info:#7FA9E6;    --info-muted:#16222F;
+  --focus-ring:#AC9CFF;
+  --overlay:rgba(8,6,13,.62);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.5),0 2px 10px rgba(0,0,0,.35);
+  --shadow-lg:0 4px 12px rgba(0,0,0,.5),0 16px 40px rgba(0,0,0,.55);
   color-scheme:dark;
 }
 /* The info banner hardcodes dark-brown text/border; fix it for dark backgrounds. */
@@ -132,7 +143,7 @@ a{color:var(--primary)}
 .sb-suser{display:flex;align-items:center;gap:10px;padding:6px 8px}
 .sb-suser .nm{font-size:13.5px;font-weight:600}
 .sb-suser .rl{font-size:11px;color:var(--muted);word-break:break-all}
-.sb-signout{margin-top:8px;width:100%;background:var(--paper);border:1px solid var(--line);
+.sb-signout{margin-top:8px;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:7px;background:var(--surface);border:1px solid var(--border);
   border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;color:var(--muted)}
 .sb-report{margin-top:8px;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:7px;background:var(--surface);border:1px solid var(--border);
   border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;color:var(--muted)}
@@ -149,7 +160,7 @@ a{color:var(--primary)}
 @media(min-width:900px){ .sb-top{display:none} }
 
 /* Account drawer (mobile) — bottom sheet from the header avatar */
-.sb-drawer{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+.sb-drawer{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
   padding:10px 12px calc(20px + env(safe-area-inset-bottom));animation:rise .2s ease}
 @media(min-width:900px){ .sb-drawer{border-radius:20px} }
 .sb-drawer-user{display:flex;align-items:center;gap:12px;padding:10px 10px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
@@ -183,9 +194,9 @@ a{color:var(--primary)}
 .dot-amber{color:var(--amber)} .dot-green{color:var(--green)}
 .dot-blue{color:var(--blue)} .dot-red{color:var(--red)} .dot-violet{color:var(--violet)}
 
-.sb-shead{display:flex;align-items:baseline;justify-content:space-between;margin:28px 2px 13px}
-.sb-shead h2{font-size:20px;font-weight:600}
-@media(min-width:900px){ .sb-shead h2{font-size:23px} }
+.sb-shead{display:flex;align-items:baseline;justify-content:space-between;margin:30px 2px 12px}
+.sb-shead h2{font-size:17px;font-weight:600;letter-spacing:-.01em}
+@media(min-width:900px){ .sb-shead h2{font-size:19px} }
 .sb-shead .link{font-size:12.5px;color:var(--violet);font-weight:600;background:none;border:none;padding:0}
 .sb-shead .link.subtle{color:var(--muted);font-weight:500;font-size:12px}
 .sb-shead-strong h2{font-size:19px;font-weight:700}
@@ -328,7 +339,7 @@ a{color:var(--primary)}
   transition:background var(--motion-micro) var(--ease-out),transform var(--motion-micro) var(--ease-out)}
 .sb-fab:hover{background:var(--primary-hover)}
 .sb-fab:active{transform:scale(.94)}
-@media(min-width:900px){ .sb-fab{bottom:28px;right:28px;width:58px;height:58px} }
+@media(min-width:900px){ .sb-fab{display:none} }
 
 .sb-seg{display:flex;gap:6px;overflow-x:auto;padding:2px 0 4px;margin-bottom:6px;-webkit-overflow-scrolling:touch}
 .sb-seg::-webkit-scrollbar{display:none}
@@ -449,7 +460,7 @@ a{color:var(--primary)}
 /* Cap the sheet to the *visible* viewport (dvh), minus the top safe-area, so a
    bottom-anchored sheet's top can never hide under the iPhone Safari/Chrome URL
    bar. `vh` is the fallback for browsers without dvh. */
-.sb-sheet{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+.sb-sheet{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
   max-height:calc(100vh - 48px);
   max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
   overflow-y:auto;-webkit-overflow-scrolling:touch;animation:rise .22s ease}
@@ -458,7 +469,7 @@ a{color:var(--primary)}
 @keyframes rise{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
 /* Sticky header pins the type badge + ✕ to the top of the panel, always
    visible and tappable; extra top padding clears the notch/home indicator. */
-.sb-sheet .hd{position:sticky;top:0;background:var(--paper);
+.sb-sheet .hd{position:sticky;top:0;background:var(--surface-elevated);
   padding:16px 18px 12px;border-bottom:1px solid var(--line);
   display:flex;align-items:center;justify-content:space-between;z-index:3}
 @media(max-width:899px){ .sb-sheet .hd{padding-top:calc(18px + env(safe-area-inset-top))} }
@@ -468,11 +479,11 @@ a{color:var(--primary)}
 @media(max-width:899px){ .sb-x{width:44px;height:44px} }
 
 /* --- Notification Center --- */
-.sb-notifpanel{background:var(--paper);width:100%;max-width:440px;border-radius:22px 22px 0 0;
+.sb-notifpanel{background:var(--surface-elevated);width:100%;max-width:440px;border-radius:22px 22px 0 0;
   max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
   display:flex;flex-direction:column;overflow:hidden;animation:rise .22s ease}
 @media(min-width:900px){ .sb-notifpanel{border-radius:20px;max-height:80dvh} }
-.sb-notifhd{position:sticky;top:0;background:var(--paper);padding:16px 16px 12px;
+.sb-notifhd{position:sticky;top:0;background:var(--surface-elevated);padding:16px 16px 10px;
   border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}
 @media(max-width:899px){ .sb-notifhd{padding-top:calc(18px + env(safe-area-inset-top))} }
 .sb-notifhd-actions{display:flex;align-items:center;gap:8px}
@@ -919,3 +930,60 @@ a{color:var(--primary)}
     border-radius:var(--r-panel) 0 0 var(--r-panel);animation:slidein var(--motion-overlay) var(--ease-out)}
 }
 @keyframes slidein{from{transform:translateX(40px);opacity:.5}to{transform:translateX(0);opacity:1}}
+
+/* ============ v1.1.2 polish pass — premium refinements ============ */
+/* Emoji glyphs (e.g. the birthday cake) sized to match icons. */
+.sb-emoji{font-size:19px;line-height:1;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  width:var(--icon-md);height:var(--icon-md)}
+
+/* Smooth theme switching + calm surface motion. */
+body,.sb-side,.sb-nav,.sb-sheet,.sb-drawer,.sb-notifpanel,.sb-ev,.sb-attn,.sb-progress,.sb-remsum{
+  transition:background-color var(--motion-standard) var(--ease-out),
+             border-color var(--motion-standard) var(--ease-out),
+             color var(--motion-standard) var(--ease-out)}
+@media (prefers-reduced-motion:reduce){body,.sb-side,.sb-nav{transition:none}}
+
+/* Card hover: quiet lift, no heavy shadow. */
+@media(hover:hover){
+  .sb-ev:hover,.sb-attn:hover{border-color:var(--border-strong);background:var(--surface-muted)}
+}
+
+/* Sidebar rhythm: perfect icon/label alignment + refined active state. */
+.sb-snav button{gap:12px;align-items:center}
+.sb-snav button .ico{display:inline-flex;align-items:center;justify-content:center;width:24px}
+.sb-snav button.on{background:var(--primary-muted);color:var(--primary);font-weight:600}
+.sb-report,.sb-signout{justify-content:flex-start;padding:9px 12px}
+.sb-report .lbl,.sb-signout .lbl{flex:1;text-align:left}
+.sb-report .pill{margin-left:0}
+.sb-sfoot{display:flex;flex-direction:column;gap:2px}
+
+/* Notification panel: aligned filters, balanced header, scannable rows. */
+.sb-notifhd-actions{gap:6px}
+.sb-markall{border:1px solid var(--border);background:var(--surface-muted);color:var(--text-secondary);
+  font-size:12px;font-weight:600;padding:7px 12px;min-height:34px;border-radius:var(--r-pill);cursor:pointer;
+  transition:background var(--motion-micro) var(--ease-out)}
+.sb-markall:hover{background:var(--primary-muted);color:var(--primary);border-color:transparent}
+.sb-nfilters{padding:12px 16px 10px;border-bottom:1px solid var(--border);margin-bottom:2px}
+.sb-nfilters .sb-fchip{min-height:34px;display:inline-flex;align-items:center}
+.sb-ngroup{padding:14px 16px 6px;font-size:10.5px}
+.sb-notif{padding:12px 16px;gap:12px}
+.sb-notif .ti{line-height:1.35}
+.sb-notif .mt{margin-top:2px}
+.sb-notif .ndot{align-self:center;margin-top:0}
+.sb-notif.unread{background:color-mix(in srgb,var(--primary) 6%,transparent)}
+.sb-notif.unread .ti{font-weight:650}
+
+/* Reminder surfaces feel native to the card system. */
+.sb-remsum{background:var(--surface);border-radius:var(--r-card)}
+.sb-remsum .sb-btn{width:auto;align-self:flex-start;min-height:38px;padding:9px 14px}
+.tl-adv{background:var(--surface-muted)}
+.sb-rchip{transition:background var(--motion-micro) var(--ease-out),color var(--motion-micro) var(--ease-out)}
+.sb-rchip.on{background:var(--primary);border-color:var(--primary)}
+
+/* Inputs read as their own layer in dark mode. */
+[data-theme="dark"] input,[data-theme="dark"] textarea,[data-theme="dark"] select{
+  background:var(--surface-muted);border-color:var(--border);color:var(--text-primary)}
+/* Button hierarchy: ghost = quiet secondary (soft border, tinted hover). */
+.sb-btn.ghost{border-color:color-mix(in srgb,var(--primary) 35%,var(--border));background:var(--surface)}
+.sb-btn.ghost:hover{background:var(--primary-muted);border-color:var(--primary)}
+.sb-btn.ghost:active{background:var(--primary-muted)}
