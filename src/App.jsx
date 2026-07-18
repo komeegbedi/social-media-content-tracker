@@ -945,8 +945,12 @@ function Board({ profile, isAdmin }) {
 
   // Deep link from a push notification (/?task=<id>) → open that task once.
   useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get("task");
-    if (t) { setOpenId(t); window.history.replaceState({}, "", window.location.pathname); }
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get("task");
+    const tb = params.get("tab");
+    if (t) setOpenId(t);
+    if (tb && ["home","myday","board","mine","team","admin"].includes(tb)) setTab(tb);
+    if (t || tb) window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
   // Global search shortcuts: "/" or ⌘K / Ctrl+K from anywhere (but not while

@@ -12,4 +12,5 @@ exports.onCommentCreate = require("./onCommentCreate").onCommentCreate;
 exports.onUserWrite = require("./onUserWrite").onUserWrite;
 exports.dispatchReminders = require("./dispatchReminders").dispatchReminders;
 exports.cleanupRetention = require("./cleanupRetention").cleanupRetention;
+exports.weeklyTaskCheck = require("./weeklyTaskCheck").weeklyTaskCheck;
 exports.sendTestEmail = require("./sendTestEmail").sendTestEmail;

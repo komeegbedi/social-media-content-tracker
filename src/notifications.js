@@ -17,7 +17,7 @@ import { logIssue } from "./logging";
 import {
   UserPlusIcon, BellAlertIcon, ExclamationTriangleIcon, ClipboardDocumentCheckIcon,
   ChatBubbleLeftRightIcon, CheckCircleIcon, PaperAirplaneIcon, AtSymbolIcon,
-  CheckBadgeIcon, ChartBarIcon, BellIcon,
+  CheckBadgeIcon, ChartBarIcon, BellIcon, ClockIcon,
 } from "@heroicons/react/24/outline";
 
 // Display metadata per notification type: Heroicon component ref + label +
@@ -33,6 +33,7 @@ export const NOTIF_META = {
   mention:          { icon: AtSymbolIcon,               label: "Mention",           tint: "tint-info" },
   account_approved: { icon: CheckBadgeIcon,             label: "Account",           tint: "tint-success" },
   leadership:       { icon: ChartBarIcon,               label: "Leadership",        tint: "tint-neutral" },
+  weeklyTaskCheck:  { icon: ClockIcon,                  label: "Weekly check-in",   tint: "tint-primary" },
 };
 export const NOTIF_FALLBACK = { icon: BellIcon, label: "Update", tint: "tint-neutral" };
 
@@ -48,6 +49,7 @@ export const PREF_TYPES = [
   { key: "ready",      label: "Ready to post" },
   { key: "mention",    label: "Mentions" },
   { key: "leadership", label: "Leadership alerts" },
+  { key: "weeklyTaskCheck", label: "Weekly Saturday check-in" },
 ];
 
 // Defaults for users who haven't set preferences yet: everything on.
