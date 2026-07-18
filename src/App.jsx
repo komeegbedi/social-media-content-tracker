@@ -9,7 +9,8 @@ import {
 import {
   collection, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot, serverTimestamp,
 } from "firebase/firestore";
-import { auth, db, googleProvider } from "./firebase";
+import { auth, db, googleProvider, functions } from "./firebase";
+import { httpsCallable } from "firebase/functions";
 import {
   STAGES, statusClass, roleLabel, initials, emailFor,
   fmt, daysTo, autoAssign, computeCapacity,
@@ -27,6 +28,7 @@ import {
   taskProblem, ADMIN_FILTERS, applyAdminFilter,
   DEPARTMENTS, roleChips, userActiveTasks, PEOPLE_FILTERS, applyPeopleFilter, groupPeople,
   crewRoleLabel, pendingCrewLabel, CREW_ROLES, occurrenceContentCount, occurrenceTasks,
+  DEFAULT_REMINDERS, REMINDER_CHANNELS, REMINDER_RECIPIENTS, MAX_REMINDERS,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate } from "./events";
 import { useNotifications, NOTIF_META, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
@@ -209,10 +211,108 @@ function PushControls({ me }) {
   return <button className="sb-btn ghost" disabled={busy} onClick={enable}>{busy ? "Enabling…" : "🔔 Enable push on this device"}</button>;
 }
 
+/* Admin-only: the default reminder schedule applied to new content. */
+function AdminReminderDefaults() {
+  const [reminders, setReminders] = useState(null);
+  const [hour, setHour] = useState(9);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    getDoc(doc(db, "settings", "notifications")).then((s) => {
+      const d = s.exists() ? s.data() : {};
+      setReminders(d.defaultReminders && d.defaultReminders.length ? d.defaultReminders : DEFAULT_REMINDERS);
+      setHour(d.reminderHourLocal != null ? d.reminderHourLocal : 9);
+    }).catch(() => setReminders(DEFAULT_REMINDERS));
+  }, []);
+  if (reminders === null) return null;
+  const save = async () => {
+    try { await setDoc(doc(db, "settings", "notifications"), { defaultReminders: reminders, reminderHourLocal: hour }, { merge: true }); setSaved(true); setTimeout(() => setSaved(false), 2000); }
+    catch (e) { logIssue({ kind: "error", action: "save reminder defaults", message: e.message, code: e.code }); }
+  };
+  return (
+    <>
+      <div className="sb-mlabel">Admin · default reminder schedule</div>
+      <div className="sb-sub" style={{marginTop:0}}>Applied to newly created content. Reminders fire at this hour, Winnipeg time.</div>
+      <div className="sb-field" style={{maxWidth:160}}>
+        <label>Send hour (0–23)</label>
+        <input type="number" min="0" max="23" value={hour} onChange={(e)=>setHour(Math.max(0,Math.min(23,Number(e.target.value)||0)))} />
+      </div>
+      <ReminderEditor reminders={reminders} onChange={setReminders} />
+      <button className="sb-btn ghost" style={{marginTop:8}} onClick={save}>{saved ? "Saved ✓" : "Save default schedule"}</button>
+    </>
+  );
+}
+
+/* Admin-only: live email usage dashboard (reads server-managed quota docs). */
+function EmailUsage() {
+  const [month, setMonth] = useState(null);
+  const [day, setDay] = useState(null);
+  useEffect(() => {
+    const mk = new Date().toISOString().slice(0, 7);   // YYYY-MM (UTC)
+    const dk = new Date().toISOString().slice(0, 10);  // YYYY-MM-DD (UTC)
+    const u1 = onSnapshot(doc(db, "systemUsage", `email-${mk}`), (s) => setMonth(s.exists() ? s.data() : {}), () => setMonth({}));
+    const u2 = onSnapshot(doc(db, "systemUsage", `emailDaily-${dk}`), (s) => setDay(s.exists() ? s.data() : {}), () => setDay({}));
+    return () => { u1(); u2(); };
+  }, []);
+  if (month === null) return null;
+  const limit = month.monthlyLimit || 2800;
+  const sent = month.sentCount || 0, reserved = month.reservedCount || 0;
+  const used = sent + reserved;
+  const pct = Math.round((used / limit) * 100);
+  const remaining = Math.max(0, limit - used);
+  const status = pct >= 100 ? ["Paused", "var(--red)"] : pct >= 95 ? ["Critical", "var(--red)"] : pct >= 85 ? ["Approaching limit", "var(--amber)"] : ["Normal", "var(--green)"];
+  const dLimit = (day && day.dailyLimit) || 250;
+  const dUsed = ((day && day.sentCount) || 0) + ((day && day.reservedCount) || 0);
+  return (
+    <>
+      <div className="sb-mlabel">Admin · email usage (this month, UTC)</div>
+      <div className="sb-usage">
+        <div className="bar"><span style={{width:`${Math.min(100,pct)}%`, background: status[1]}} /></div>
+        <div className="row"><b>{used.toLocaleString()} of {limit.toLocaleString()}</b><span style={{color:status[1],fontWeight:700}}>{status[0]}</span></div>
+        <div className="grid">
+          <span>Sent: <b>{sent.toLocaleString()}</b></span>
+          <span>Reserved: <b>{reserved}</b></span>
+          <span>Remaining: <b>{remaining.toLocaleString()}</b></span>
+          <span>Used: <b>{pct}%</b></span>
+          <span>Today: <b>{dUsed} / {dLimit}</b></span>
+          <span>Failed: <b>{month.failedCount || 0}</b></span>
+          <span>Suppressed: <b>{month.suppressedCount || 0}</b></span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* Admin-only: verify the Resend email pipeline by sending a test message. */
+function AdminEmailTest() {
+  const [to, setTo] = useState("");
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const send = async () => {
+    setBusy(true); setStatus(null);
+    try {
+      const res = await httpsCallable(functions, "sendTestEmail")({ to: to.trim() });
+      setStatus({ ok: true, msg: `Sent ✓${res.data?.messageId ? ` (id ${res.data.messageId})` : ""}` });
+    } catch (e) {
+      setStatus({ ok: false, msg: e?.message || "Send failed" });
+    }
+    setBusy(false);
+  };
+  return (
+    <>
+      <div className="sb-mlabel">Admin · test email</div>
+      <div className="sb-field">
+        <input type="email" value={to} onChange={(e)=>setTo(e.target.value)} placeholder="recipient@example.com" />
+      </div>
+      <button className="sb-btn ghost" disabled={busy || !to.trim()} onClick={send}>{busy ? "Sending…" : "Send test email"}</button>
+      {status && <div className="sb-sub" style={{marginTop:8, color: status.ok ? "var(--green)" : "var(--red)"}}>{status.msg}</div>}
+    </>
+  );
+}
+
 /* Per-user notification preferences. In-app is always on; push/email and the
    per-type toggles are configurable. Writes users/{uid}.notifPrefs (allowed by
    a scoped security rule). */
-function NotifSettings({ me, onSave, onClose }) {
+function NotifSettings({ me, isAdmin, onSave, onClose }) {
   const [p, setP] = useState(effectivePrefs(me));
   const setChannel = (k) => setP(s => ({ ...s, [k]: !s[k] }));
   const setType = (k) => setP(s => ({ ...s, perType: { ...s.perType, [k]: !s.perType[k] } }));
@@ -238,6 +338,9 @@ function NotifSettings({ me, onSave, onClose }) {
           ))}
           <div className="sb-sub" style={{fontSize:12}}>Account and security messages are always sent.</div>
           <button className="sb-btn" style={{marginTop:14}} onClick={()=>{ onSave(p); onClose(); }}>Save preferences</button>
+          {isAdmin && <AdminReminderDefaults />}
+          {isAdmin && <EmailUsage />}
+          {isAdmin && <AdminEmailTest />}
         </div>
       </div>
     </div>
@@ -366,6 +469,18 @@ function useCollection(path, canRead) {
         message: err.message, code: err.code }));
   }, [path, canRead]);
   return docs;
+}
+
+// Live subscription to a single document. undefined=loading, null=absent, object=data.
+function useDoc(path, canRead) {
+  const [data, setData] = useState(undefined);
+  useEffect(() => {
+    if (!canRead) { setData(null); return; }
+    return onSnapshot(doc(db, path),
+      (s) => setData(s.exists() ? { id: s.id, ...s.data() } : null),
+      (err) => { logIssue({ kind: "error", action: `doc read failed: ${path}`, message: err.message, code: err.code }); setData(null); });
+  }, [path, canRead]);
+  return data;
 }
 
 /* ===================================================================
@@ -616,6 +731,7 @@ function Board({ profile, isAdmin }) {
   const allUsers = useCollection("users", isAdmin);
   const tasks = useCollection("tasks", true);
   const issues = useCollection("issues", isAdmin); // admin-only (rules)
+  const notifSettings = useDoc("settings/notifications", true); // reminder defaults
 
   const [tab, setTab] = useState("home");
   const [openId, setOpenId] = useState(null);
@@ -924,7 +1040,7 @@ function Board({ profile, isAdmin }) {
       )}
 
       {notifSettingsOpen && (
-        <NotifSettings me={me} onSave={saveNotifPrefs} onClose={()=>setNotifSettingsOpen(false)} />
+        <NotifSettings me={me} isAdmin={isAdmin} onSave={saveNotifPrefs} onClose={()=>setNotifSettingsOpen(false)} />
       )}
 
       {toast && (
@@ -955,6 +1071,7 @@ function Board({ profile, isAdmin }) {
       )}
       {editTask && (
         <TaskEditor task={editTask==="new"?null:editTask} prefill={editPrefill} users={users}
+          defaultReminders={notifSettings?.defaultReminders}
           onClose={()=>{ setEditTask(null); setEditPrefill(null); }}
           onSave={(t)=>{ saveTask(t); setEditPrefill(null); }} onAuto={(t)=>autoAssign(t, users)} />
       )}
@@ -2588,12 +2705,59 @@ function Detail({ k, v }) {
 /* ===================================================================
    TASK EDITOR
    =================================================================== */
-function TaskEditor({ task, prefill, users, onClose, onSave, onAuto }) {
-  const [f, setF] = useState(task || {
-    title:"", type:"Reel", location:"828", owner:users[0]?.name||"", ownerSuggested:"",
-    shootDate:"", postDate:"", status:"Planned", priority:"Medium",
-    blockedOn:"", brief:"", relatedEvent:"", link:"", notes:"", support:[], links:{},
-    ...(prefill || {}),
+/* Editor for a task's reminder schedule (also reused for the admin default
+   schedule). Each row: days offset · before/after due · channels · recipients ·
+   on/off. Capped at MAX_REMINDERS. */
+function ReminderEditor({ reminders, onChange }) {
+  const rem = reminders || [];
+  const upd = (i, patch) => onChange(rem.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const toggleArr = (i, key, val) => {
+    const s = new Set(rem[i][key] || []); s.has(val) ? s.delete(val) : s.add(val); upd(i, { [key]: [...s] });
+  };
+  const add = () => { if (rem.length >= MAX_REMINDERS) return; onChange([...rem,
+    { id: `r${Date.now()}`, offset: 1, when: "before", channels: [...REMINDER_CHANNELS], recipients: ["owner"], enabled: true }]); };
+  return (
+    <div className="sb-remlist">
+      {rem.map((r, i) => (
+        <div className={"sb-rem" + (r.enabled === false ? " off" : "")} key={r.id || i}>
+          <div className="hd">
+            <input type="number" min="0" max="60" value={r.offset}
+              onChange={e => upd(i, { offset: Math.max(0, Math.min(60, Number(e.target.value) || 0)) })} />
+            <span>day{r.offset === 1 ? "" : "s"}</span>
+            <select value={r.when} onChange={e => upd(i, { when: e.target.value })}>
+              <option value="before">before due</option><option value="after">after due</option>
+            </select>
+            <label className="sb-remtog"><input type="checkbox" checked={r.enabled !== false} onChange={() => upd(i, { enabled: r.enabled === false })} />on</label>
+            <button type="button" className="sb-rem-x" onClick={() => onChange(rem.filter((_, j) => j !== i))} aria-label="Remove reminder">✕</button>
+          </div>
+          <div className="chips">
+            {REMINDER_CHANNELS.map(c => <button type="button" key={c}
+              className={"sb-rchip" + ((r.channels || []).includes(c) ? " on" : "")} onClick={() => toggleArr(i, "channels", c)}>{c}</button>)}
+          </div>
+          <div className="chips">
+            {REMINDER_RECIPIENTS.map(c => <button type="button" key={c}
+              className={"sb-rchip" + ((r.recipients || []).includes(c) ? " on" : "")} onClick={() => toggleArr(i, "recipients", c)}>{c}</button>)}
+          </div>
+        </div>
+      ))}
+      {rem.length < MAX_REMINDERS
+        ? <button type="button" className="sb-btn ghost compact" onClick={add}>+ Add reminder</button>
+        : <div className="sb-sub" style={{margin:0}}>Maximum {MAX_REMINDERS} reminders.</div>}
+    </div>
+  );
+}
+
+function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, onAuto }) {
+  const [f, setF] = useState(() => {
+    const base = task ? { ...task } : {
+      title:"", type:"Reel", location:"828", owner:users[0]?.name||"", ownerSuggested:"",
+      shootDate:"", postDate:"", status:"Planned", priority:"Medium",
+      blockedOn:"", brief:"", relatedEvent:"", link:"", notes:"", support:[], links:{},
+      ...(prefill || {}),
+    };
+    if (!base.reminders || !base.reminders.length)
+      base.reminders = (defaultReminders && defaultReminders.length) ? defaultReminders : DEFAULT_REMINDERS;
+    return base;
   });
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
   const valid = f.title.trim() && f.location && f.type && f.owner;
@@ -2666,6 +2830,12 @@ function TaskEditor({ task, prefill, users, onClose, onSave, onAuto }) {
               );
             })}
           <AddCrew users={users} onAdd={(c)=>set("support",[...(f.support||[]),c])} />
+
+          <div className="sb-field" style={{marginTop:18}}>
+            <label>Reminder schedule</label>
+            <div className="sb-sub" style={{marginTop:0}}>Reminders fire at 9:00 AM (Winnipeg) relative to the post date. New content starts from the default schedule.</div>
+            <ReminderEditor reminders={f.reminders} onChange={(r)=>set("reminders",r)} />
+          </div>
 
           <button className="sb-btn" style={{marginTop:14}} disabled={!valid} onClick={()=>onSave(f)}>{task?"Save changes":"Create task"}</button>
           {!valid && <div className="sb-sub" style={{marginTop:8,textAlign:"center"}}>Title, type, location and owner are required.</div>}

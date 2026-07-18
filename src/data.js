@@ -7,6 +7,18 @@ export const STAGES = [
   "Planned", "In Progress", "In Review", "Changes Requested", "Approved", "Ready to Post", "Posted",
 ];
 
+// Reminder-schedule building blocks (v1.1). Mirrors the server default in
+// functions/lib.js; the server falls back to this if settings aren't set.
+export const REMINDER_CHANNELS = ["in-app", "push", "email"];
+export const REMINDER_RECIPIENTS = ["owner", "crew", "lead", "admins"];
+export const MAX_REMINDERS = 10;
+export const DEFAULT_REMINDERS = [
+  { id: "d1", offset: 7, when: "before", channels: [...REMINDER_CHANNELS], recipients: ["owner", "crew"], enabled: true },
+  { id: "d2", offset: 3, when: "before", channels: [...REMINDER_CHANNELS], recipients: ["owner", "crew"], enabled: true },
+  { id: "d3", offset: 1, when: "before", channels: [...REMINDER_CHANNELS], recipients: ["owner", "crew"], enabled: true },
+  { id: "d4", offset: 3, when: "after",  channels: [...REMINDER_CHANNELS], recipients: ["owner", "admins"], enabled: true },
+];
+
 // For the progress bar, the 7 statuses group into 4 human phases.
 export const PHASES = ["Planning", "Creating", "Review", "Posting"];
 export const statusPhase = (s) =>

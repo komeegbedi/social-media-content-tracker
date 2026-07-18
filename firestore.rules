@@ -66,6 +66,21 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Email delivery ledger (Resend) — written server-side only; admins read
+    // it for the delivery log. Never client-writable.
+    match /emailDeliveries/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Email usage counters (monthly/daily quota). Server-managed; admins read
+    // for the usage dashboard. Never client-writable — the hard limit can't be
+    // altered from the frontend.
+    match /systemUsage/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     // App-wide settings (e.g. default reminder schedule, leadership roles).
     match /settings/{docId} {
       allow read: if isApproved();

@@ -6,6 +6,7 @@ const {
   db, FieldValue, Timestamp,
   loadUsers, loadSettings, notifyUsers, crewRoleLabel, computeFireAt,
 } = require("./lib");
+const { resendApiKey } = require("./emailService");
 
 const statusKey = (s) => String(s).replace(/\s+/g, "-");
 
@@ -47,7 +48,7 @@ async function materializeReminders(taskId, task) {
 }
 
 exports.onTaskWrite = onDocumentWritten(
-  { document: "tasks/{taskId}", memory: "256MiB", timeoutSeconds: 60 },
+  { document: "tasks/{taskId}", memory: "256MiB", timeoutSeconds: 60, secrets: [resendApiKey] },
   async (event) => {
     const taskId = event.params.taskId;
     const before = event.data.before.exists ? event.data.before.data() : null;

@@ -428,6 +428,25 @@ a{color:inherit}
   padding:11px 18px;font-size:13px;font-weight:600;max-width:88vw;cursor:pointer;
   box-shadow:0 8px 24px rgba(0,0,0,.28);animation:rise .2s ease}
 @media(min-width:900px){ .sb-toast{bottom:24px} }
+/* Reminder schedule editor */
+.sb-remlist{display:flex;flex-direction:column;gap:9px;margin-top:8px}
+.sb-rem{border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:var(--card)}
+.sb-rem.off{opacity:.55}
+.sb-rem .hd{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.sb-rem .hd input[type=number]{width:52px;padding:6px 8px;font-size:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink)}
+.sb-rem .hd select{padding:6px 8px;font-size:13px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink)}
+.sb-remtog{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);margin-left:auto}
+.sb-rem-x{background:var(--line);border:none;width:26px;height:26px;border-radius:50%;font-size:12px;color:var(--ink);cursor:pointer;flex:none}
+.sb-rem .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.sb-rchip{font-size:11px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--paper);color:var(--muted);cursor:pointer}
+.sb-rchip.on{background:var(--violet);color:#fff;border-color:var(--violet)}
+/* Admin email-usage dashboard */
+.sb-usage{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 13px;margin:4px 0 10px}
+.sb-usage .bar{height:8px;border-radius:999px;background:var(--line);overflow:hidden;margin-bottom:9px}
+.sb-usage .bar span{display:block;height:100%;border-radius:999px;transition:width .3s}
+.sb-usage .row{display:flex;justify-content:space-between;align-items:center;font-size:13.5px;margin-bottom:8px}
+.sb-usage .grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font-size:12px;color:var(--muted)}
+.sb-usage .grid b{color:var(--ink)}
 /* Bell buttons + unread badge */
 .sb-bellbtn{position:relative}
 .sb-belldot{position:absolute;top:-3px;right:-3px;background:var(--red);color:#fff;

@@ -18,11 +18,12 @@ const TZ = "America/Winnipeg";
 const ALREADY_EXISTS = 6; // gRPC status code
 
 // Fallback default reminder schedule if settings/notifications isn't set yet.
+const CH = ["in-app", "push", "email"]; // all channels; each still respects per-user prefs
 const DEFAULT_REMINDERS = [
-  { id: "d1", offset: 7, when: "before", channels: ["in-app"], recipients: ["owner", "crew"], enabled: true },
-  { id: "d2", offset: 3, when: "before", channels: ["in-app"], recipients: ["owner", "crew"], enabled: true },
-  { id: "d3", offset: 1, when: "before", channels: ["in-app"], recipients: ["owner", "crew"], enabled: true },
-  { id: "d4", offset: 3, when: "after",  channels: ["in-app"], recipients: ["owner", "admins"], enabled: true },
+  { id: "d1", offset: 7, when: "before", channels: CH, recipients: ["owner", "crew"], enabled: true },
+  { id: "d2", offset: 3, when: "before", channels: CH, recipients: ["owner", "crew"], enabled: true },
+  { id: "d3", offset: 1, when: "before", channels: CH, recipients: ["owner", "crew"], enabled: true },
+  { id: "d4", offset: 3, when: "after",  channels: CH, recipients: ["owner", "admins"], enabled: true },
 ];
 
 /* ---- users ---- */
@@ -50,6 +51,8 @@ function prefsAllow(user, type) {
   return per[type] !== false; // missing = on
 }
 const pushAllow = (user) => !(user && user.notifPrefs && user.notifPrefs.push === false); // missing = on
+const emailAllow = (user) => !(user && user.notifPrefs && user.notifPrefs.email === false); // missing = on
+const isActive = (user) => user && (user.status === "approved" || user.role === "admin");
 
 /* ---- web push (FCM) ---- send to all of a user's devices, prune dead tokens.
    Safe no-op when the user has no tokens (e.g. in the emulator). */
@@ -94,16 +97,23 @@ async function writeNotification({ id, uid, type, title, body = "", taskId = "",
 // when newly created and allowed, sends a web push. Honors per-type prefs
 // (unless `required`) and the notification's `channels` (default: push allowed).
 // `keyBase` yields one deterministic doc per recipient.
-async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, keyBase, required = false, channels = null }) {
+async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, keyBase, required = false, channels = null, whenText = "", priority = "" }) {
   const url = taskId ? `/?task=${taskId}` : "/";
   const pushChannel = !channels || channels.includes("push");
+  const emailChannel = !channels || channels.includes("email");
   const seen = new Set();
   await Promise.all(recipients.filter(Boolean).map(async (u) => {
     if (seen.has(u.uid)) return; seen.add(u.uid);
     if (!required && !prefsAllow(u, type)) return;
-    const created = await writeNotification({ id: `${keyBase}_${u.uid}`, uid: u.uid, type, title, body, taskId, eventOccurrenceId });
-    // Only push on a first-time write, and only if the user allows push.
-    if (created && pushChannel && pushAllow(u)) await sendPush(u.uid, { title, body, url });
+    const notificationId = `${keyBase}_${u.uid}`;
+    const created = await writeNotification({ id: notificationId, uid: u.uid, type, title, body, taskId, eventOccurrenceId });
+    if (!created) return; // idempotent: someone already delivered this one
+    // Fan out to external channels (only on the first write; each respects prefs).
+    if (pushChannel && pushAllow(u)) await sendPush(u.uid, { title, body, url });
+    if (emailChannel && emailAllow(u) && isActive(u)) {
+      const { sendNotificationEmail } = require("./emailService"); // lazy → avoid load-order cycle
+      await sendNotificationEmail({ user: u, type, title, body, taskId, eventId: eventOccurrenceId, url, notificationId, whenText, priority });
+    }
   }));
 }
 
@@ -151,6 +161,6 @@ const localToday = () => DateTime.now().setZone(TZ).toISODate();
 
 module.exports = {
   db, FieldValue, Timestamp, TZ, DEFAULT_REMINDERS,
-  loadUsers, loadSettings, prefsAllow, pushAllow, sendPush, writeNotification, notifyUsers,
+  loadUsers, loadSettings, prefsAllow, pushAllow, emailAllow, isActive, sendPush, writeNotification, notifyUsers,
   resolveTaskRecipients, crewRoleLabel, computeFireAt, relativeDue, localHour, localToday,
 };

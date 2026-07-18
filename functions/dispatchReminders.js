@@ -11,9 +11,11 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { logger } = require("firebase-functions/v2");
 const {
   db, FieldValue, Timestamp, TZ,
-  loadUsers, loadSettings, notifyUsers, writeNotification,
+  loadUsers, loadSettings, notifyUsers, writeNotification, prefsAllow, emailAllow, isActive,
   resolveTaskRecipients, relativeDue, localHour, localToday,
 } = require("./lib");
+const { resendApiKey, sendDigestEmail } = require("./emailService");
+const quota = require("./emailQuota");
 
 const LEASE_MINUTES = 10;
 const MAX_ATTEMPTS = 3;
@@ -83,23 +85,39 @@ async function runDispatch() {
   const candidates = [...dueSnap.docs, ...stale];
 
   let processed = 0, skipped = 0, failed = 0;
+  // Reminder EMAILS are batched into one digest per user (counts as 1 email).
+  // In-app + push still fire per task; only email is deferred to the digest.
+  const digest = new Map(); // uid -> { user, items:[{title, dueText}] }
   for (const snap of candidates) {
     const inst = await claim(snap.ref, execId, now);
     if (!inst) continue; // another run owns it
     try {
       const taskSnap = await db.doc(`tasks/${inst.taskId}`).get();
       const task = taskSnap.exists ? taskSnap.data() : null;
+      // Never remind on completed/archived tasks.
       if (!task || task.status === "Posted") {
         await snap.ref.update({ status: "skipped", processedAt: FieldValue.serverTimestamp() });
         skipped++; continue;
       }
       const recipients = resolveTaskRecipients(inst.recipients, task, users, byName)
         .map((uid) => byUid[uid]).filter(Boolean);
+      const dueText = relativeDue(task.postDate);
+      // In-app + push per task (email stripped — batched below).
       await notifyUsers(recipients, {
         type: "reminder", taskId: inst.taskId,
-        title: `'${task.title}' ${relativeDue(task.postDate)}`,
-        keyBase: `reminder_${snap.id}`, channels: inst.channels,
+        title: `'${task.title}' ${dueText}`,
+        keyBase: `reminder_${snap.id}`,
+        channels: (inst.channels || []).filter((c) => c !== "email"),
       });
+      // Accumulate email digest items for recipients who allow reminder email.
+      if ((inst.channels || []).includes("email")) {
+        for (const u of recipients) {
+          if (!isActive(u) || !emailAllow(u) || !prefsAllow(u, "reminder")) continue;
+          const e = digest.get(u.uid) || { user: u, items: [] };
+          if (!e.items.some((i) => i.title === task.title)) e.items.push({ title: task.title, dueText });
+          digest.set(u.uid, e);
+        }
+      }
       await snap.ref.update({ status: "processed", processedAt: FieldValue.serverTimestamp(), lastError: "" });
       processed++;
     } catch (e) {
@@ -111,17 +129,29 @@ async function runDispatch() {
     }
   }
 
+  // Send one batched reminder digest per user (idempotent per user per day).
+  let digests = 0;
+  const today = localToday();
+  for (const { user, items } of digest.values()) {
+    const r = await sendDigestEmail({ user, items, notificationId: `reminderdigest_${user.uid}_${today}` });
+    if (r.status === "sent") digests++;
+  }
+
   // Morning leadership digest (once per day at the configured local hour).
   if (localHour() === settings.reminderHourLocal) {
     await leadershipDigest(users, settings);
   }
 
-  logger.info("dispatchReminders complete", { candidates: candidates.length, processed, skipped, failed });
-  return { candidates: candidates.length, processed, skipped, failed };
+  // Release reservations stuck in "unknown" after an uncertain send.
+  let reconciled = 0;
+  try { reconciled = await quota.reconcile(); } catch (e) { logger.warn("email reconcile failed", { error: e.message }); }
+
+  logger.info("dispatchReminders complete", { candidates: candidates.length, processed, skipped, failed, digests, reconciled });
+  return { candidates: candidates.length, processed, skipped, failed, digests, reconciled };
 }
 
 exports.dispatchReminders = onSchedule(
-  { schedule: "every 1 hours", timeZone: TZ, memory: "256MiB", timeoutSeconds: 120, maxInstances: 1 },
+  { schedule: "every 1 hours", timeZone: TZ, memory: "256MiB", timeoutSeconds: 120, maxInstances: 1, secrets: [resendApiKey] },
   runDispatch,
 );
 // Exposed for emulator/manual testing without waiting for the scheduler.
