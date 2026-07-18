@@ -48,7 +48,7 @@
   --motion-micro:150ms; --motion-standard:220ms; --motion-overlay:280ms;
   --ease-out:cubic-bezier(.2,.8,.3,1); --ease-inout:cubic-bezier(.45,0,.25,1);
   /* -- icon sizes -- */
-  --icon-xs:16px; --icon-sm:18px; --icon-md:20px; --icon-nav:23px; --icon-empty:48px;
+  --icon-xs:16px; --icon-sm:18px; --icon-md:20px; --icon-nav:20px; --icon-empty:48px;
   /* -- layout -- */
   --side:248px;
   /* -- legacy aliases (do not use in NEW rules) -- */
@@ -329,7 +329,7 @@ a{color:var(--primary)}
 .sb-navbtn.on .ico{background:var(--primary-muted)}
 .sb-navbtn .ico{width:44px;height:28px;border-radius:var(--r-pill);display:flex;align-items:center;justify-content:center;
   transition:background var(--motion-standard) var(--ease-out)}
-.sb-navav{width:23px;height:23px;font-size:9px}
+.sb-navav{width:20px;height:20px;font-size:8px}
 .sb-navbtn .pill{position:absolute;top:0;right:14px;background:var(--red);color:#fff;font-size:9px;
   font-weight:700;border-radius:999px;padding:0 5px}
 
