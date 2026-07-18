@@ -905,3 +905,17 @@ a{color:var(--primary)}
 .tl-adv .sb-rchip{min-height:34px;padding:6px 13px;font-size:var(--text-label)}
 .link.danger{color:var(--danger);background:none;border:none;font-size:var(--text-support);
   font-weight:600;padding:6px 0;cursor:pointer}
+
+/* --- Notification drawer (desktop) + filters + grouping (v1.1.2) --- */
+.sb-unreadct{font-weight:600;font-size:13px;color:var(--text-muted)}
+.sb-nfilters{display:flex;gap:6px;overflow-x:auto;padding:10px 16px 4px;scrollbar-width:none}
+.sb-nfilters::-webkit-scrollbar{display:none}
+.sb-nfilters .sb-fchip{flex:none}
+.sb-ngroup{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--text-muted);padding:12px 16px 4px}
+@media(min-width:900px){
+  .sb-scrim-right{justify-content:flex-end;align-items:stretch;padding:0}
+  .sb-scrim-right .sb-notifpanel{width:440px;max-width:92vw;height:100dvh;max-height:100dvh;
+    border-radius:var(--r-panel) 0 0 var(--r-panel);animation:slidein var(--motion-overlay) var(--ease-out)}
+}
+@keyframes slidein{from{transform:translateX(40px);opacity:.5}to{transform:translateX(0);opacity:1}}

@@ -151,8 +151,38 @@ function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onN
 /* Notification Center — a slide-over listing the signed-in user's
    notifications (newest first). Reads via useNotifications; docs are written
    by the backend (Slice 3), so until then this shows the empty state. */
+const NOTIF_FILTERS = [
+  { id:"all",       label:"All" },
+  { id:"unread",    label:"Unread" },
+  { id:"assigned",  label:"Assignments", types:["assigned"] },
+  { id:"reviews",   label:"Reviews",     types:["qa"] },
+  { id:"changes",   label:"Changes",     types:["changes"] },
+  { id:"reminders", label:"Reminders",   types:["reminder","overdue"] },
+  { id:"approvals", label:"Approvals",   types:["approved","ready","account_approved"] },
+  { id:"system",    label:"System",      types:["leadership","mention"] },
+];
+// Date-group the loaded page of notifications: Today / Yesterday / This week / Earlier.
+function notifGroups(items) {
+  const now = new Date(); const day0 = new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
+  const g = { "Today":[], "Yesterday":[], "This week":[], "Earlier":[] };
+  items.forEach(n => {
+    const ms = n.createdAt?.toMillis ? n.createdAt.toMillis() : 0;
+    if (ms >= day0) g["Today"].push(n);
+    else if (ms >= day0 - 86400000) g["Yesterday"].push(n);
+    else if (ms >= day0 - 6*86400000) g["This week"].push(n);
+    else g["Earlier"].push(n);
+  });
+  return Object.entries(g).filter(([,v])=>v.length);
+}
+
 function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
   const { items, unread, hasMore, loadMore, markRead, markAllRead } = notif;
+  const [flt, setFlt] = useState("all");
+  const active = NOTIF_FILTERS.find(f=>f.id===flt) || NOTIF_FILTERS[0];
+  const filtered = flt==="all" ? items
+    : flt==="unread" ? items.filter(n=>!n.read)
+    : items.filter(n=>(active.types||[]).includes(n.type));
+  const groups = notifGroups(filtered);
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -167,34 +197,48 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
     }
   };
   return (
-    <div className="sb-scrim" onMouseDown={onClose}>
-      <div className="sb-notifpanel" onMouseDown={e=>e.stopPropagation()}>
+    <div className="sb-scrim sb-scrim-right" onMouseDown={onClose}>
+      <div className="sb-notifpanel" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Notifications">
         <div className="sb-notifhd">
-          <b className="sb-serif" style={{fontSize:17}}>Notifications</b>
+          <b className="sb-serif" style={{fontSize:17}}>Notifications{unread>0 && <span className="sb-unreadct"> · {unread} unread</span>}</b>
           <div className="sb-notifhd-actions">
             {unread>0 && <button className="link" onClick={markAllRead}>Mark all read</button>}
             <button className="sb-iconbtn" onClick={onSettings} aria-label="Notification settings"><Cog6ToothIcon className="hi" aria-hidden="true"/></button>
             <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button>
           </div>
         </div>
-        {items.length===0
-          ? <div className="sb-empty"><div className="big"><BellIcon className="hi hi-empty" aria-hidden="true"/></div>You're all caught up. New updates will show here.</div>
+        <div className="sb-nfilters" role="tablist" aria-label="Filter notifications">
+          {NOTIF_FILTERS.map(fo => (
+            <button key={fo.id} role="tab" aria-selected={flt===fo.id}
+              className={"sb-fchip"+(flt===fo.id?" on":"")} onClick={()=>setFlt(fo.id)}>{fo.label}</button>
+          ))}
+        </div>
+        {filtered.length===0
+          ? <div className="sb-empty"><div className="big"><BellIcon className="hi hi-empty" aria-hidden="true"/></div>
+              {items.length===0
+                ? <>You're all caught up.<br/>New assignments, reviews, reminders, and approvals will appear here.</>
+                : "Nothing matches this filter."}</div>
           : <div className="sb-notiflist">
-              {items.map(n => {
-                const meta = NOTIF_META[n.type] || NOTIF_FALLBACK;
-                const MetaIcon = meta.icon;
-                return (
-                  <button key={n.id} className={"sb-notif"+(n.read?"":" unread")} onClick={()=>open(n)}>
-                    <span className={"ic "+(meta.tint||"tint-neutral")}><MetaIcon className="hi" aria-hidden="true"/></span>
-                    <span className="bd">
-                      <span className="ti">{n.title}</span>
-                      {n.body && <span className="bo">{n.body}</span>}
-                      <span className="mt">{meta.label} · {timeAgo(n.createdAt)}</span>
-                    </span>
-                    {!n.read && <span className="ndot" />}
-                  </button>
-                );
-              })}
+              {groups.map(([label, rows]) => (
+                <div key={label}>
+                  <div className="sb-ngroup">{label}</div>
+                  {rows.map(n => {
+                    const meta = NOTIF_META[n.type] || NOTIF_FALLBACK;
+                    const MetaIcon = meta.icon;
+                    return (
+                      <button key={n.id} className={"sb-notif"+(n.read?"":" unread")} onClick={()=>open(n)}>
+                        <span className={"ic "+(meta.tint||"tint-neutral")}><MetaIcon className="hi" aria-hidden="true"/></span>
+                        <span className="bd">
+                          <span className="ti">{n.title}</span>
+                          {n.body && <span className="bo">{n.body}</span>}
+                          <span className="mt">{meta.label} · {timeAgo(n.createdAt)}</span>
+                        </span>
+                        {!n.read && <span className="ndot" aria-label="Unread" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
               {hasMore && <div style={{textAlign:"center",padding:"6px 0 12px"}}>
                 <button className="sb-btn ghost compact" onClick={loadMore}>Load more</button></div>}
             </div>}
