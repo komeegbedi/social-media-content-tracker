@@ -873,7 +873,7 @@ function Board({ profile, isAdmin }) {
   const mainNav = [
     { id:"home",  label:"Home",    ico:()=>navIco(HomeIcon) },
     { id:"myday", label:"My Day",  ico:()=>navIco(ClockIcon) },
-    { id:"board", label:"Board",   ico:()=>navIco(ViewColumnsIcon) },
+    { id:"board", label:"Workflow", ico:()=>navIco(ViewColumnsIcon) },
     { id:"mine",  label:"My Work", ico:()=>navIco(ClipboardDocumentListIcon) },
   ];
   const mgmtNav = [
@@ -1256,7 +1256,6 @@ function MyDay({ tasks, me, openTask, goTab }) {
 
   return (
     <div className="sb-page">
-      <div className="sb-eyebrow">What's on your plate</div>
       <div className="sb-h">My Day</div>
       <div className="sb-sub">{focusMsg}</div>
 
@@ -1468,8 +1467,7 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
 
   return (
     <div className="sb-page">
-      <div className="sb-eyebrow">Everything in motion</div>
-      <div className="sb-h">The board</div>
+      <div className="sb-h">Workflow</div>
       <div className="sb-sub">
         {total} piece{total!==1?"s":""} of content{filter!=="all"?` · ${activeFilter?.label}`:""},
         grouped by where each one is in the workflow.
@@ -1532,6 +1530,9 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
                 </button>
                 {!isCollapsed && (view==="list"
                   ? <div className="sb-listrows">
+                      <div className="sb-listhead" aria-hidden="true">
+                        <span>Content</span><span>Status</span><span>Owner</span><span>Due</span>
+                      </div>
                       {g.items.map(t => {
                         const d = daysTo(t.postDate);
                         return (
@@ -1573,7 +1574,6 @@ function Mine({ tasks, me, openTask }) {
   const accent = { overdue: " urgent", soon: " soon" };
   return (
     <div className="sb-page">
-      <div className="sb-eyebrow">What needs you next</div>
       <div className="sb-h">My work</div>
       <div className="sb-sub">
         {total===0 ? "You're all clear. Nothing assigned to you right now."
@@ -1616,7 +1616,6 @@ function Team({ tasks, users }) {
 
   return (
     <div className="sb-page">
-      <div className="sb-eyebrow">Who's carrying what</div>
       <div className="sb-h">Team load</div>
       <div className="sb-sub">Active tasks per person (posted work excluded). Spot overload at a glance.</div>
       <div className="sb-caplegend" style={{marginBottom:16}}>
@@ -1632,10 +1631,10 @@ function Team({ tasks, users }) {
               <div className="top">
                 <span className="name">
                   <span className="sb-av">{initials(u.name)}</span>{u.name}
-                  {over && <span className="sb-overload">OVERLOADED</span>}
+                  {over && <span className="sb-overload">High workload</span>}
                   {idle && <span className="sb-idle">free</span>}
                 </span>
-                <span className="pct">{c.total} · {pct}%</span>
+                <span className="pct">{c.total} active task{c.total!==1?"s":""}<span className="share"> · {pct}% of team load</span></span>
               </div>
               <div className="sb-capbar">
                 {["shoot","edit","coordinate","design","shadow"].map(r =>
@@ -1866,7 +1865,6 @@ function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDele
 
   return (
     <div className="sb-page">
-      <div className="sb-eyebrow">Control room</div>
       <div className="sb-h">Admin</div>
       <div className="sb-sub">What needs leadership attention.</div>
       <div className="sb-seg" style={{marginBottom:14}}>
@@ -2397,7 +2395,13 @@ function ImportPanel({ users, onImport }) {
       </div>
 
       <div className="sb-field"><label>Upload a CSV file</label>
-        <input type="file" accept=".csv,text/csv" onChange={onFile} /></div>
+        <label className="sb-dropzone">
+          <ArrowUpTrayIcon className="hi" aria-hidden="true"/>
+          <b>Upload CSV</b>
+          <span>Drag and drop a file here, or <u>browse</u></span>
+          <span className="hint">CSV files only</span>
+          <input type="file" accept=".csv,text/csv" onChange={onFile} />
+        </label></div>
 
       <div className="sb-field"><label>…or paste a Google Sheet link</label>
         <div className="sb-urlrow">
@@ -2521,7 +2525,7 @@ function TaskCard({ t, me, onClick }) {
       </div>
       {/* Fixed order: blocking issue → up next → supporting/owner → avatars. */}
       {t.blockedOn && <div className="sb-next blocked"><span className="sb-next-lbl">Blocked</span>Waiting on {t.blockedOn}</div>}
-      {!isPosted && <div className="sb-next"><span className="sb-next-lbl">Up next</span>{nextStep(t.status)}</div>}
+      {!isPosted && <div className="sb-next"><span className="sb-next-lbl">Next</span>{nextStep(t.status)}</div>}
       {supporting && <div className="sb-support">Supporting {t.owner.split(" ")[0]}</div>}
 
       <div className="sb-ppl">

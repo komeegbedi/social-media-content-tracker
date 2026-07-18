@@ -180,7 +180,8 @@ a{color:var(--primary)}
 .sb-page{padding:18px 16px 8px}
 @media(min-width:900px){ .sb-page{padding:30px 14px 24px} }
 .sb-eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);opacity:.85}
-.sb-h{font-size:27px;font-weight:600;margin:5px 0 6px;line-height:1.1}
+.sb-h{font-size:30px;font-weight:700;margin:5px 0 6px;line-height:1.1;letter-spacing:-.02em}
+@media(min-width:900px){ .sb-h{font-size:38px} }
 @media(min-width:900px){ .sb-h{font-size:40px} }
 .sb-sub{color:var(--muted);font-size:14px;line-height:1.5;margin-bottom:22px}
 .sb-greet{font-size:14.5px;line-height:1.65;max-width:42ch;margin:10px 0 18px}
@@ -197,8 +198,8 @@ a{color:var(--primary)}
 .dot-blue{color:var(--blue)} .dot-red{color:var(--red)} .dot-violet{color:var(--violet)}
 
 .sb-shead{display:flex;align-items:baseline;justify-content:space-between;margin:30px 2px 12px}
-.sb-shead h2{font-size:17px;font-weight:600;letter-spacing:-.01em}
-@media(min-width:900px){ .sb-shead h2{font-size:19px} }
+.sb-shead h2{font-size:19px;font-weight:600;letter-spacing:-.01em}
+@media(min-width:900px){ .sb-shead h2{font-size:21px} }
 .sb-shead .link{font-size:12.5px;color:var(--violet);font-weight:600;background:none;border:none;padding:0}
 .sb-shead .link.subtle{color:var(--muted);font-weight:500;font-size:12px}
 .sb-shead-strong h2{font-size:19px;font-weight:700}
@@ -1020,3 +1021,29 @@ body,.sb-side,.sb-nav,.sb-sheet,.sb-drawer,.sb-notifpanel,.sb-ev,.sb-attn,.sb-pr
 .sb-notif .ic{width:32px;height:32px;margin-top:2px}
 .sb-notif .ic .hi{width:17px;height:17px}
 .sb-notif .ndot.top{align-self:flex-start;margin-top:8px}
+
+/* --- design_changes.md pass: list headers, focus rows, banner, dropzone --- */
+.sb-listhead{display:grid;grid-template-columns:1fr auto auto auto;gap:10px;padding:9px 14px;
+  font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);
+  border-bottom:1px solid var(--border);background:var(--surface-muted)}
+@media(max-width:559px){ .sb-listhead{display:none} }
+/* Home "Your focus": flat divided rows instead of stacked cards */
+.sb-attnlist{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);overflow:hidden}
+.sb-attnlist .sb-attn{border:none;border-radius:0;border-bottom:1px solid var(--border);box-shadow:none;margin:0}
+.sb-attnlist .sb-attn:last-child{border-bottom:none}
+/* Beta banner: compact status strip, no competition with headings */
+.sb-beta{padding:7px 12px;font-size:12px;border-radius:var(--r-control)}
+.sb-beta b{font-weight:600}
+/* Team load share text quieter */
+.sb-cap .pct .share{color:var(--text-muted);font-weight:500}
+.sb-overload{text-transform:none;letter-spacing:0}
+/* Designed CSV drop zone */
+.sb-dropzone{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;
+  border:1.5px dashed var(--border-strong);border-radius:var(--r-card);padding:26px 16px;cursor:pointer;
+  color:var(--text-secondary);background:var(--surface-muted);
+  transition:border-color var(--motion-micro) var(--ease-out),background var(--motion-micro) var(--ease-out)}
+.sb-dropzone:hover{border-color:var(--primary);background:var(--primary-muted)}
+.sb-dropzone b{color:var(--text-primary);font-size:14.5px;margin-top:4px}
+.sb-dropzone span{font-size:12.5px}
+.sb-dropzone .hint{color:var(--text-muted);font-size:11.5px}
+.sb-dropzone input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
