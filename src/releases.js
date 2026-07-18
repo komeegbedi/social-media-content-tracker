@@ -17,6 +17,11 @@ export const RELEASES = [
       ["Weekly Saturday check-in", "A gentle Saturday-evening reminder to check what you're shooting or preparing for Sunday."],
       ["Redesigned emails", "Notification emails are cleaner, more personal, and clearer about what needs your attention."],
       ["Share your ideas", "Use “Submit feature request” in the profile menu to tell us what would help your workflow."],
+      ["Refined mobile navigation", "Bigger, clearer bottom-nav icons with a tidier layout and a smoother active highlight."],
+      ["Cleaner event cards", "Home event cards are easier to read on your phone, with one clear action each."],
+      ["A friendlier sign-in", "Refreshed sign-in and registration with show/hide password, a forgot-password link, and clearer error messages."],
+      ["Smoother content creation", "Creating and editing content scrolls cleanly on mobile, with reminders tucked into a simple summary."],
+      ["Confirmation before deleting", "Clear confirmation dialogs before anything is removed, so nothing goes by accident."],
     ],
   },
   {

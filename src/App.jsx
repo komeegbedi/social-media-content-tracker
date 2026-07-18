@@ -1971,13 +1971,36 @@ function KebabMenu({ items }) {
   );
 }
 
+/* Designed confirmation dialog (replaces browser confirm for destructive
+   actions): explains what happens, danger-coloured confirm only. */
+function ConfirmDialog({ title, body, confirmLabel = "Delete", cancelLabel = "Cancel", danger = true, onConfirm, onClose }) {
+  useLockBody();
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="sb-scrim" onClick={onClose}>
+      <div className="sb-confirm" onClick={e=>e.stopPropagation()} role="alertdialog" aria-label={title}>
+        <b className="sb-serif" style={{fontSize:17}}>{title}</b>
+        {body && <p>{body}</p>}
+        <div className="sb-btnrow" style={{marginTop:16}}>
+          <button className="sb-btn ghost" onClick={onClose}>{cancelLabel}</button>
+          <button className={"sb-btn"+(danger?" danger":"")} onClick={()=>{ onConfirm(); onClose(); }}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* Shared kebab actions for an admin content card. */
 const adminKebab = (t, h) => [
   { label:"Open", onClick:()=>h.open(t.id) },
   { label:"Edit", onClick:()=>h.edit(t) },
   { label:"Duplicate", onClick:()=>h.duplicate(t) },
   ...(t.status!=="Posted" ? [{ label:"Archive", onClick:()=>h.archive(t) }] : []),
-  { label:"Delete", danger:true, onClick:()=>{ if(confirm(`Delete "${t.title}"?`)) h.del(t.id); } },
+  { label:"Delete", danger:true, onClick:()=>h.del(t.id, t.title) },
 ];
 
 /* Admin content card — surfaces status, owner, the problem (blocker/gap) and
@@ -2127,8 +2150,9 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEdi
   const openIssues = (issues || []).filter(i => i.status !== "resolved").length;
 
   // Card action handlers, bundled once and threaded through the panels.
+  const [confirmDel, setConfirmDel] = useState(null);
   const h = { open:onOpenTask, edit:onEditTask, archive:onArchiveTask,
-              duplicate:onDuplicateTask, del:onDeleteTask, auto:onAutoOne };
+              duplicate:onDuplicateTask, del:(id,title)=>setConfirmDel({id,title}), auto:onAutoOne };
   const goContent = (filter="all") => { setContentFilter(filter); setSec("content"); };
 
   const tabs = [
@@ -2166,6 +2190,11 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEdi
       {sec==="events" && <AdminEvents series={eventSeries} />}
       {sec==="import" && <ImportPanel users={teamUsers} onImport={onImport} />}
       {sec==="issues" && <IssueLog issues={issues} onResolve={onResolveIssue} />}
+      {confirmDel && <ConfirmDialog
+        title="Delete this content?"
+        body={`"${confirmDel.title}" will be permanently removed. This can't be undone. Comments and activity on it are removed too.`}
+        confirmLabel="Delete content"
+        onConfirm={()=>onDeleteTask(confirmDel.id)} onClose={()=>setConfirmDel(null)} />}
     </div>
   );
 }
@@ -2340,6 +2369,7 @@ function AdminContent({ tasks, h, filter, setFilter, onNewContent, onAutoAll }) 
 /* A compact pending-approval row: identity + a single primary "Review" action.
    Reject is tucked into the kebab so the page isn't a wall of danger buttons. */
 function PendingRow({ u, tasks, onReview, onReject, onAssignSuggested }) {
+  const [confirmReject, setConfirmReject] = useState(false);
   return (
     <div className="sb-prow">
       <span className="sb-av" style={{width:38,height:38,fontSize:13}}>{initials(u.name)}</span>
@@ -2351,8 +2381,13 @@ function PendingRow({ u, tasks, onReview, onReject, onAssignSuggested }) {
       <button className="sb-btn green compact" onClick={onReview}>Review</button>
       <KebabMenu items={[
         { label:"Review & approve", onClick:onReview },
-        { label:"Reject", danger:true, onClick:()=>{ if(confirm(`Reject ${u.name}? Their account will be removed.`)) onReject(u.id); } },
+        { label:"Reject", danger:true, onClick:()=>setConfirmReject(true) },
       ]} />
+      {confirmReject && <ConfirmDialog
+        title={`Reject ${u.name}?`}
+        body="Their pending account will be removed. They can register again if it was a mistake."
+        confirmLabel="Reject account"
+        onConfirm={()=>onReject(u.id)} onClose={()=>setConfirmReject(false)} />}
     </div>
   );
 }

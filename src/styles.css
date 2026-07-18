@@ -1128,3 +1128,12 @@ body,.sb-side,.sb-nav,.sb-sheet,.sb-drawer,.sb-notifpanel,.sb-ev,.sb-attn,.sb-pr
 .sb-pushbadge.on{background:var(--success-muted);color:var(--success);border-color:transparent}
 .sb-pushbadge.off{background:var(--surface-muted);color:var(--text-muted)}
 .sb-pushbadge.none{background:var(--warning-muted);color:var(--warning);border-color:transparent}
+
+/* Designed confirmation dialog */
+.sb-confirm{background:var(--surface-elevated);border-radius:var(--r-panel);padding:22px;width:100%;max-width:400px;
+  margin:auto;box-shadow:var(--shadow-lg);animation:rise var(--motion-standard) var(--ease-out)}
+@media(max-width:559px){ .sb-confirm{margin:auto 0 0;border-radius:var(--r-panel) var(--r-panel) 0 0;max-width:100%} }
+.sb-confirm p{font-size:13.5px;color:var(--text-secondary);line-height:1.5;margin-top:8px}
+.sb-confirm .sb-btnrow .sb-btn{margin-top:0}
+.sb-btn.danger{background:var(--danger);color:#fff}
+.sb-btn.danger:hover{background:var(--danger);filter:brightness(.94)}

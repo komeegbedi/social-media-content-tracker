@@ -16,6 +16,14 @@ Visual/interaction redesign only — v1.0/v1.1 functionality, backend, and data 
 - Notifications: desktop right-side drawer, unread count, category filters, date grouping
 - Accessibility: global focus-visible ring, 40–48px touch targets, aria-current/labels/switch roles, reduced-motion preserved
 
+### Final mobile polish
+- Larger mobile nav icons + 5-column grid + refined active state; stacked mobile event cards
+- Single scroll region for sheets (no competing background scroll) + body scroll-lock
+- Redesigned sign-in/registration: email validation, show/hide password, forgot-password
+- Admin push-notification status + filter in People (privacy-safe device counts, no raw tokens)
+- Designed delete/reject confirmation dialogs (replaced browser confirm)
+- Task detail: manual status override tucked behind a disclosure
+
 ### Final release additions
 - Admin-managed recurring events (emoji, anchored schedules, pause/archive, next-dates preview)
 - Saturday 9 PM Winnipeg weekly task-check notification (in-app + push, per-user preference)
