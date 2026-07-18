@@ -1036,7 +1036,7 @@ function Board({ profile, isAdmin }) {
 
           <div className="sb-content">
             <BetaBanner onReport={()=>setShowReport(true)} />
-            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} />}
+            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} />}
             {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
             {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} />}
             {tab==="mine"  && <Mine tasks={tasks} me={me} openTask={setOpenId} />}
@@ -1601,20 +1601,20 @@ function WinCard({ n, label, tone }) {
 /* The HOME landing page — a ministry / celebration dashboard, not a task list.
    It answers: what have we accomplished, what's coming up, what should I
    celebrate, what should I be aware of? Operational work lives in My Day. */
-function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent }) {
+function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, openTask }) {
   const pw = personalWins(tasks, me);
-  const tw = teamWins(tasks);
   const m = dashboardMetrics(tasks, users);
   const thisM = monthlyWins(tasks, 0);
-  const lastM = monthlyWins(tasks, -1);
   const events = upcomingEvents(4);
   const recents = recentWins(tasks, 4);
-  const contributors = contributorWins(tasks, users, 5);
-  const activeContributors = new Set(
-    tasks.filter(t=>t.status!=="Posted").flatMap(t=>[t.owner, ...(t.support||[]).map(s=>s.name)])
-  ).size;
   const readyToPost = tasks.filter(t=>t.status==="Approved").length;
   const prepCount = events.filter(e=>e.prepNow).length;
+  // "Your focus": only what needs the signed-in user, capped so Home stays calm.
+  const focus = attentionItems(tasks, me).slice(0, 4);
+  // Compact team progress: completed vs everything currently on the board.
+  const doneCount = tasks.filter(t=>t.status==="Posted").length;
+  const totalCount = tasks.length;
+  const donePct = totalCount ? Math.round((doneCount/totalCount)*100) : 0;
 
   const hi = new Date().getHours();
   const greet = hi<12?"Good morning":hi<17?"Good afternoon":"Good evening";
@@ -1671,55 +1671,36 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent }) 
         </div>
       </>}
 
-      {/* Ministry wins */}
-      <div className="sb-shead"><h2>Ministry wins</h2></div>
-      <div className="sb-mlabel">This month</div>
-      <div className="sb-wincards">
-        <WinCard n={thisM.posted} label="Content posted" />
-        <WinCard n={thisM.reels} label="Reels completed" />
-        <WinCard n={thisM.graphics} label="Graphics delivered" />
-      </div>
-      <div className="sb-mlabel">Last month</div>
-      <div className="sb-wincards">
-        <WinCard n={lastM.posted} label="Content posted" />
-        <WinCard n={lastM.campaigns} label="Campaigns" />
-      </div>
+      {/* Your focus — only what needs YOU; the full list lives in My Day */}
+      <div className="sb-shead"><h2>Your focus</h2>
+        <button className="link subtle" onClick={()=>goTab("myday")}>My Day →</button></div>
+      {focus.length===0
+        ? <div className="sb-empty compact">Nothing needs you right now. Enjoy the calm.</div>
+        : <div className="sb-attnlist">{focus.map(t =>
+            <AttentionItem key={t.id} t={t} onClick={()=>openTask ? openTask(t.id) : goTab("myday")} />)}</div>}
 
-      {/* Personal contributions */}
-      <div className="sb-shead"><h2>Your contributions</h2></div>
-      <div className="sb-wincards">
-        <WinCard n={pw.completed} label="Projects completed" />
-        <WinCard n={pw.contributions} label="Contributions" />
-        <WinCard n={pw.approved} label="Approved / posted" />
-      </div>
-      {contributors.length>0 && <>
-        <div className="sb-mlabel">Across the team</div>
-        <div className="sb-caplist">
-          {contributors.map(c => (
-            <div className="sb-cap" key={c.name}><div className="top">
-              <span className="name"><span className="sb-av">{initials(c.name)}</span>{c.name}</span>
-              <span className="pct">{c.n} delivered</span>
-            </div></div>
-          ))}
+      {/* Team progress — one compact summary instead of metric walls */}
+      <div className="sb-shead"><h2>Team progress</h2></div>
+      <div className="sb-progress">
+        <div className="row">
+          <b>{doneCount} of {totalCount} content pieces completed</b>
+          <span className="pct">{donePct}%</span>
         </div>
-      </>}
-
-      {/* Team statistics */}
-      <div className="sb-shead"><h2>Team statistics</h2></div>
-      <div className="sb-strip">
-        <div className="sb-stat"><span className="num dot-violet">{activeContributors}</span><span className="lbl">Active contributors</span></div>
-        <div className="sb-stat"><span className="num dot-green">{tw.posted}</span><span className="lbl">Posted all-time</span></div>
-        <div className="sb-stat"><span className="num dot-amber">{m.awaiting}</span><span className="lbl">In approval</span></div>
-        <div className="sb-stat"><span className="num dot-blue">{m.avgApprovalHours==null?"-":m.avgApprovalHours+"h"}</span><span className="lbl">Avg approval</span></div>
+        <div className="bar" role="progressbar" aria-valuenow={donePct} aria-valuemin={0} aria-valuemax={100}
+          aria-label="Team content completion"><span style={{width:`${donePct}%`}}/></div>
+        <div className="chips">
+          <button onClick={()=>goTab("board")}>{m.awaiting} awaiting review</button>
+          <button onClick={()=>goTab("board")}>{readyToPost} ready to post</button>
+          {m.overdue>0 && <button className="warn" onClick={()=>goTab("myday")}>{m.overdue} overdue</button>}
+        </div>
       </div>
 
-      {/* Team pulse — small, awareness not stress */}
-      <div className="sb-div"><span>Team pulse</span></div>
-      <div className="sb-strip" style={{marginTop:12}}>
-        <button className="sb-stat" onClick={()=>goTab("board")}><span className="num dot-amber">{m.awaiting}</span><span className="lbl">Awaiting approval</span></button>
-        <button className="sb-stat" onClick={()=>goTab("board")}><span className="num dot-green">{readyToPost}</span><span className="lbl">Ready to post</span></button>
-        <button className="sb-stat" onClick={()=>goTab("myday")}><span className="num dot-red">{m.overdue}</span><span className="lbl">Overdue</span></button>
-        <button className="sb-stat" onClick={()=>goTab("board")}><span className="num dot-blue">{m.upcoming}</span><span className="lbl">Upcoming (7d)</span></button>
+      {/* Wins — this month + yours, kept encouraging and compact */}
+      <div className="sb-shead"><h2>Ministry wins</h2></div>
+      <div className="sb-wincards">
+        <WinCard n={thisM.posted} label="Posted this month" />
+        <WinCard n={pw.completed} label="You completed" />
+        <WinCard n={pw.contributions} label="Your contributions" />
       </div>
 
       {/* Recent wins */}

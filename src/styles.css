@@ -800,3 +800,20 @@ a{color:var(--primary)}
   .sb-snav button .pill{position:absolute;right:6px;top:6px;margin-left:0}
   .sb-snav button{position:relative}
 }
+
+/* --- Home: team progress card + compact empty (v1.1.2) --- */
+.sb-progress{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:var(--sp-4) var(--sp-4) var(--sp-3)}
+.sb-progress .row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.sb-progress .row b{font-size:var(--text-card);font-weight:600}
+.sb-progress .pct{font-size:var(--text-support);font-weight:700;color:var(--primary)}
+.sb-progress .bar{height:8px;border-radius:var(--r-pill);background:var(--background-muted);overflow:hidden}
+.sb-progress .bar span{display:block;height:100%;border-radius:var(--r-pill);background:var(--primary);
+  transition:width var(--motion-overlay) var(--ease-out)}
+.sb-progress .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.sb-progress .chips button{font-size:var(--text-label);font-weight:600;padding:6px 12px;min-height:32px;
+  border-radius:var(--r-pill);border:1px solid var(--border);background:var(--surface-muted);
+  color:var(--text-secondary);cursor:pointer}
+.sb-progress .chips button.warn{background:var(--danger-muted);color:var(--danger);border-color:transparent}
+.sb-empty.compact{padding:18px 16px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-card);text-align:left}
