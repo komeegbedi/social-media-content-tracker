@@ -89,6 +89,22 @@ export function nextOccurrences(rule, from, count = 1) {
   const start = rule.start ? parseISO(rule.start) : null;
   const end = rule.end ? parseISO(rule.end) : null;
   const out = [];
+  // Weekly cadence: step in exact 7*everyX-day strides from the anchor date,
+  // so "every week" / "every two weeks" stay phase-locked to the anchor.
+  if (rule.type === "everyXWeeks") {
+    const anchor = rule.start ? parseISO(rule.start) : from;
+    const stride = 7 * (rule.everyX || 1) * 86400000;
+    let t = anchor.getTime();
+    if (t < from.getTime()) t += Math.ceil((from.getTime() - t) / stride) * stride;
+    for (let i = 0; i < 240 && out.length < count; i++, t += stride) {
+      const d = new Date(t); d.setHours(0,0,0,0);
+      const key = isoDate(d);
+      if (rule.exceptions && rule.exceptions.includes(key)) continue;
+      if (end && d > end) break;
+      out.push(rule.overrides && rule.overrides[key] ? parseISO(rule.overrides[key]) : d);
+    }
+    return out;
+  }
   let year = from.getFullYear();
   let month = from.getMonth() + 1;
 
@@ -162,6 +178,7 @@ function toOccurrence(series, date, today, prepLead) {
   return {
     kind: series.kind,
     name: series.name,
+    emoji: series.emoji || "",
     annual: series.annual,
     date,
     eventSeriesId: series.id,
@@ -175,9 +192,10 @@ function toOccurrence(series, date, today, prepLead) {
 
 /* Upcoming events, soonest first — the NEXT occurrence of each series.
    `prepLead` = days before an event that content prep should start. */
-export function upcomingEvents(limit = 5, prepLead = 15) {
+export function upcomingEvents(limit = 5, prepLead = 15, extraSeries = []) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  return EVENT_SERIES
+  const custom = (extraSeries || []).map(seriesFromDoc).filter(Boolean).filter(x => x.showOnHome);
+  return [...EVENT_SERIES, ...custom]
     .map((s) => {
       const [next] = nextOccurrences(s.rule, today, 1);
       return next ? toOccurrence(s, next, today, prepLead) : null;
@@ -196,4 +214,41 @@ export function searchEvents(query) {
     const h = `${e.name} ${e.kind}`.toLowerCase();
     return terms.every((term) => h.includes(term));
   });
+}
+
+/* ---- Admin-managed series (Firestore `eventSeries` docs) ----
+   The admin picks a frequency + interval + "next occurrence" anchor date;
+   the pattern's weekday / calendar-day / nth-position derive from the anchor
+   itself, and all future occurrences are calculated forward from it. */
+export function seriesFromDoc(d) {
+  if (!d || d.active === false || d.archived) return null;
+  const anchor = d.anchorDate; // "YYYY-MM-DD"
+  if (!d.name || !anchor) return null;
+  const [y, m, day] = anchor.split("-").map(Number);
+  const dt = new Date(y, m - 1, day);
+  const wd = dt.getDay();
+  const nth = Math.ceil(day / 7);
+  const everyX = Math.max(1, Number(d.interval) || 1);
+  const base = { start: anchor, end: d.endDate || undefined, anchor: { year: y, month: m } };
+  let rule;
+  switch (d.frequency) {
+    case "weekly":            rule = { ...base, type: "everyXWeeks", everyX }; break;
+    case "monthly-day":       rule = { ...base, type: "monthlyDate", day, everyX }; break;
+    case "monthly-weekday":   rule = { ...base, type: "monthlyNthWeekday", weekday: wd, nth, everyX }; break;
+    case "monthly-last-weekday": rule = { ...base, type: "monthlyLastWeekday", weekday: wd, everyX }; break;
+    case "monthly-last-day":  rule = { ...base, type: "monthlyLastDay", everyX }; break;
+    case "yearly":            rule = { ...base, type: "yearlyDate", month: m, day }; break;
+    default: return null;
+  }
+  return { id: d.id || slug(d.name), name: d.name, kind: d.kind || "custom",
+    emoji: d.emoji || "", annual: d.frequency === "yearly", showOnHome: d.showOnHome !== false, rule };
+}
+
+// Human label for a series' cadence (admin list + previews).
+export function seriesCadenceLabel(d) {
+  const x = Math.max(1, Number(d.interval) || 1);
+  const every = x === 1 ? "Every" : x === 2 ? "Every other" : `Every ${x}`;
+  const unit = { "weekly":"week", "monthly-day":"month", "monthly-weekday":"month",
+    "monthly-last-weekday":"month", "monthly-last-day":"month", "yearly":"year" }[d.frequency] || "";
+  return `${every} ${unit}${x > 2 ? "s" : ""}`.trim();
 }

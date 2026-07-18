@@ -81,6 +81,13 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Admin-managed recurring event series: everyone approved can read the
+    // active series (Home renders occurrences); only admins create/edit.
+    match /eventSeries/{id} {
+      allow read: if isApproved();
+      allow create, update, delete: if isAdmin();
+    }
+
     // App-wide settings (e.g. default reminder schedule, leadership roles).
     match /settings/{docId} {
       allow read: if isApproved();

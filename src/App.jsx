@@ -30,7 +30,7 @@ import {
   crewRoleLabel, pendingCrewLabel, CREW_ROLES, occurrenceContentCount, occurrenceTasks,
   DEFAULT_REMINDERS, REMINDER_CHANNELS, REMINDER_RECIPIENTS, MAX_REMINDERS,
 } from "./data";
-import { upcomingEvents, searchEvents, isoDate } from "./events";
+import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
 import { pushState, enablePush, listenForeground } from "./push";
 import { RELEASES, LATEST_RELEASE } from "./releases";
@@ -923,6 +923,7 @@ function Board({ profile, isAdmin }) {
   const tasks = useCollection("tasks", true);
   const issues = useCollection("issues", isAdmin); // admin-only (rules)
   const notifSettings = useDoc("settings/notifications", true); // reminder defaults
+  const eventSeries = useCollection("eventSeries", true); // admin-managed recurring events
 
   const [tab, setTab] = useState("home");
   const [openId, setOpenId] = useState(null);
@@ -1207,13 +1208,13 @@ function Board({ profile, isAdmin }) {
 
           <div className="sb-content">
             <BetaBanner onReport={()=>setShowReport(true)} />
-            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} />}
+            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
             {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
             {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} />}
             {tab==="mine"  && <Mine tasks={tasks} me={me} openTask={setOpenId} />}
             {tab==="team"  && <Team tasks={tasks} users={users} />}
             {tab==="admin" && isAdmin && (
-              <Admin users={allUsers} tasks={tasks} teamUsers={users} issues={issues}
+              <Admin users={allUsers} tasks={tasks} teamUsers={users} issues={issues} eventSeries={eventSeries}
                 onEditUser={setEditUser} onEditTask={setEditTask}
                 onDeleteUser={removeUser} onRemoveUser={removeUserWithTasks} onDeleteTask={deleteTask}
                 onArchiveTask={archiveTask} onDuplicateTask={duplicateTask} onOpenTask={setOpenId}
@@ -1555,7 +1556,7 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
             <div className="sb-searchsec">Events · {eventHits.length}</div>
             {eventHits.map((e,i) => (
               <button key={i} className="sb-sresult" onClick={()=>goTab("home")}>
-                <span className="r-icon">{e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+                <span className="r-icon">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
                 <span className="r-main">{e.name}</span>
                 <span className="r-sub">{e.daysAway===0?"Today":`in ${e.daysAway} day${e.daysAway!==1?"s":""}`}</span>
               </button>
@@ -1798,11 +1799,11 @@ function WinCard({ n, label, tone }) {
 /* The HOME landing page — a ministry / celebration dashboard, not a task list.
    It answers: what have we accomplished, what's coming up, what should I
    celebrate, what should I be aware of? Operational work lives in My Day. */
-function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, openTask }) {
+function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, openTask, eventSeries }) {
   const pw = personalWins(tasks, me);
   const m = dashboardMetrics(tasks, users);
   const thisM = monthlyWins(tasks, 0);
-  const events = upcomingEvents(4);
+  const events = upcomingEvents(4, 15, eventSeries);
   const recents = recentWins(tasks, 4);
   const readyToPost = tasks.filter(t=>t.status==="Approved").length;
   const prepCount = events.filter(e=>e.prepNow).length;
@@ -1847,7 +1848,7 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, op
             const n = occurrenceContentCount(e, tasks);
             return (
             <div className="sb-ev" key={e.eventOccurrenceId||i}>
-              <span className="sb-ev-ic">{e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+              <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
               <div style={{flex:1,minWidth:0}}>
                 <div className="sb-ev-name">{e.name}</div>
                 <div className="sb-ev-sub">
@@ -1979,7 +1980,117 @@ function AdminTaskCard({ t, h }) {
   );
 }
 
-function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
+/* Admin-managed recurring events. The "next occurrence" date anchors the
+   pattern (its weekday / calendar day define the rule) and all future dates
+   are calculated forward from it. Edits apply to FUTURE occurrences only;
+   linked content tasks are never modified or deleted. */
+const EVENT_FREQS = [
+  ["weekly","Every N weeks (same weekday)"],
+  ["monthly-day","Every N months (same calendar day)"],
+  ["monthly-weekday","Every N months (nth weekday, from the date)"],
+  ["monthly-last-weekday","Every N months (last weekday of month)"],
+  ["monthly-last-day","Every N months (last day of month)"],
+  ["yearly","Every year (same date)"],
+];
+function AdminEvents({ series }) {
+  const [edit, setEdit] = useState(null); // null | "new" | doc
+  const save = async (f) => {
+    const data = { name:f.name.trim(), emoji:f.emoji.trim(), frequency:f.frequency,
+      interval:Math.max(1,Number(f.interval)||1), anchorDate:f.anchorDate, endDate:f.endDate||"",
+      description:f.description||"", active:f.active!==false, showOnHome:f.showOnHome!==false,
+      archived:!!f.archived, updatedAt: serverTimestamp() };
+    if (f.id) await updateDoc(doc(db,"eventSeries",f.id), data);
+    else await addDoc(collection(db,"eventSeries"), { ...data, createdAt: serverTimestamp() });
+    setEdit(null);
+  };
+  const toggle = (d, patch) => updateDoc(doc(db,"eventSeries",d.id), { ...patch, updatedAt: serverTimestamp() });
+  const live = (series||[]).filter(d=>!d.archived);
+  return (
+    <div>
+      <div className="sb-toolbar" style={{marginBottom:14}}>
+        <button className="sb-btn compact" onClick={()=>setEdit("new")}><PlusIcon className="hi hi-sm" aria-hidden="true"/> New recurring event</button>
+      </div>
+      <div className="sb-sub" style={{marginTop:0}}>Built-in series (birthdays, holidays, Cross Over, Praise &amp; Testimony, Mini Vigil) stay managed in configuration. Events created here appear on Home automatically.</div>
+      {live.length===0
+        ? <div className="sb-empty compact">No custom recurring events yet.</div>
+        : <div className="sb-list" style={{gridTemplateColumns:"1fr"}}>
+            {live.map(d => {
+              const sd = seriesFromDoc({ ...d, active:true });
+              const next = sd ? nextOccurrences(sd.rule, new Date(), 1)[0] : null;
+              return (
+                <div className="sb-task" key={d.id} style={{cursor:"default"}}>
+                  <div className="row1">
+                    <span className="title" style={{fontSize:14.5}}>
+                      {d.emoji && <span className="sb-emoji" style={{marginRight:6}}>{d.emoji}</span>}{d.name}
+                      {d.active===false && <span className="sb-tag" style={{marginLeft:8}}>Paused</span>}
+                    </span>
+                  </div>
+                  <div className="sub">
+                    <span>{seriesCadenceLabel(d)}</span>
+                    <span>{next ? `Next: ${fmtEventDate(next)}` : "No upcoming dates"}</span>
+                  </div>
+                  <div className="sb-btnrow" style={{marginTop:8}}>
+                    <button className="sb-btn ghost compact" onClick={()=>setEdit(d)}>Edit</button>
+                    <button className="sb-tertiary" onClick={()=>toggle(d,{active:d.active===false})}>{d.active===false?"Resume":"Pause"}</button>
+                    <button className="sb-tertiary" onClick={()=>toggle(d,{archived:true})}>Archive</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>}
+      {edit && <EventSeriesEditor doc={edit==="new"?null:edit} onSave={save} onClose={()=>setEdit(null)} />}
+    </div>
+  );
+}
+function EventSeriesEditor({ doc: d, onSave, onClose }) {
+  const [f, setF] = useState(d ? { ...d } : { name:"", emoji:"", description:"", frequency:"monthly-weekday",
+    interval:1, anchorDate:"", endDate:"", active:true, showOnHome:true });
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const valid = f.name.trim() && f.anchorDate;
+  const preview = valid ? (() => {
+    const sd = seriesFromDoc({ ...f, active:true });
+    return sd ? nextOccurrences(sd.rule, new Date(), 3).map(fmtEventDate) : [];
+  })() : [];
+  return (
+    <div className="sb-scrim" onClick={onClose}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Recurring event">
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{d?"Edit recurring event":"New recurring event"}</b>
+          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
+        <div className="bd">
+          <div className="sb-btnrow">
+            <div className="sb-field" style={{flex:1}}><label>Event name</label>
+              <input value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Praise Night" /></div>
+            <div className="sb-field" style={{width:90}}><label>Emoji</label>
+              <input value={f.emoji} onChange={e=>set("emoji",e.target.value)} placeholder="🎤" maxLength={4} /></div>
+          </div>
+          <div className="sb-field"><label>Description (optional)</label>
+            <input value={f.description||""} onChange={e=>set("description",e.target.value)} /></div>
+          <div className="sb-btnrow">
+            <div className="sb-field" style={{flex:2}}><label>Repeats</label>
+              <select value={f.frequency} onChange={e=>set("frequency",e.target.value)}>
+                {EVENT_FREQS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
+            <div className="sb-field" style={{width:110}}><label>Every N</label>
+              <input type="number" min="1" max="12" value={f.interval} onChange={e=>set("interval",e.target.value)} /></div>
+          </div>
+          <div className="sb-btnrow">
+            <div className="sb-field" style={{flex:1}}><label>Next occurrence (anchor)</label>
+              <input type="date" value={f.anchorDate} onChange={e=>set("anchorDate",e.target.value)} /></div>
+            <div className="sb-field" style={{flex:1}}><label>End date (optional)</label>
+              <input type="date" value={f.endDate||""} onChange={e=>set("endDate",e.target.value)} /></div>
+          </div>
+          <div className="sb-sub" style={{fontSize:12}}>The pattern (weekday, day of month, nth position) comes from the anchor date; future dates are calculated from it. Changes apply to future occurrences only — linked content is never changed.</div>
+          {preview.length>0 && <div className="sb-remsum" style={{marginBottom:10}}><div className="bd">
+            <b>Next dates</b><span>{preview.join(" · ")}</span></div></div>}
+          <Toggle label="Series is active" v={f.active!==false} on={()=>set("active",f.active===false)} />
+          <Toggle label="Show on Home" v={f.showOnHome!==false} on={()=>set("showOnHome",f.showOnHome===false)} />
+          <button className="sb-btn" style={{marginTop:12}} disabled={!valid} onClick={()=>onSave(f)}>{d?"Save changes":"Create event"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
   const [sec, setSec] = useState("overview");
   const [contentFilter, setContentFilter] = useState("all");
   const pending = users.filter(u => u.status === "pending");
@@ -2022,6 +2133,7 @@ function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDele
         filter={contentFilter} setFilter={setContentFilter}
         onNewContent={()=>onEditTask("new")} onAutoAll={onAutoAll} />}
 
+      {sec==="events" && <AdminEvents series={eventSeries} />}
       {sec==="import" && <ImportPanel users={teamUsers} onImport={onImport} />}
       {sec==="issues" && <IssueLog issues={issues} onResolve={onResolveIssue} />}
     </div>
@@ -2114,7 +2226,7 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
             const n = eventCount(e);
             return (
               <div className="sb-ev" key={i}>
-                <span className="sb-ev-ic">{e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+                <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div className="sb-ev-name">{e.name}</div>
                   <div className="sb-ev-sub">
