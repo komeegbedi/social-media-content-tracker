@@ -305,6 +305,25 @@ The Resend plan allows **3,000 emails/month**; the app caps *itself* well below 
 
 ---
 
+## Design System (v1.1.2)
+
+v1.1.2 is a **mobile-first design refresh** — visual/interaction only; all v1.0/v1.1 functionality and data structures are unchanged.
+
+- **Tokens** ([src/styles.css](src/styles.css) `:root`): semantic colors (light + dark), type scale (page 28 / section 21 / card 16 / body 14.5 / support 13 / label 12), spacing 4–64px, radius 10–22px, two soft shadows, motion durations (150/220/280ms) + easings, icon sizes. Legacy variable names are aliases — new rules must use semantic tokens.
+- **Typography:** single sans-serif (**Inter**); the serif (Fraunces) was removed. Hierarchy via weight/spacing.
+- **Color:** refined indigo-violet primary `#5B4BC4` used selectively (actions, active nav, selection, progress); muted semantic colors; warm off-white lavender background.
+- **Icons:** **Heroicons** (`@heroicons/react/24/outline`; solid variants for active nav), imported individually, sized via `.hi/.hi-sm/.hi-nav/.hi-empty`, `currentColor`, `aria-hidden` + labels on icon-only buttons. No emoji/unicode functional icons remain.
+- **Motion:** CSS-first (transform/opacity, token durations); full `prefers-reduced-motion` support; no animation library added (Motion One is the designated escalation if sequencing needs appear).
+- **Navigation:** mobile bottom nav = Home · My Day · Board · My Work · Profile (Team/Admin in the profile sheet; admin badge on the avatar), solid-icon active states, 44px+ targets, safe-area padding; desktop sidebar has Main/Management groups and collapses to icons at 900–1139px. Admin FAB on all content tabs.
+- **Home:** greeting → upcoming events → **Your focus** (only what needs you) → compact **Team progress** card → wins.
+- **Tasks:** persisted **Board/List** view toggle; task detail gains a six-step **workflow stepper** with a Changes-Requested branch state.
+- **Reminders:** the task form shows a summary ("Using team default · 4 reminders"); the schedule opens in a bottom sheet as a chronological **timeline** (computed dates at 9:00 AM Winnipeg, switches, expandable delivery options, reset to default, validation).
+- **Notifications:** desktop **right-side drawer**, unread count, category filters, date grouping (Today/Yesterday/This week/Earlier).
+- **Breakpoints:** 560 / 680 / 900 (desktop shell) / 1140 (full sidebar).
+- **Known limitations:** Calendar view for tasks and a dedicated mobile notifications *page* are deferred; the JS bundle grew ~27 kB gzip from the icon set (route-level code-splitting is the planned mitigation).
+
+---
+
 ## Future Roadmap
 
 - Finish **push + email** delivery for notifications (in-app center + backend are done); notification retention cleanup + App Check.

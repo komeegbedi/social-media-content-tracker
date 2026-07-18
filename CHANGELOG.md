@@ -2,6 +2,23 @@
 
 All notable changes to IFC Creatives Board are documented here.
 
+## [1.1.2] — Mobile-First Design System & Experience Refresh (unreleased)
+
+Visual/interaction redesign only — v1.0/v1.1 functionality, backend, and data structures unchanged. Not deployed.
+
+### Added / Changed
+- Semantic design-token layer (color light/dark, type, spacing, radius, shadows, motion) with legacy aliases; single sans-serif (Inter)
+- Heroicons everywhere (outline + solid active states); zero emoji/unicode functional icons
+- Responsive shell: 5-item mobile bottom nav with Profile sheet (Team/Admin moved there), grouped desktop sidebar with medium-width icon collapse, admin FAB on all content tabs
+- Home: "Your focus" list + compact "Team progress" card replace the metric strips
+- Tasks: persisted Board/List view toggle; six-step workflow stepper with Changes-Requested branch
+- Reminders: summary-in-form + bottom-sheet chronological timeline editor (Winnipeg-time dates, switches, delivery-options disclosure, reset-to-default, validation)
+- Notifications: desktop right-side drawer, unread count, category filters, date grouping
+- Accessibility: global focus-visible ring, 40–48px touch targets, aria-current/labels/switch roles, reduced-motion preserved
+
+### Known limitations
+- Task Calendar view and a dedicated mobile notifications page deferred; bundle +~27 kB gzip (icons) — code-splitting planned
+
 ## [1.1.0] — Proactive Notifications & Recurring Events (unreleased)
 
 > Verified against the Firebase Emulator Suite. **Not yet deployed to production.**
