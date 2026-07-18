@@ -47,9 +47,9 @@
   --shadow-lg:0 2px 6px rgba(33,27,51,.07),0 12px 32px rgba(33,27,51,.10);
   /* -- motion -- */
   --motion-micro:150ms; --motion-standard:220ms; --motion-overlay:280ms;
-  --ease-out:cubic-bezier(.2,.8,.3,1); --ease-inout:cubic-bezier(.45,0,.25,1);
+  --ease-out:cubic-bezier(.22,1,.36,1); --ease-inout:cubic-bezier(.45,0,.25,1);
   /* -- icon sizes -- */
-  --icon-xs:16px; --icon-sm:18px; --icon-md:20px; --icon-nav:20px; --icon-empty:48px;
+  --icon-xs:14px; --icon-sm:16px; --icon-md:18px; --icon-nav:19px; --icon-empty:40px;
   /* -- layout -- */
   --side:248px;
   /* -- legacy aliases (do not use in NEW rules) -- */
@@ -1076,3 +1076,16 @@ body,.sb-side,.sb-nav,.sb-sheet,.sb-drawer,.sb-notifpanel,.sb-ev,.sb-attn,.sb-pr
   color:var(--text-secondary);padding:9px 11px;min-height:38px;border-radius:8px;cursor:pointer}
 .sb-nmore-menu button:hover{background:var(--surface-muted)}
 .sb-nmore-menu button.on{background:var(--primary-muted);color:var(--primary)}
+
+/* Profile row: clearly interactive (chevron, hover, pressed). */
+.sb-suserbtn{display:flex;align-items:center;gap:10px}
+.sb-suserbtn .chev{margin-left:auto;color:var(--text-muted);flex:none}
+.sb-suserbtn:active{background:var(--background-muted)}
+
+/* What's new + profile-menu badge */
+.sb-relitem{display:flex;flex-direction:column;gap:2px;padding:10px 0;border-bottom:1px solid var(--border)}
+.sb-relitem:last-child{border-bottom:none}
+.sb-relitem b{font-size:14px;font-weight:600}
+.sb-relitem span{font-size:13px;color:var(--text-secondary);line-height:1.5}
+.sb-newbadge{margin-left:auto;background:var(--primary);color:#fff;font-size:10px;font-weight:700;
+  border-radius:var(--r-pill);padding:2px 8px}

@@ -33,14 +33,15 @@ import {
 import { upcomingEvents, searchEvents, isoDate } from "./events";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
 import { pushState, enablePush, listenForeground } from "./push";
+import { RELEASES, LATEST_RELEASE } from "./releases";
 import {
   HomeIcon, ClockIcon, ViewColumnsIcon, ClipboardDocumentListIcon, UserGroupIcon,
   Cog6ToothIcon, BellIcon, MagnifyingGlassIcon, XMarkIcon, ChevronRightIcon,
   EllipsisHorizontalIcon, ExclamationTriangleIcon, SunIcon, MoonIcon, FunnelIcon,
-  BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon,
+  BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, SparklesIcon,
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
 } from "@heroicons/react/24/outline";
-import { setView, reportIssue, logIssue } from "./logging";
+import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
 import { getTheme, setTheme } from "./theme";
 
 /* Tiny localStorage helpers for remembering small UI preferences (e.g. which
@@ -97,7 +98,7 @@ function ThemeToggle({ compact }) {
 
 /* Mobile account drawer — opened from the header avatar. Pulls the profile,
    theme, report and sign-out off every screen and into one slide-up sheet. */
-function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onNotifications, onReport, onGoTab }) {
+function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onNotifications, onNotifPrefs, onWhatsNew, onFeatureRequest, onReport, onGoTab }) {
   const [theme, setT] = useState(getTheme());
   const toggleTheme = () => { const next = theme==="dark"?"light":"dark"; setTheme(next); setT(next); };
   useEffect(() => {
@@ -121,6 +122,16 @@ function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onN
         {onGoTab && isAdmin && <button className="sb-drawer-item" onClick={()=>{ onGoTab("admin"); onClose(); }}>
           <span className="i"><Cog6ToothIcon className="hi" aria-hidden="true"/></span>Admin
           {pendingCount>0 && <span className="sb-drawer-state">{pendingCount}</span>}
+        </button>}
+        {onNotifPrefs && <button className="sb-drawer-item" onClick={()=>{ onNotifPrefs(); onClose(); }}>
+          <span className="i"><BellAlertIcon className="hi" aria-hidden="true"/></span>Notification preferences
+        </button>}
+        {onWhatsNew && <button className="sb-drawer-item" onClick={()=>{ onWhatsNew(); onClose(); }}>
+          <span className="i"><SparkIcon/></span>What's new
+          {seenRelease()!==LATEST_RELEASE && <span className="sb-newbadge">New</span>}
+        </button>}
+        {onFeatureRequest && <button className="sb-drawer-item" onClick={()=>{ onFeatureRequest(); onClose(); }}>
+          <span className="i"><LightBulbIcon className="hi" aria-hidden="true"/></span>Submit feature request
         </button>}
         <button className="sb-drawer-item" onClick={toggleTheme}>
           <span className="i">{theme==="dark"?<SunIcon className="hi" aria-hidden="true"/>:<MoonIcon className="hi" aria-hidden="true"/>}</span>
@@ -146,6 +157,86 @@ function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onN
 /* Notification Center — a slide-over listing the signed-in user's
    notifications (newest first). Reads via useNotifications; docs are written
    by the backend (Slice 3), so until then this shows the empty state. */
+/* "What's new" — user-facing release notes; read-state in localStorage. */
+const seenRelease = () => { try { return localStorage.getItem("sb-seen-release") || ""; } catch { return ""; } };
+const markReleaseSeen = () => { try { localStorage.setItem("sb-seen-release", LATEST_RELEASE); } catch {} };
+
+function WhatsNew({ onClose }) {
+  useEffect(() => { markReleaseSeen(); }, []);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="sb-scrim" onClick={onClose}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="What's new">
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>What's new</b>
+          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
+        <div className="bd">
+          {RELEASES.map(r => (
+            <div key={r.version} style={{marginBottom:26}}>
+              <div className="sb-mlabel">v{r.version} · {r.date}</div>
+              <h3 style={{fontSize:17,margin:"4px 0 10px"}}>{r.title}</h3>
+              {r.items.map(([t,d]) => (
+                <div className="sb-relitem" key={t}>
+                  <b>{t}</b><span>{d}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Feature-request form — reuses the issues pipeline (kind: feature_request). */
+function FeatureRequestModal({ onClose }) {
+  const [f, setF] = useState({ title:"", problem:"", beneficiary:"", link:"" });
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err, setErr] = useState(false);
+  const set = (k,v)=>setF(p=>({...p,[k]:v}));
+  const send = async () => {
+    if (busy || !f.title.trim()) return;
+    setBusy(true); setErr(false);
+    const ok = await submitFeatureRequest({ title:f.title, description:f.title, problem:f.problem, beneficiary:f.beneficiary, link:f.link });
+    setBusy(false);
+    ok ? setDone(true) : setErr(true);   // entered text is preserved on failure
+  };
+  return (
+    <div className="sb-scrim" onClick={onClose}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Submit feature request">
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Submit feature request</b>
+          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
+        <div className="bd">
+          {done ? (
+            <>
+              <div className="sb-empty compact"><b>Thanks — we got it!</b><br/>The team reviews every request. Accepted ideas show up in "What's new".</div>
+              <button className="sb-btn" style={{marginTop:14}} onClick={onClose}>Close</button>
+            </>
+          ) : (
+            <>
+              <div className="sb-field"><label>What would you like to see?</label>
+                <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. A calendar view of all content" /></div>
+              <div className="sb-field"><label>What problem would this solve?</label>
+                <textarea rows={3} value={f.problem} onChange={e=>set("problem",e.target.value)} /></div>
+              <div className="sb-field"><label>Who would this help?</label>
+                <input value={f.beneficiary} onChange={e=>set("beneficiary",e.target.value)} placeholder="e.g. Editors, the QA team, everyone" /></div>
+              <div className="sb-field"><label>Additional details or example link (optional)</label>
+                <input value={f.link} onChange={e=>set("link",e.target.value)} /></div>
+              {err && <div className="sb-lerr">Couldn't send right now — your text is kept. Try again.</div>}
+              <button className="sb-btn" style={{marginTop:8}} disabled={busy || !f.title.trim()} onClick={send}>
+                {busy ? "Sending…" : "Send request"}</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const NOTIF_FILTERS = [
   { id:"all",       label:"All" },
   { id:"unread",    label:"Unread" },
@@ -579,6 +670,11 @@ function useDoc(path, canRead) {
    ROOT
    =================================================================== */
 // Shared inline icons (nav icons live in the mainNav/mgmtNav model below).
+// CSV import is hidden from navigation but fully implemented.
+// Flip to true to restore Admin -> Import (see README).
+const ENABLE_CSV_IMPORT = false;
+const SparkIcon = () => <SparklesIcon className="hi" aria-hidden="true"/>;
+
 const Ic = {
   chat: <ChatBubbleLeftRightIcon className="hi hi-sm" aria-hidden="true" style={{verticalAlign:"-4px"}} />,
 };
@@ -875,6 +971,8 @@ function Board({ profile, isAdmin }) {
   const notif = useNotifications(me.id);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [featureReqOpen, setFeatureReqOpen] = useState(false);
   const saveNotifPrefs = async (prefs) => {
     try { await updateDoc(doc(db, "users", me.id), { notifPrefs: prefs }); }
     catch (e) { logIssue({ kind: "error", action: "save notif prefs", message: e.message, code: e.code }); }
@@ -1080,9 +1178,10 @@ function Board({ profile, isAdmin }) {
               <span className="lbl">Notifications</span>
             </button>
             {/* Profile menu holds Theme, Team/Admin, Report, Sign out */}
-            <button className="sb-suser sb-suserbtn" onClick={()=>setShowDrawer(true)} aria-label="Profile and settings">
+            <button className="sb-suser sb-suserbtn" onClick={()=>setShowDrawer(true)} aria-label="Open profile menu" title="Profile & settings">
               <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(me.name)}</span>
               <span className="lbl"><div className="nm">{me.name}</div><div className="rl">{isAdmin?"Admin":"Member"}</div></span>
+              <ChevronRightIcon className="chev lbl" style={{width:16,height:16}} aria-hidden="true"/>
             </button>
             <button className="sb-quietlink lbl" onClick={()=>setShowReport(true)}>Report an issue</button>
           </div>
@@ -1142,6 +1241,9 @@ function Board({ profile, isAdmin }) {
         <ProfileDrawer me={me} isAdmin={isAdmin} unread={notif.unread} pendingCount={pendingCount}
           onClose={()=>setShowDrawer(false)} onGoTab={setTab}
           onNotifications={()=>{ setShowDrawer(false); setNotifOpen(true); }}
+          onNotifPrefs={()=>setNotifSettingsOpen(true)}
+          onWhatsNew={()=>setWhatsNewOpen(true)}
+          onFeatureRequest={()=>setFeatureReqOpen(true)}
           onReport={()=>{ setShowDrawer(false); setShowReport(true); }} />
       )}
 
@@ -1156,6 +1258,9 @@ function Board({ profile, isAdmin }) {
       {notifSettingsOpen && (
         <NotifSettings me={me} isAdmin={isAdmin} onSave={saveNotifPrefs} onClose={()=>setNotifSettingsOpen(false)} />
       )}
+
+      {whatsNewOpen && <WhatsNew onClose={()=>setWhatsNewOpen(false)} />}
+      {featureReqOpen && <FeatureRequestModal onClose={()=>setFeatureReqOpen(false)} />}
 
       {toast && (
         <button className="sb-toast" onClick={()=>{ setToast(null); setNotifOpen(true); }}><BellIcon className="hi hi-sm" aria-hidden="true"/> {toast}</button>
@@ -1885,7 +1990,8 @@ function Admin({ users, tasks, teamUsers, issues, onEditUser, onEditTask, onDele
     ["overview", "Overview"],
     ["people",   pending.length>0 ? `People · ${pending.length}` : "People"],
     ["content",  "Content"],
-    ["import",   "Import"],
+    ["events",   "Events"],
+    ...(ENABLE_CSV_IMPORT ? [["import", "Import"]] : []),
     ["issues",   openIssues>0 ? `Issues · ${openIssues}` : "Issues"],
   ];
 
@@ -1956,7 +2062,7 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
       <div className="sb-toolbar">
         <button className="sb-btn compact" onClick={onNewContent}><PlusIcon className="hi hi-sm" aria-hidden="true"/> New content</button>
         <button className="sb-btn ghost compact" onClick={()=>setEventNote(v=>!v)}>Create event</button>
-        <button className="sb-btn ghost compact" onClick={onGoImport}>Import</button>
+        {ENABLE_CSV_IMPORT && <button className="sb-btn ghost compact" onClick={onGoImport}>Import</button>}
         <button className="sb-tertiary" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign</button>
       </div>
       {eventNote && <div className="sb-assign" style={{marginTop:10}}>
@@ -2275,7 +2381,7 @@ function IssueLog({ issues, onResolve }) {
   return (
     <div>
       <div className="sb-seg" style={{marginBottom:10}}>
-        {[["all","All"],["report","Reports"],["error","Errors"]].map(([k,l])=>(
+        {[["all","All"],["report","Reports"],["feature_request","Feature requests"],["error","Errors"]].map(([k,l])=>(
           <button key={k} className={"sb-segbtn"+(kind===k?" on":"")} onClick={()=>setKind(k)}>{l}</button>))}
       </div>
       <div className="sb-seg" style={{marginBottom:14}}>
@@ -2294,7 +2400,7 @@ function IssueLog({ issues, onResolve }) {
                   <div className="row1">
                     <span className="title" style={{fontSize:14}}>{i.note || i.message || "(no detail)"}</span>
                     <span className="sb-rowtags">
-                      <span className={"sb-chip "+(isErr?"chip-poster":"chip-reel")}>{isErr?"Error":"Report"}</span>
+                      <span className={"sb-chip "+(isErr?"chip-poster":"chip-reel")}>{isErr?"Error":i.kind==="feature_request"?"Feature request":"Report"}</span>
                       {i.status==="resolved" && <span className="sb-tag">Resolved</span>}
                     </span>
                   </div>
