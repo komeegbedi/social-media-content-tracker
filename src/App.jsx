@@ -1226,12 +1226,12 @@ function Board({ profile, isAdmin }) {
           <nav className="sb-nav" aria-label="Main">
             {mainNav.map(n => (
               <button key={n.id} className={"sb-navbtn"+(tab===n.id?" on":"")} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
-                <span className="ico">{n.ico(tab===n.id)}</span>{n.label}
+                <span className="ico">{n.ico(tab===n.id)}</span><span className="lblx">{n.label}</span>
                 {n.badge>0 && <span className="pill">{n.badge}</span>}
               </button>
             ))}
             <button className={"sb-navbtn"+(["team","admin"].includes(tab)?" on":"")} onClick={()=>setShowDrawer(true)} aria-label="Profile and more">
-              <span className="ico"><span className="sb-av sb-navav">{initials(me.name)}</span></span>Profile
+              <span className="ico"><span className="sb-av sb-navav">{initials(me.name)}</span></span><span className="lblx">Profile</span>
               {isAdmin && pendingCount>0 && <span className="pill">{pendingCount}</span>}
             </button>
           </nav>
