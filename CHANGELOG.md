@@ -16,6 +16,13 @@ Visual/interaction redesign only — v1.0/v1.1 functionality, backend, and data 
 - Notifications: desktop right-side drawer, unread count, category filters, date grouping
 - Accessibility: global focus-visible ring, 40–48px touch targets, aria-current/labels/switch roles, reduced-motion preserved
 
+### Final release additions
+- Admin-managed recurring events (emoji, anchored schedules, pause/archive, next-dates preview)
+- Saturday 9 PM Winnipeg weekly task-check notification (in-app + push, per-user preference)
+- Redesigned transactional emails (compact branded header, context panel, specific CTAs, safe name fallback)
+- What's new page + Submit feature request (profile menu); CSV import hidden behind ENABLE_CSV_IMPORT flag
+- Smaller icons, natural easing, clickable profile row
+
 ### Known limitations
 - Task Calendar view and a dedicated mobile notifications page deferred; bundle +~27 kB gzip (icons) — code-splitting planned
 

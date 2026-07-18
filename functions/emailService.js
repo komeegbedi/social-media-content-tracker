@@ -37,41 +37,50 @@ const IN_EMULATOR = process.env.FUNCTIONS_EMULATOR === "true";
 const LEASE_MS = 5 * 60 * 1000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (e) => typeof e === "string" && EMAIL_RE.test(e.trim());
-const firstName = (name) => (name || "there").split(/\s+/)[0];
+// Preferred name -> first name -> "there". Never a raw username/email prefix.
+const firstName = (name) => {
+  const n = (name || "").trim();
+  if (!n || n.includes("@") || /^[a-z0-9._-]{12,}$/.test(n)) return "there";
+  return n.split(/\s+/)[0];
+};
 
 // --- per-type copy: subject, call-to-action label, and "why you got this" ---
 const TEMPLATES = {
-  assigned:         { subject: (t) => `You've been assigned: ${t}`,        cta: "Open content", why: "you were assigned to this content." },
-  reminder:         { subject: (t) => `Reminder — ${t}`,                   cta: "Open content", why: "you're on this content and it's coming due." },
-  overdue:          { subject: (t) => `Overdue — ${t}`,                    cta: "Open content", why: "this content is past its due date." },
+  assigned:         { subject: (t) => `You've been assigned: ${t}`,        cta: "View task", why: "you were assigned to this content." },
+  reminder:         { subject: (t) => `Reminder — ${t}`,                   cta: "Open My Day", why: "you're on this content and it's coming due." },
+  overdue:          { subject: (t) => `Overdue — ${t}`,                    cta: "Open My Day", why: "this content is past its due date." },
   qa:               { subject: (t) => `Review requested — ${t}`,           cta: "Review now",   why: "content is ready for your review." },
-  changes:          { subject: (t) => `Changes requested — ${t}`,          cta: "Open content", why: "changes were requested on your content." },
-  approved:         { subject: (t) => `Approved — ${t}`,                   cta: "Open content", why: "this content was approved." },
-  ready:            { subject: (t) => `Ready to post — ${t}`,              cta: "Open content", why: "this content is ready to publish." },
+  changes:          { subject: (t) => `Changes requested — ${t}`,          cta: "View changes", why: "changes were requested on your content." },
+  approved:         { subject: (t) => `Approved — ${t}`,                   cta: "View task", why: "this content was approved." },
+  ready:            { subject: (t) => `Ready to post — ${t}`,              cta: "View task", why: "this content is ready to publish." },
   mention:          { subject: (t) => `You were mentioned — ${t}`,         cta: "View comment", why: "someone mentioned you in a comment." },
   account_approved: { subject: () => `Your IFC Creatives Board account is approved`, cta: "Open the board", why: "your account was approved." },
   leadership:       { subject: (t) => `IFC Creatives Board — ${t}`,        cta: "Open the board", why: "you're an admin or department lead." },
-  event:            { subject: (t) => `Upcoming — ${t}`,                   cta: "Plan content", why: "this ministry event is coming up." },
+  event:            { subject: (t) => `Upcoming — ${t}`,                   cta: "View event", why: "this ministry event is coming up." },
   test:             { subject: () => `IFC Creatives Board Email Test`,     cta: "Open the board", why: "an admin sent a test from the notification settings." },
 };
 
 // Inline-styled HTML (email clients need inline CSS). Branding + CTA + why-note.
-function renderHtml({ title, body, recipientName, cta, url, why, whenText }) {
+function renderHtml({ title, body, recipientName, cta, url, why, whenText, context }) {
   const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-  return `<!doctype html><html><body style="margin:0;background:#f4f2f8;padding:24px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#211b33">
+  const ctxRows = (context || []).filter(([,v])=>v).map(([k,v]) =>
+    `<tr><td style="padding:3px 0;font-size:12px;color:#777187;width:90px">${safe(k)}</td><td style="padding:3px 0;font-size:13px;color:#211b32;font-weight:600">${safe(v)}</td></tr>`).join("");
+  return `<!doctype html><html><body style="margin:0;background:#f4f3f7;padding:20px 12px;font-family:Arial,Helvetica,sans-serif;color:#211b32">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
-    <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e7e3f0">
-      <tr><td style="padding:18px 24px;background:#6d4aff;color:#fff;font-weight:700;font-size:15px">✦ IFC Creatives Board</td></tr>
-      <tr><td style="padding:24px">
-        <p style="margin:0 0 6px;font-size:15px">Hi ${safe(firstName(recipientName))},</p>
-        <p style="margin:0 0 4px;font-size:17px;font-weight:700;line-height:1.35">${safe(title)}</p>
-        ${body ? `<p style="margin:8px 0 0;font-size:14px;color:#4a4360;line-height:1.5">${safe(body)}</p>` : ""}
-        ${whenText ? `<p style="margin:10px 0 0;font-size:13px;color:#6b6480">${safe(whenText)}</p>` : ""}
-        <p style="margin:22px 0 6px"><a href="${safe(url)}" style="display:inline-block;background:#6d4aff;color:#fff;text-decoration:none;font-weight:700;font-size:14px;padding:11px 22px;border-radius:999px">${safe(cta)} →</a></p>
+    <table role="presentation" width="580" cellpadding="0" cellspacing="0" style="max-width:580px;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e6e2ec">
+      <tr><td style="padding:16px 28px 14px;border-bottom:3px solid #6750c8">
+        <span style="font-weight:700;font-size:14px;color:#211b32;letter-spacing:.02em">IFC <span style="color:#6750c8">Creatives Board</span></span></td></tr>
+      <tr><td style="padding:26px 28px 8px">
+        <p style="margin:0 0 10px;font-size:15px;color:#211b32">Hi ${safe(firstName(recipientName))},</p>
+        <p style="margin:0 0 6px;font-size:22px;font-weight:700;line-height:1.3;color:#211b32">${safe(title)}</p>
+        ${body ? `<p style="margin:8px 0 0;font-size:15px;color:#545063;line-height:1.55">${safe(body)}</p>` : ""}
+        ${whenText ? `<p style="margin:10px 0 0;font-size:13px;color:#777187">${safe(whenText)}</p>` : ""}
+        ${ctxRows ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0 0;background:#f7f6fa;border:1px solid #e6e2ec;border-radius:10px;width:100%"><tr><td style="padding:12px 16px"><table role="presentation" cellpadding="0" cellspacing="0" width="100%">${ctxRows}</table></td></tr></table>` : ""}
+        <p style="margin:24px 0 26px"><a href="${safe(url)}" style="display:inline-block;background:#6750c8;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 26px;border-radius:10px">${safe(cta)}</a></p>
       </td></tr>
-      <tr><td style="padding:16px 24px;border-top:1px solid #eee;color:#8b849c;font-size:12px;line-height:1.5">
+      <tr><td style="padding:14px 28px;border-top:1px solid #eee;color:#8b849c;font-size:12px;line-height:1.6">
         You're receiving this because ${safe(why)}<br>
-        Manage email preferences in the app under Notifications → settings.
+        Manage email preferences in the app under Notifications &rarr; settings.
       </td></tr>
     </table>
   </td></tr></table></body></html>`;
@@ -85,9 +94,9 @@ function renderText({ title, body, recipientName, cta, url, why, whenText }) {
   ].filter((l) => l !== "").join("\n");
 }
 
-function buildEmail({ type, title, body, recipientName, url, whenText }) {
+function buildEmail({ type, title, body, recipientName, url, whenText, context }) {
   const tpl = TEMPLATES[type] || TEMPLATES.leadership;
-  const ctx = { title, body, recipientName, cta: tpl.cta, url, why: tpl.why, whenText };
+  const ctx = { title, body, recipientName, cta: tpl.cta, url, why: tpl.why, whenText, context };
   return { subject: tpl.subject(title), html: renderHtml(ctx), text: renderText(ctx) };
 }
 
