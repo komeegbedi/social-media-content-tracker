@@ -31,8 +31,15 @@ import {
   DEFAULT_REMINDERS, REMINDER_CHANNELS, REMINDER_RECIPIENTS, MAX_REMINDERS,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate } from "./events";
-import { useNotifications, NOTIF_META, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
+import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
 import { pushState, enablePush, listenForeground } from "./push";
+import {
+  HomeIcon, ClockIcon, ViewColumnsIcon, ClipboardDocumentListIcon, UserGroupIcon,
+  Cog6ToothIcon, BellIcon, MagnifyingGlassIcon, XMarkIcon, ChevronRightIcon,
+  EllipsisHorizontalIcon, ExclamationTriangleIcon, SunIcon, MoonIcon, FunnelIcon,
+  BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, CakeIcon,
+  ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon,
+} from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue } from "./logging";
 import { getTheme, setTheme } from "./theme";
 
@@ -68,10 +75,10 @@ function BetaBanner({ onReport }) {
   const dismiss = () => { setOpen(false); savePref("sb-beta-dismissed", true); };
   return (
     <div className="sb-beta">
-      <span className="sb-beta-tag">⚡ Beta</span>
+      <span className="sb-beta-tag">Beta</span>
       <span className="sb-beta-txt">We're testing IFC Creatives Board. Please report bugs, confusing steps, or feature ideas.</span>
       <button className="sb-beta-report" onClick={onReport}>Report</button>
-      <button className="sb-beta-x" onClick={dismiss} aria-label="Dismiss beta notice">✕</button>
+      <button className="sb-beta-x" onClick={dismiss} aria-label="Dismiss beta notice"><XMarkIcon className="hi" aria-hidden="true" /></button>
     </div>
   );
 }
@@ -81,8 +88,11 @@ function ThemeToggle({ compact }) {
   const [theme, setT] = useState(getTheme());
   const toggle = () => { const next = theme === "dark" ? "light" : "dark"; setTheme(next); setT(next); };
   return compact
-    ? <button className="sb-report-top" onClick={toggle} aria-label="Toggle dark mode">{theme==="dark"?"☀":"🌙"}</button>
-    : <button className="sb-report" onClick={toggle}>{theme==="dark"?"☀︎ Light mode":"🌙 Dark mode"}</button>;
+    ? <button className="sb-report-top" onClick={toggle} aria-label="Toggle dark mode">
+        {theme==="dark"?<SunIcon className="hi" aria-hidden="true"/>:<MoonIcon className="hi" aria-hidden="true"/>}</button>
+    : <button className="sb-report" onClick={toggle}>
+        {theme==="dark"?<SunIcon className="hi-sm hi" aria-hidden="true"/>:<MoonIcon className="hi-sm hi" aria-hidden="true"/>}
+        {theme==="dark"?"Light mode":"Dark mode"}</button>;
 }
 
 /* Mobile account drawer — opened from the header avatar. Pulls the profile,
@@ -106,19 +116,19 @@ function ProfileDrawer({ me, isAdmin, unread = 0, onClose, onNotifications, onRe
           </div>
         </div>
         <button className="sb-drawer-item" onClick={toggleTheme}>
-          <span className="i">{theme==="dark"?"☀︎":"🌙"}</span>
+          <span className="i">{theme==="dark"?<SunIcon className="hi" aria-hidden="true"/>:<MoonIcon className="hi" aria-hidden="true"/>}</span>
           {theme==="dark"?"Light mode":"Dark mode"}
           <span className="sb-drawer-state">{theme==="dark"?"On":"Off"}</span>
         </button>
         <button className="sb-drawer-item" onClick={onNotifications}>
-          <span className="i">🔔</span>Notifications
+          <span className="i"><BellIcon className="hi" aria-hidden="true"/></span>Notifications
           {unread>0 && <span className="sb-drawer-state">{unread>9?"9+":unread}</span>}
         </button>
         <button className="sb-drawer-item" onClick={onReport}>
-          <span className="i">⚠︎</span>Report an issue
+          <span className="i"><ExclamationTriangleIcon className="hi" aria-hidden="true"/></span>Report an issue
         </button>
         <button className="sb-drawer-item danger" onClick={()=>signOut(auth)}>
-          <span className="i">⇥</span>Sign out
+          <span className="i"><ArrowRightStartOnRectangleIcon className="hi" aria-hidden="true"/></span>Sign out
         </button>
         <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
       </div>
@@ -151,18 +161,19 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
           <b className="sb-serif" style={{fontSize:17}}>Notifications</b>
           <div className="sb-notifhd-actions">
             {unread>0 && <button className="link" onClick={markAllRead}>Mark all read</button>}
-            <button className="sb-iconbtn" onClick={onSettings} aria-label="Notification settings">⚙</button>
-            <button className="sb-x" onClick={onClose}>✕</button>
+            <button className="sb-iconbtn" onClick={onSettings} aria-label="Notification settings"><Cog6ToothIcon className="hi" aria-hidden="true"/></button>
+            <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button>
           </div>
         </div>
         {items.length===0
-          ? <div className="sb-empty"><div className="big">🔔</div>You're all caught up. New updates will show here.</div>
+          ? <div className="sb-empty"><div className="big"><BellIcon className="hi hi-empty" aria-hidden="true"/></div>You're all caught up. New updates will show here.</div>
           : <div className="sb-notiflist">
               {items.map(n => {
-                const meta = NOTIF_META[n.type] || { icon:"🔔", label:"Update" };
+                const meta = NOTIF_META[n.type] || NOTIF_FALLBACK;
+                const MetaIcon = meta.icon;
                 return (
                   <button key={n.id} className={"sb-notif"+(n.read?"":" unread")} onClick={()=>open(n)}>
-                    <span className="ic">{meta.icon}</span>
+                    <span className={"ic "+(meta.tint||"tint-neutral")}><MetaIcon className="hi" aria-hidden="true"/></span>
                     <span className="bd">
                       <span className="ti">{n.title}</span>
                       {n.body && <span className="bo">{n.body}</span>}
@@ -208,7 +219,7 @@ function PushControls({ me }) {
   if (state === "denied") return <div className="sb-push">Notifications are blocked. Allow them for this site in your browser settings, then reload.</div>;
   if (state === "unsupported") return <div className="sb-push">This browser doesn't support push notifications.</div>;
   if (state === "not-configured") return <div className="sb-push">Push isn't set up yet — an admin needs to finish messaging configuration.</div>;
-  return <button className="sb-btn ghost" disabled={busy} onClick={enable}>{busy ? "Enabling…" : "🔔 Enable push on this device"}</button>;
+  return <button className="sb-btn ghost" disabled={busy} onClick={enable}>{busy ? "Enabling…" : <><BellAlertIcon className="hi hi-sm" aria-hidden="true"/> Enable push on this device</>}</button>;
 }
 
 /* Admin-only: the default reminder schedule applied to new content. */
@@ -325,7 +336,7 @@ function NotifSettings({ me, isAdmin, onSave, onClose }) {
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Notification settings</b>
-          <button className="sb-x" onClick={onClose}>✕</button></div>
+          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           <div className="sb-sub" style={{marginTop:0}}>Choose how and what you're notified about. In-app notifications are always on.</div>
           <div className="sb-mlabel">How you're notified</div>
@@ -367,7 +378,7 @@ export class ErrorBoundary extends React.Component {
     return (
       <div className="sb-pending">
         <div className="box">
-          <div className="ic">⚠️</div>
+          <div className="ic"><ExclamationTriangleIcon className="hi hi-empty" aria-hidden="true"/></div>
           <h1>Something went wrong</h1>
           <p>The error has been logged. If you have a second, tell us what you were
              doing and we'll look into it.</p>
@@ -486,7 +497,17 @@ function useDoc(path, canRead) {
 /* ===================================================================
    ROOT
    =================================================================== */
-const Ic = { home:"♡", day:"◉", board:"▦", mine:"✓", team:"♦", admin:"⚙", chat:"💬" };
+// Navigation + shared icons (Heroicons 24/outline, sized via .hi classes).
+// Stored as ready-to-render elements so existing {Ic.x} sites keep working.
+const Ic = {
+  home:  <HomeIcon className="hi hi-nav" aria-hidden="true" />,
+  day:   <ClockIcon className="hi hi-nav" aria-hidden="true" />,
+  board: <ViewColumnsIcon className="hi hi-nav" aria-hidden="true" />,
+  mine:  <ClipboardDocumentListIcon className="hi hi-nav" aria-hidden="true" />,
+  team:  <UserGroupIcon className="hi hi-nav" aria-hidden="true" />,
+  admin: <Cog6ToothIcon className="hi hi-nav" aria-hidden="true" />,
+  chat:  <ChatBubbleLeftRightIcon className="hi hi-sm" aria-hidden="true" style={{verticalAlign:"-4px"}} />,
+};
 
 export default function App() {
   const user = useAuthUser();                          // Firebase Auth user (or null)
@@ -952,7 +973,7 @@ function Board({ profile, isAdmin }) {
           <div className="sb-sbrand"><span className="sb-spark">✦</span>
             <span className="sb-brandtext"><span className="ifc">IFC</span>Creatives Board</span></div>
           <button className="sb-searchbtn" onClick={()=>setSearchOpen(true)}>
-            <span className="ico">🔍</span>Search…<kbd className="sb-kbd">/</kbd>
+            <span className="ico"><MagnifyingGlassIcon className="hi hi-sm" aria-hidden="true"/></span>Search…<kbd className="sb-kbd">/</kbd>
           </button>
           <nav className="sb-snav">
             {nav.map(n => (
@@ -970,9 +991,9 @@ function Board({ profile, isAdmin }) {
             </div>
             <ThemeToggle />
             <button className="sb-report" onClick={()=>setNotifOpen(true)}>
-              🔔 Notifications{notif.unread>0 && <span className="pill" style={{marginLeft:6}}>{notif.unread>9?"9+":notif.unread}</span>}
+              <BellIcon className="hi hi-sm" aria-hidden="true"/> Notifications{notif.unread>0 && <span className="pill" style={{marginLeft:6}}>{notif.unread>9?"9+":notif.unread}</span>}
             </button>
-            <button className="sb-report" onClick={()=>setShowReport(true)}>⚠︎ Report an issue</button>
+            <button className="sb-report" onClick={()=>setShowReport(true)}><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/> Report an issue</button>
             <button className="sb-signout" onClick={()=>signOut(auth)}>Sign out</button>
             <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
           </div>
@@ -982,9 +1003,9 @@ function Board({ profile, isAdmin }) {
           <header className="sb-top">
             <span className="brand"><span className="sb-spark">✦</span>Creatives Board</span>
             <span style={{display:"flex",alignItems:"center",gap:10}}>
-              <button className="sb-report-top" onClick={()=>setSearchOpen(true)} aria-label="Search">🔍</button>
+              <button className="sb-report-top" onClick={()=>setSearchOpen(true)} aria-label="Search"><MagnifyingGlassIcon className="hi" aria-hidden="true"/></button>
               <button className="sb-report-top sb-bellbtn" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
-                🔔{notif.unread>0 && <span className="sb-belldot">{notif.unread>9?"9+":notif.unread}</span>}
+                <BellIcon className="hi" aria-hidden="true"/>{notif.unread>0 && <span className="sb-belldot">{notif.unread>9?"9+":notif.unread}</span>}
               </button>
               <button className="sb-avbtn" onClick={()=>setShowDrawer(true)} aria-label="Profile and settings">
                 <span className="sb-av" style={{width:30,height:30,fontSize:11}}>{initials(me.name)}</span>
@@ -1044,7 +1065,7 @@ function Board({ profile, isAdmin }) {
       )}
 
       {toast && (
-        <button className="sb-toast" onClick={()=>{ setToast(null); setNotifOpen(true); }}>🔔 {toast}</button>
+        <button className="sb-toast" onClick={()=>{ setToast(null); setNotifOpen(true); }}><BellIcon className="hi hi-sm" aria-hidden="true"/> {toast}</button>
       )}
 
       {searchOpen && (
@@ -1099,7 +1120,7 @@ function ReportIssue({ onClose }) {
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Report an issue</b>
-          <button className="sb-x" onClick={onClose}>✕</button></div>
+          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           {state==="sent" ? (
             <div className="sb-empty"><div className="big">✓</div>
@@ -1261,7 +1282,7 @@ function AttentionItem({ t, onClick }) {
           <span className="muted">{t.type} · {t.location==="Both"?"479+828":t.location}</span>
         </span>
       </span>
-      <span className="sb-attn-chev">›</span>
+      <span className="sb-attn-chev"><ChevronRightIcon className="hi hi-sm" aria-hidden="true" /></span>
     </button>
   );
 }
@@ -1292,11 +1313,11 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
     <div className="sb-modal" onMouseDown={onClose}>
       <div className="sb-search" onMouseDown={e=>e.stopPropagation()}>
         <div className="sb-searchbar">
-          <span className="ico">🔍</span>
+          <span className="ico"><MagnifyingGlassIcon className="hi" aria-hidden="true"/></span>
           <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)}
             placeholder="Search tasks, people, events…" />
           <kbd className="sb-kbd sb-deskonly">ESC</kbd>
-          <button className="sb-searchclose" onClick={onClose} aria-label="Close search">✕</button>
+          <button className="sb-searchclose" onClick={onClose} aria-label="Close search"><XMarkIcon className="hi" aria-hidden="true" /></button>
         </div>
 
         {!query && <div className="sb-searchhint">
@@ -1333,7 +1354,7 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
             <div className="sb-searchsec">Events · {eventHits.length}</div>
             {eventHits.map((e,i) => (
               <button key={i} className="sb-sresult" onClick={()=>goTab("home")}>
-                <span className="r-icon">{e.kind==="birthday"?"🎂":"📅"}</span>
+                <span className="r-icon">{e.kind==="birthday"?<CakeIcon className="hi" aria-hidden="true"/>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
                 <span className="r-main">{e.name}</span>
                 <span className="r-sub">{e.daysAway===0?"Today":`in ${e.daysAway} day${e.daysAway!==1?"s":""}`}</span>
               </button>
@@ -1387,7 +1408,7 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
       {eventFilter && (
         <div className="sb-chiprow" style={{marginTop:10}}>
           <button className="sb-fchip on" onClick={onClearEventFilter}>
-            📅 {eventFilter.label} · Clear ✕
+            <CalendarDaysIcon className="hi hi-sm" aria-hidden="true"/> {eventFilter.label} · Clear <XMarkIcon className="hi hi-sm" aria-hidden="true"/>
           </button>
         </div>
       )}
@@ -1395,9 +1416,9 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
       {/* Filters — collapsed by default so content shows first */}
       <div className="sb-filterbar">
         <button className="sb-filtertoggle" onClick={()=>setFiltersOpen(o=>!o)} aria-expanded={filtersOpen}>
-          <span className="ico">⛃</span>Filters
+          <span className="ico"><FunnelIcon className="hi hi-sm" aria-hidden="true"/></span>Filters
           {filter!=="all" && <span className="sb-filteractive">{activeFilter?.label}</span>}
-          <span className={"sb-chev"+(filtersOpen?" open":"")}>›</span>
+          <span className={"sb-chev"+(filtersOpen?" open":"")}><ChevronRightIcon className="hi hi-sm" aria-hidden="true" /></span>
         </button>
         <label className="sb-sortlbl">
           <select className="sb-select" value={sort} onChange={e=>setSort(e.target.value)} aria-label="Sort">
@@ -1419,7 +1440,7 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
         </button>
       </div>}
       {groups.length===0
-        ? <div className="sb-empty"><div className="big">▦</div>No content matches these filters.</div>
+        ? <div className="sb-empty"><div className="big"><ViewColumnsIcon className="hi hi-empty" aria-hidden="true"/></div>No content matches these filters.</div>
         : groups.map(g => {
             // When a filter narrows the board to a single status group, always
             // show it open (e.g. the Archive filter shouldn't land collapsed).
@@ -1428,7 +1449,7 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
             return (
               <section className="sb-group" key={g.status}>
                 <button className="sb-grouphd" onClick={()=>toggle(g.status)} aria-expanded={!isCollapsed}>
-                  <span className={"sb-chev"+(isCollapsed?"":" open")}>›</span>
+                  <span className={"sb-chev"+(isCollapsed?"":" open")}><ChevronRightIcon className="hi hi-sm" aria-hidden="true" /></span>
                   <span className={"sb-status "+statusClass(g.status)}><span className="pip"/>{g.status}</span>
                   {archive && <span className="sb-archtag">Archive</span>}
                   <span className="sb-groupct">{g.items.length}</span>
@@ -1482,7 +1503,7 @@ function Mine({ tasks, me, openTask }) {
         return (
           <div key={s.key}>
             <button className={"sb-shead sb-sheadbtn"+(accent[s.key]||"")} onClick={()=>toggle(s.key)} aria-expanded={open}>
-              <span className={"sb-chev"+(open?" open":"")}>›</span>
+              <span className={"sb-chev"+(open?" open":"")}><ChevronRightIcon className="hi hi-sm" aria-hidden="true" /></span>
               <h2>{s.label}</h2><span className="sb-tag">{s.items.length}</span>
             </button>
             {open && <div className="sb-list">{s.items.map(t => <TaskCard key={t.id} t={t} me={me} onClick={()=>openTask(t.id)} />)}</div>}
@@ -1604,7 +1625,7 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent }) 
             const n = occurrenceContentCount(e, tasks);
             return (
             <div className="sb-ev" key={e.eventOccurrenceId||i}>
-              <span className="sb-ev-ic">{e.kind==="birthday"?"🎂":"📅"}</span>
+              <span className="sb-ev-ic">{e.kind==="birthday"?<CakeIcon className="hi" aria-hidden="true"/>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
               <div style={{flex:1,minWidth:0}}>
                 <div className="sb-ev-name">{e.name}</div>
                 <div className="sb-ev-sub">
@@ -1680,7 +1701,7 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent }) 
       <div className="sb-shead"><h2>Recent wins</h2></div>
       {recents.length===0
         ? <div className="sb-empty">Nothing posted yet. Your first win is coming!</div>
-        : <div className="sb-recent">{recents.map((r,i)=>(<div className="sb-recent-row" key={i}>✅ {r.text}</div>))}</div>}
+        : <div className="sb-recent">{recents.map((r,i)=>(<div className="sb-recent-row" key={i}><CheckCircleIcon className="hi hi-sm" aria-hidden="true" style={{color:"var(--success)",verticalAlign:"-4px",marginRight:6}}/>{r.text}</div>))}</div>}
     </div>
   );
 }
@@ -1704,7 +1725,7 @@ function KebabMenu({ items }) {
   return (
     <div className="sb-kebab" ref={ref} onClick={(e)=>e.stopPropagation()}>
       <button className="sb-kebab-btn" aria-label="More actions" aria-haspopup="menu" aria-expanded={open}
-        onClick={()=>setOpen(o=>!o)}>⋯</button>
+        onClick={()=>setOpen(o=>!o)}><EllipsisHorizontalIcon className="hi" aria-hidden="true"/></button>
       {open && (
         <div className="sb-kebab-menu" role="menu">
           {items.map((it, i) => (
@@ -1749,7 +1770,7 @@ function AdminTaskCard({ t, h }) {
       {problem && <div className="sb-problem">⚠ {problem}</div>}
       <div className="sub"><span>Owner <b>{ownerLabel}</b></span></div>
       {canAuto && <div className="sb-btnrow" style={{marginTop:8}} onClick={e=>e.stopPropagation()}>
-        <button className="sb-btn gold compact" onClick={()=>h.auto(t)}>⚡ Auto-assign crew</button>
+        <button className="sb-btn gold compact" onClick={()=>h.auto(t)}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign crew</button>
       </div>}
     </div>
   );
@@ -1841,12 +1862,12 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
       {/* Quick actions first — the things a leader comes here to DO */}
       <div className="sb-btnrow sb-quickrow">
         <button className="sb-btn" onClick={onNewContent}>+ New content</button>
-        <button className="sb-btn ghost" onClick={onGoImport}>⤓ Import CSV</button>
-        <button className="sb-btn ghost" onClick={()=>setEventNote(v=>!v)}>＋ Create event</button>
-        <button className="sb-btn gold" onClick={onAutoAll}>⚡ Auto-assign crew</button>
+        <button className="sb-btn ghost" onClick={onGoImport}><ArrowUpTrayIcon className="hi hi-sm" aria-hidden="true"/> Import CSV</button>
+        <button className="sb-btn ghost" onClick={()=>setEventNote(v=>!v)}><PlusIcon className="hi hi-sm" aria-hidden="true"/> Create event</button>
+        <button className="sb-btn gold" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign crew</button>
       </div>
       {eventNote && <div className="sb-assign" style={{marginTop:10}}>
-        📅 Event management is coming soon. Pastor birthdays &amp; key dates already power the reminders on Home.</div>}
+        Event management is coming soon. Pastor birthdays &amp; key dates already power the reminders on Home.</div>}
 
       {/* Health overview */}
       <div className="sb-health" style={{marginTop:18}}>
@@ -1890,7 +1911,7 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
             const n = eventCount(e);
             return (
               <div className="sb-ev" key={i}>
-                <span className="sb-ev-ic">{e.kind==="birthday"?"🎂":"📅"}</span>
+                <span className="sb-ev-ic">{e.kind==="birthday"?<CakeIcon className="hi" aria-hidden="true"/>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div className="sb-ev-name">{e.name}</div>
                   <div className="sb-ev-sub">
@@ -1938,20 +1959,20 @@ function AdminContent({ tasks, h, filter, setFilter, onNewContent, onAutoAll }) 
     <>
       <div className="sb-btnrow" style={{marginBottom:12}}>
         <button className="sb-btn" onClick={onNewContent}>+ New content</button>
-        <button className="sb-btn gold" onClick={onAutoAll}>⚡ Auto-assign empty</button>
+        <button className="sb-btn gold" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign empty</button>
       </div>
       <div className="sb-field" style={{marginBottom:10}}>
         <div className="sb-inline">
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Search content: title, owner, event…" />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search content: title, owner, event…" />
           {searching && <button className="sb-btn ghost compact" onClick={()=>setQ("")}>Clear</button>}
         </div>
       </div>
       {!searching && <>
         <div className="sb-filterbar">
           <button className="sb-filtertoggle" onClick={()=>setFiltersOpen(o=>!o)} aria-expanded={filtersOpen}>
-            <span className="ico">⛃</span>Filters
+            <span className="ico"><FunnelIcon className="hi hi-sm" aria-hidden="true"/></span>Filters
             {filter!=="all" && <span className="sb-filteractive">{activeLabel}</span>}
-            <span className={"sb-chev"+(filtersOpen?" open":"")}>›</span>
+            <span className={"sb-chev"+(filtersOpen?" open":"")}><ChevronRightIcon className="hi hi-sm" aria-hidden="true" /></span>
           </button>
         </div>
         {filtersOpen && <div className="sb-chiprow">
@@ -1965,7 +1986,7 @@ function AdminContent({ tasks, h, filter, setFilter, onNewContent, onAutoAll }) 
         {list.length} item{list.length!==1?"s":""}{searching?` matching “${q.trim()}”`:filter!=="all"?` · ${activeLabel}`:""}
       </div>
       {list.length===0
-        ? <div className="sb-empty"><div className="big">▦</div>Nothing matches.</div>
+        ? <div className="sb-empty"><div className="big"><ViewColumnsIcon className="hi hi-empty" aria-hidden="true"/></div>Nothing matches.</div>
         : <div className="sb-list">{list.map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>}
     </>
   );
@@ -2048,7 +2069,7 @@ function AdminPeople({ users, tasks, onEditUser, onDeleteUser, onRemoveUser, onA
       {/* Search + filters */}
       <div className="sb-field" style={{marginBottom:10}}>
         <div className="sb-inline">
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Search people: name, email, department, role, campus…" />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search people: name, email, department, role, campus…" />
           {searching && <button className="sb-btn ghost compact" onClick={()=>setQ("")}>Clear</button>}
         </div>
       </div>
@@ -2103,7 +2124,7 @@ function RemoveUserModal({ user, tasks, team, onClose, onConfirm }) {
     <div className="sb-scrim" onMouseDown={onClose}>
       <div className="sb-sheet" onMouseDown={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Remove {user.name}?</b>
-          <button className="sb-x" onClick={onClose}>✕</button></div>
+          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           <p className="sb-sub" style={{lineHeight:1.55}}>
             Are you sure you want to remove this user from the team? Their content will remain,
@@ -2494,7 +2515,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd">
           <span className={"sb-chip "+typeClass(task.type)}>{task.type}</span>
-          <button className="sb-x" onClick={onClose}>✕</button>
+          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button>
         </div>
         <div className="bd">
           <h2 style={{fontSize:22,fontWeight:600,lineHeight:1.15,marginBottom:8}}>{task.title}</h2>
@@ -2728,7 +2749,7 @@ function ReminderEditor({ reminders, onChange }) {
               <option value="before">before due</option><option value="after">after due</option>
             </select>
             <label className="sb-remtog"><input type="checkbox" checked={r.enabled !== false} onChange={() => upd(i, { enabled: r.enabled === false })} />on</label>
-            <button type="button" className="sb-rem-x" onClick={() => onChange(rem.filter((_, j) => j !== i))} aria-label="Remove reminder">✕</button>
+            <button type="button" className="sb-rem-x" onClick={() => onChange(rem.filter((_, j) => j !== i))} aria-label="Remove reminder"><XMarkIcon className="hi" aria-hidden="true" /></button>
           </div>
           <div className="chips">
             {REMINDER_CHANNELS.map(c => <button type="button" key={c}
@@ -2765,7 +2786,7 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{task?"Edit content":"Plan content"}</b>
-          <button className="sb-x" onClick={onClose}>✕</button></div>
+          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           <div className="sb-sub" style={{marginTop:0}}>Plan a piece of content. The team adds the deliverable links later, when it's ready for QA.</div>
           <div className="sb-field"><label>Content title</label>
@@ -2808,7 +2829,7 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
             <textarea rows={2} value={f.notes} onChange={e=>set("notes",e.target.value)} /></div>
 
           <div className="sb-shead"><h2>Support crew</h2>
-            <button className="link" onClick={()=>set("support", onAuto(f))}>⚡ Auto-assign</button></div>
+            <button className="link" onClick={()=>set("support", onAuto(f))}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign</button></div>
           {(f.support||[]).length===0
             ? <div className="sb-sub">No crew yet. Tap Auto-assign or add below.</div>
             : (f.support||[]).map((s,i)=>{
@@ -2825,7 +2846,7 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
                 {m && <button type="button" className="sb-btn ghost compact"
                   onClick={()=>set("support", f.support.map((x,j)=> j===i ? { name:m.name, role:x.role, ...(x.loc?{loc:x.loc}:{}) } : x))}>
                   Assign {m.name.split(" ")[0]} →</button>}
-                <button className="sb-x" onClick={()=>set("support",f.support.filter((_,j)=>j!==i))}>✕</button>
+                <button className="sb-x" onClick={()=>set("support",f.support.filter((_,j)=>j!==i))}><XMarkIcon className="hi" aria-hidden="true" /></button>
               </div>
               );
             })}
@@ -2898,7 +2919,7 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{isPending?"Approve "+user.name:"Edit "+user.name}</b>
-          <button className="sb-x" onClick={onClose}>✕</button></div>
+          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           {isPending && <div className="sb-banner">Set their skills and location, then approve to let them in.</div>}
 

@@ -14,19 +14,27 @@ import {
 import { db } from "./firebase";
 import { logIssue } from "./logging";
 
-// Display metadata per notification type.
+import {
+  UserPlusIcon, BellAlertIcon, ExclamationTriangleIcon, ClipboardDocumentCheckIcon,
+  ChatBubbleLeftRightIcon, CheckCircleIcon, PaperAirplaneIcon, AtSymbolIcon,
+  CheckBadgeIcon, ChartBarIcon, BellIcon,
+} from "@heroicons/react/24/outline";
+
+// Display metadata per notification type: Heroicon component ref + label +
+// tint class for the soft icon background (rendered by the Notification Center).
 export const NOTIF_META = {
-  assigned:         { icon: "🎬", label: "Assignment" },
-  reminder:         { icon: "⏰", label: "Reminder" },
-  overdue:          { icon: "⚠️", label: "Overdue" },
-  qa:               { icon: "🔎", label: "Review" },
-  changes:          { icon: "✏️", label: "Changes requested" },
-  approved:         { icon: "✅", label: "Approved" },
-  ready:            { icon: "🚀", label: "Ready to post" },
-  mention:          { icon: "💬", label: "Mention" },
-  account_approved: { icon: "🎉", label: "Account" },
-  leadership:       { icon: "📊", label: "Leadership" },
+  assigned:         { icon: UserPlusIcon,               label: "Assignment",        tint: "tint-primary" },
+  reminder:         { icon: BellAlertIcon,              label: "Reminder",          tint: "tint-primary" },
+  overdue:          { icon: ExclamationTriangleIcon,    label: "Overdue",           tint: "tint-danger" },
+  qa:               { icon: ClipboardDocumentCheckIcon, label: "Review",            tint: "tint-info" },
+  changes:          { icon: ChatBubbleLeftRightIcon,    label: "Changes requested", tint: "tint-warning" },
+  approved:         { icon: CheckCircleIcon,            label: "Approved",          tint: "tint-success" },
+  ready:            { icon: PaperAirplaneIcon,          label: "Ready to post",     tint: "tint-success" },
+  mention:          { icon: AtSymbolIcon,               label: "Mention",           tint: "tint-info" },
+  account_approved: { icon: CheckBadgeIcon,             label: "Account",           tint: "tint-success" },
+  leadership:       { icon: ChartBarIcon,               label: "Leadership",        tint: "tint-neutral" },
 };
+export const NOTIF_FALLBACK = { icon: BellIcon, label: "Update", tint: "tint-neutral" };
 
 // The per-type toggles a user can control. "Required" messages
 // (account_approved and security notices) always send and aren't listed.
