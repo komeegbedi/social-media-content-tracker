@@ -165,14 +165,31 @@ a{color:var(--primary)}
 .sb-report-top{background:rgba(255,255,255,.14);border:none;color:#fff;width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;
   border-radius:999px;font-size:14px;flex:none}
 
-.sb-top{flex:0 0 auto;z-index:30;background:var(--violet);color:#fff;
-  padding:calc(9px + env(safe-area-inset-top)) 16px 9px;display:flex;align-items:center;justify-content:space-between}
-.sb-top .brand{letter-spacing:-.015em;font-weight:600;font-size:17px;display:flex;align-items:center;gap:8px}
-.sb-spark{width:20px;height:20px;border-radius:6px;background:var(--gold);display:inline-flex;
-  align-items:center;justify-content:center;color:#3a2a06;font-weight:700;font-family:Inter;font-size:12px}
-.sb-avbtn{background:none;border:none;padding:0;border-radius:999px;line-height:0}
-.sb-avbtn .sb-av{background:rgba(255,255,255,.2);color:#fff}
+/* Mobile header (v1.2): a light translucent glass surface that complements the
+   floating bottom nav — not a solid purple block. Profile lives in the bottom
+   nav, so only Search + Notifications appear here. */
+.sb-top{flex:0 0 auto;z-index:40;display:flex;align-items:center;justify-content:space-between;
+  min-height:64px;padding:calc(10px + env(safe-area-inset-top)) 16px 10px;
+  background:color-mix(in srgb,var(--background) 88%,transparent);
+  border-bottom:1px solid var(--border);
+  backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%)}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .sb-top{background:var(--background)} }
 @media(min-width:900px){ .sb-top{display:none} }
+.sb-top .brand{display:flex;align-items:center;gap:9px;color:var(--text-primary);min-width:0}
+.sb-top .brandwm{letter-spacing:-.015em;font-weight:600;font-size:20px;white-space:nowrap}
+.sb-spark{width:30px;height:30px;border-radius:9px;background:var(--gold);display:inline-flex;flex:none;
+  align-items:center;justify-content:center;color:#3a2a06;font-weight:700;font-family:Inter;font-size:16px}
+@media(max-width:359px){ .sb-top{padding-left:12px;padding-right:12px} .sb-topactions{gap:8px} }
+.sb-topactions{display:flex;align-items:center;gap:10px;flex:none}
+.sb-hbtn{display:grid;place-items:center;width:44px;height:44px;flex:none;position:relative;
+  border:1px solid var(--border);border-radius:14px;background:var(--surface-elevated);color:var(--text-secondary);
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-hbtn:hover{background:var(--surface-muted);color:var(--text-primary)}
+.sb-hbtn:active{transform:scale(.96)}
+.sb-hbtn .hi{width:21px;height:21px}
 
 /* Account drawer (mobile) — bottom sheet from the header avatar */
 .sb-drawer{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
@@ -440,7 +457,8 @@ a{color:var(--primary)}
 @media(min-width:900px){ .sb-beta{margin:14px 0 0} }
 .sb-beta-tag{font-size:11px;font-weight:700;letter-spacing:.03em;background:var(--violet);color:#fff;
   border-radius:999px;padding:3px 9px;flex:none}
-.sb-beta-txt{flex:1;min-width:0;font-size:12.5px;color:var(--violet-deep);line-height:1.4}
+.sb-beta-txt{flex:1;min-width:0;font-size:12.5px;color:var(--violet-deep);line-height:1.4;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 [data-theme="dark"] .sb-beta-txt{color:var(--ink)}
 .sb-beta-report{flex:none;background:var(--card);border:1px solid var(--violet);color:var(--violet);
   border-radius:8px;padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer}
@@ -597,9 +615,11 @@ a{color:var(--primary)}
 .sb-usage .grid b{color:var(--ink)}
 /* Bell buttons + unread badge */
 .sb-bellbtn{position:relative}
-.sb-belldot{position:absolute;top:-3px;right:-3px;background:var(--red);color:#fff;
-  font-size:9px;font-weight:700;min-width:15px;height:15px;padding:0 3px;border-radius:999px;
-  display:flex;align-items:center;justify-content:center;line-height:1}
+.sb-belldot{position:absolute;top:5px;right:5px;background:var(--danger);color:#fff;
+  font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:999px;
+  display:flex;align-items:center;justify-content:center;line-height:1;
+  border:1.5px solid var(--surface-elevated);animation:badgePop var(--motion-standard) var(--ease-enter)}
+@keyframes badgePop{from{transform:scale(0)}to{transform:scale(1)}}
 
 /* Creative brief callout in the task detail sheet. */
 .sb-brief{background:var(--violet-soft);border:1px solid var(--line);border-radius:13px;

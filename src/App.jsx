@@ -77,9 +77,9 @@ function BetaBanner({ onReport }) {
   return (
     <div className="sb-beta">
       <span className="sb-beta-tag">Beta</span>
-      <span className="sb-beta-txt">We're testing IFC Creatives Board. Please report bugs, confusing steps, or feature ideas.</span>
+      <span className="sb-beta-txt">Help us improve the app</span>
       <button className="sb-beta-report" onClick={onReport}>Report</button>
-      <button className="sb-beta-x" onClick={dismiss} aria-label="Dismiss beta notice"><XMarkIcon className="hi" aria-hidden="true" /></button>
+      <button className="sb-beta-x" onClick={dismiss} aria-label="Dismiss beta notice"><XMarkIcon className="hi hi-sm" aria-hidden="true" /></button>
     </div>
   );
 }
@@ -1224,16 +1224,15 @@ function Board({ profile, isAdmin }) {
 
         <div className="sb-main">
           <header className="sb-top">
-            <span className="brand"><span className="sb-spark">✦</span>Creatives Board</span>
-            <span style={{display:"flex",alignItems:"center",gap:10}}>
-              <button className="sb-report-top" onClick={()=>setSearchOpen(true)} aria-label="Search"><MagnifyingGlassIcon className="hi" aria-hidden="true"/></button>
-              <button className="sb-report-top sb-bellbtn" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
-                <BellIcon className="hi" aria-hidden="true"/>{notif.unread>0 && <span className="sb-belldot">{notif.unread>9?"9+":notif.unread}</span>}
+            <span className="brand"><span className="sb-spark" aria-hidden="true">✦</span><span className="brandwm">Creatives Board</span></span>
+            <div className="sb-topactions">
+              <button className="sb-hbtn" onClick={()=>setSearchOpen(true)} aria-label="Search"><MagnifyingGlassIcon className="hi" aria-hidden="true"/></button>
+              <button className="sb-hbtn sb-bellbtn" onClick={()=>setNotifOpen(true)}
+                aria-label={notif.unread>0?`Notifications, ${notif.unread} unread`:"Notifications"}>
+                <BellIcon className="hi" aria-hidden="true"/>
+                {notif.unread>0 && <span className="sb-belldot">{notif.unread>9?"9+":notif.unread}</span>}
               </button>
-              <button className="sb-avbtn" onClick={()=>setShowDrawer(true)} aria-label="Profile and settings">
-                <span className="sb-av" style={{width:30,height:30,fontSize:11}}>{initials(me.name)}</span>
-              </button>
-            </span>
+            </div>
           </header>
 
           <div className="sb-content">
