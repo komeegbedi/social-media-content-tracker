@@ -838,7 +838,8 @@ export function myWorkSections(tasks, me) {
     { key: "approved", label: "Approved",          items: take((t) => t.status === "Approved") },
     { key: "progress", label: "In progress",       items: take((t) => t.status === "In Progress") },
     { key: "planned",  label: "Planned",           items: take((t) => t.status === "Planned") },
-    { key: "posted",   label: "Posted",            items: take((t) => t.status === "Posted") },
+    // Posted content is archived — it drops out of My Work (find it in the
+    // Workflow "Archived" group, Search, or Admin).
   ];
   return sections.filter((s) => s.items.length > 0);
 }

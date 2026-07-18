@@ -110,7 +110,7 @@ service cloud.firestore {
       allow update: if isAdmin()
         || (isApproved()
             && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['status', 'comments', 'reactions', 'updatedAt',
+                 .hasOnly(['status', 'comments', 'reactions', 'updatedAt', 'archivedAt',
                            'blockedOn', 'links', 'activity', 'caption', 'postLink'])
             && (request.resource.data.status == resource.data.status
                 || !(request.resource.data.status in ['Approved', 'Changes Requested'])

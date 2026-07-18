@@ -1059,7 +1059,7 @@ function Board({ profile, isAdmin }) {
   // Archive = move to the Posted/completed status (no separate flag in the model).
   const archiveTask = async (task) =>
     updateDoc(doc(db, "tasks", task.id), {
-      status: "Posted",
+      status: "Posted", archivedAt: serverTimestamp(),
       activity: [...(task.activity||[]), activityEntry("posted", me.name, "Posted")],
       updatedAt: serverTimestamp(),
     });
@@ -1088,7 +1088,8 @@ function Board({ profile, isAdmin }) {
   // Admin manual status override (the status segmented control).
   const setStatus = async (task, status) =>
     updateDoc(doc(db, "tasks", task.id), {
-      status, activity: [...(task.activity||[]), activityEntry(eventType(status), me.name, status)],
+      status, ...(status === "Posted" ? { archivedAt: serverTimestamp() } : {}),
+      activity: [...(task.activity||[]), activityEntry(eventType(status), me.name, status)],
       updatedAt: serverTimestamp(),
     });
   // The guided workflow action (Start work / Submit for QA / Mark ready / Posted).
@@ -1096,6 +1097,7 @@ function Board({ profile, isAdmin }) {
   const runWorkflow = async (task, action, extra = {}) =>
     updateDoc(doc(db, "tasks", task.id), {
       status: action.to, ...extra,
+      ...(action.to === "Posted" ? { archivedAt: serverTimestamp() } : {}),
       activity: [...(task.activity||[]), activityEntry(action.kind, me.name, action.to)],
       updatedAt: serverTimestamp(),
     });
@@ -1687,11 +1689,12 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
             const isCollapsed = groups.length > 1 && !!collapsed[g.status];
             const archive = g.status === "Posted";
             return (
-              <section className="sb-group" key={g.status}>
+              <section className={"sb-group"+(archive?" archived":"")} key={g.status}>
                 <button className="sb-grouphd" onClick={()=>toggle(g.status)} aria-expanded={!isCollapsed}>
                   <span className={"sb-chev"+(isCollapsed?"":" open")}><ChevronRightIcon className="hi hi-sm" aria-hidden="true" /></span>
-                  <span className={"sb-status "+statusClass(g.status)}><span className="pip"/>{g.status}</span>
-                  {archive && <span className="sb-archtag">Archive</span>}
+                  {archive
+                    ? <span className="sb-status st-archived"><span className="pip"/>Archived</span>
+                    : <span className={"sb-status "+statusClass(g.status)}><span className="pip"/>{g.status}</span>}
                   <span className="sb-groupct">{g.items.length}</span>
                 </button>
                 {!isCollapsed && (view==="list"

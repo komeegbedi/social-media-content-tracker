@@ -1257,3 +1257,7 @@ input,textarea,select{transition:border-color var(--motion-fast) var(--ease-stan
 /* FAB: tiny spring-in on mount. */
 .sb-fab{animation:fabIn var(--motion-standard) cubic-bezier(.34,1.56,.64,1)}
 @keyframes fabIn{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+/* Archived (Posted) workflow group: de-emphasised, since it's completed work. */
+.sb-group.archived{opacity:.72}
+.sb-status.st-archived{color:var(--text-muted)}
+.sb-status.st-archived .pip{background:var(--text-muted)}
