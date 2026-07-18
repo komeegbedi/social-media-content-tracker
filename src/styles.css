@@ -306,21 +306,27 @@ a{color:var(--primary)}
 .sb-attn-sub .muted{font-size:12px;color:var(--muted)}
 .sb-attn-chev{display:inline-flex;align-items:center;color:var(--text-muted);flex:none}
 
-.sb-nav{position:fixed;bottom:0;left:0;right:0;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);
-  border-top:1px solid var(--line);display:flex;justify-content:space-around;
-  padding:8px 6px calc(8px + env(safe-area-inset-bottom));z-index:40}
+.sb-nav{position:fixed;bottom:0;left:0;right:0;background:color-mix(in srgb,var(--surface) 96%,transparent);
+  backdrop-filter:blur(10px);border-top:1px solid var(--border);display:flex;justify-content:space-around;
+  padding:6px 6px calc(6px + env(safe-area-inset-bottom));z-index:40}
 @media(min-width:900px){ .sb-nav{display:none} }
-.sb-navbtn{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:3px;
-  color:var(--muted);font-size:10.5px;font-weight:600;padding:4px 8px;border-radius:10px;flex:1;position:relative}
-.sb-navbtn.on{color:var(--violet)}
-.sb-navbtn.on .ico{background:var(--violet-soft)}
-.sb-navbtn .ico{width:30px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px}
+.sb-navbtn{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;
+  color:var(--text-muted);font-size:10.5px;font-weight:600;padding:4px 8px;min-height:48px;
+  border-radius:var(--r-control);flex:1;position:relative;
+  transition:color var(--motion-micro) var(--ease-out)}
+.sb-navbtn.on{color:var(--primary)}
+.sb-navbtn.on .ico{background:var(--primary-muted)}
+.sb-navbtn .ico{width:44px;height:28px;border-radius:var(--r-pill);display:flex;align-items:center;justify-content:center;
+  transition:background var(--motion-standard) var(--ease-out)}
+.sb-navav{width:23px;height:23px;font-size:9px}
 .sb-navbtn .pill{position:absolute;top:0;right:14px;background:var(--red);color:#fff;font-size:9px;
   font-weight:700;border-radius:999px;padding:0 5px}
 
-.sb-fab{position:fixed;bottom:84px;right:18px;z-index:41;width:60px;height:60px;border-radius:18px;
-  background:var(--violet);color:#fff;border:none;font-size:26px;box-shadow:0 8px 22px rgba(76,58,140,.4);
-  display:flex;align-items:center;justify-content:center}
+.sb-fab{position:fixed;bottom:calc(84px + env(safe-area-inset-bottom));right:18px;z-index:41;width:58px;height:58px;
+  border-radius:18px;background:var(--primary);color:#fff;border:none;box-shadow:var(--shadow-lg);
+  display:flex;align-items:center;justify-content:center;
+  transition:background var(--motion-micro) var(--ease-out),transform var(--motion-micro) var(--ease-out)}
+.sb-fab:hover{background:var(--primary-hover)}
 .sb-fab:active{transform:scale(.94)}
 @media(min-width:900px){ .sb-fab{bottom:28px;right:28px;width:58px;height:58px} }
 
@@ -775,3 +781,22 @@ a{color:var(--primary)}
 .sb-skel{background:linear-gradient(90deg,var(--surface-muted) 25%,var(--background-muted) 50%,var(--surface-muted) 75%);
   background-size:200% 100%;animation:skel 1.4s ease infinite;border-radius:var(--r-control)}
 @keyframes skel{from{background-position:200% 0}to{background-position:-200% 0}}
+
+/* --- Sidebar grouping + medium-width icon collapse (v1.1.2) --- */
+.sb-navgroup{font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text-muted);padding:14px 12px 4px}
+@media(min-width:900px) and (max-width:1139px){
+  :root{--side:76px}
+  .sb-side .lbl,.sb-side .sb-kbd,.sb-side .sb-brandtext{display:none}
+  .sb-side{padding:22px 10px;align-items:center}
+  .sb-snav{width:100%}
+  .sb-snav button{justify-content:center;padding:11px 0}
+  .sb-searchbtn{justify-content:center;width:44px;padding:10px 0}
+  .sb-side .sb-btn{width:44px;padding:12px 0}
+  .sb-sfoot{width:100%;display:flex;flex-direction:column;align-items:center}
+  .sb-suser{padding:6px 0}
+  .sb-report,.sb-signout{width:44px;padding:9px 0}
+  .sb-report .pill{position:absolute;transform:translate(12px,-10px)}
+  .sb-snav button .pill{position:absolute;right:6px;top:6px;margin-left:0}
+  .sb-snav button{position:relative}
+}

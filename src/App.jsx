@@ -40,6 +40,11 @@ import {
   BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, CakeIcon,
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon,
 } from "@heroicons/react/24/outline";
+import {
+  HomeIcon as HomeSolid, ClockIcon as ClockSolid, ViewColumnsIcon as ViewColumnsSolid,
+  ClipboardDocumentListIcon as ClipboardSolid, UserGroupIcon as UserGroupSolid,
+  Cog6ToothIcon as CogSolid,
+} from "@heroicons/react/24/solid";
 import { setView, reportIssue, logIssue } from "./logging";
 import { getTheme, setTheme } from "./theme";
 
@@ -90,14 +95,14 @@ function ThemeToggle({ compact }) {
   return compact
     ? <button className="sb-report-top" onClick={toggle} aria-label="Toggle dark mode">
         {theme==="dark"?<SunIcon className="hi" aria-hidden="true"/>:<MoonIcon className="hi" aria-hidden="true"/>}</button>
-    : <button className="sb-report" onClick={toggle}>
+    : <button className="sb-report" onClick={toggle} aria-label="Toggle dark mode">
         {theme==="dark"?<SunIcon className="hi-sm hi" aria-hidden="true"/>:<MoonIcon className="hi-sm hi" aria-hidden="true"/>}
-        {theme==="dark"?"Light mode":"Dark mode"}</button>;
+        <span className="lbl">{theme==="dark"?"Light mode":"Dark mode"}</span></button>;
 }
 
 /* Mobile account drawer — opened from the header avatar. Pulls the profile,
    theme, report and sign-out off every screen and into one slide-up sheet. */
-function ProfileDrawer({ me, isAdmin, unread = 0, onClose, onNotifications, onReport }) {
+function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onNotifications, onReport, onGoTab }) {
   const [theme, setT] = useState(getTheme());
   const toggleTheme = () => { const next = theme==="dark"?"light":"dark"; setTheme(next); setT(next); };
   useEffect(() => {
@@ -115,6 +120,13 @@ function ProfileDrawer({ me, isAdmin, unread = 0, onClose, onNotifications, onRe
             <div className="rl">{isAdmin?"Admin":"Member"} · {me.email}</div>
           </div>
         </div>
+        {onGoTab && <button className="sb-drawer-item" onClick={()=>{ onGoTab("team"); onClose(); }}>
+          <span className="i"><UserGroupIcon className="hi" aria-hidden="true"/></span>Team
+        </button>}
+        {onGoTab && isAdmin && <button className="sb-drawer-item" onClick={()=>{ onGoTab("admin"); onClose(); }}>
+          <span className="i"><Cog6ToothIcon className="hi" aria-hidden="true"/></span>Admin
+          {pendingCount>0 && <span className="sb-drawer-state">{pendingCount}</span>}
+        </button>}
         <button className="sb-drawer-item" onClick={toggleTheme}>
           <span className="i">{theme==="dark"?<SunIcon className="hi" aria-hidden="true"/>:<MoonIcon className="hi" aria-hidden="true"/>}</span>
           {theme==="dark"?"Light mode":"Dark mode"}
@@ -497,16 +509,9 @@ function useDoc(path, canRead) {
 /* ===================================================================
    ROOT
    =================================================================== */
-// Navigation + shared icons (Heroicons 24/outline, sized via .hi classes).
-// Stored as ready-to-render elements so existing {Ic.x} sites keep working.
+// Shared inline icons (nav icons live in the mainNav/mgmtNav model below).
 const Ic = {
-  home:  <HomeIcon className="hi hi-nav" aria-hidden="true" />,
-  day:   <ClockIcon className="hi hi-nav" aria-hidden="true" />,
-  board: <ViewColumnsIcon className="hi hi-nav" aria-hidden="true" />,
-  mine:  <ClipboardDocumentListIcon className="hi hi-nav" aria-hidden="true" />,
-  team:  <UserGroupIcon className="hi hi-nav" aria-hidden="true" />,
-  admin: <Cog6ToothIcon className="hi hi-nav" aria-hidden="true" />,
-  chat:  <ChatBubbleLeftRightIcon className="hi hi-sm" aria-hidden="true" style={{verticalAlign:"-4px"}} />,
+  chat: <ChatBubbleLeftRightIcon className="hi hi-sm" aria-hidden="true" style={{verticalAlign:"-4px"}} />,
 };
 
 export default function App() {
@@ -817,13 +822,21 @@ function Board({ profile, isAdmin }) {
     return () => unsub();
   }, []);
 
-  const nav = [
-    { id:"home", ico:Ic.home, label:"Home" },
-    { id:"myday", ico:Ic.day, label:"My Day" },
-    { id:"board", ico:Ic.board, label:"Board" },
-    { id:"mine", ico:Ic.mine, label:"My Work" },
-    { id:"team", ico:Ic.team, label:"Team" },
-    ...(isAdmin ? [{ id:"admin", ico:Ic.admin, label:"Admin", badge: pendingCount }] : []),
+  // Navigation model (v1.1.2): outline icon at rest, solid when active.
+  // Mobile bottom nav = the 4 main destinations + Profile (Team/Admin live in
+  // the profile sheet); desktop sidebar shows Main + Management groups.
+  const navIco = (Out, Solid, active) => active
+    ? <Solid className="hi hi-nav" aria-hidden="true" />
+    : <Out className="hi hi-nav" aria-hidden="true" />;
+  const mainNav = [
+    { id:"home",  label:"Home",    ico:(a)=>navIco(HomeIcon, HomeSolid, a) },
+    { id:"myday", label:"My Day",  ico:(a)=>navIco(ClockIcon, ClockSolid, a) },
+    { id:"board", label:"Board",   ico:(a)=>navIco(ViewColumnsIcon, ViewColumnsSolid, a) },
+    { id:"mine",  label:"My Work", ico:(a)=>navIco(ClipboardDocumentListIcon, ClipboardSolid, a) },
+  ];
+  const mgmtNav = [
+    { id:"team", label:"Team", ico:(a)=>navIco(UserGroupIcon, UserGroupSolid, a) },
+    ...(isAdmin ? [{ id:"admin", label:"Admin", badge: pendingCount, ico:(a)=>navIco(Cog6ToothIcon, CogSolid, a) }] : []),
   ];
 
   /* ---- task writes ---- */
@@ -972,30 +985,38 @@ function Board({ profile, isAdmin }) {
         <aside className="sb-side">
           <div className="sb-sbrand"><span className="sb-spark">✦</span>
             <span className="sb-brandtext"><span className="ifc">IFC</span>Creatives Board</span></div>
-          <button className="sb-searchbtn" onClick={()=>setSearchOpen(true)}>
-            <span className="ico"><MagnifyingGlassIcon className="hi hi-sm" aria-hidden="true"/></span>Search…<kbd className="sb-kbd">/</kbd>
+          <button className="sb-searchbtn" onClick={()=>setSearchOpen(true)} aria-label="Search">
+            <span className="ico"><MagnifyingGlassIcon className="hi hi-sm" aria-hidden="true"/></span><span className="lbl">Search…</span><kbd className="sb-kbd">/</kbd>
           </button>
-          <nav className="sb-snav">
-            {nav.map(n => (
-              <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)}>
-                <span className="ico">{n.ico}</span>{n.label}
+          <nav className="sb-snav" aria-label="Main">
+            {mainNav.map(n => (
+              <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
+                <span className="ico">{n.ico(tab===n.id)}</span><span className="lbl">{n.label}</span>
+                {n.badge>0 && <span className="pill">{n.badge}</span>}
+              </button>
+            ))}
+            <div className="sb-navgroup lbl">Management</div>
+            {mgmtNav.map(n => (
+              <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
+                <span className="ico">{n.ico(tab===n.id)}</span><span className="lbl">{n.label}</span>
                 {n.badge>0 && <span className="pill">{n.badge}</span>}
               </button>
             ))}
           </nav>
-          {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")}>+ New content</button>}
+          {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")} aria-label="New content">
+            <PlusIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">New content</span></button>}
           <div className="sb-sfoot">
             <div className="sb-suser">
               <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(me.name)}</span>
-              <span><div className="nm">{me.name}</div><div className="rl">{isAdmin?"Admin":"Member"} · {me.email}</div></span>
+              <span className="lbl"><div className="nm">{me.name}</div><div className="rl">{isAdmin?"Admin":"Member"} · {me.email}</div></span>
             </div>
             <ThemeToggle />
-            <button className="sb-report" onClick={()=>setNotifOpen(true)}>
-              <BellIcon className="hi hi-sm" aria-hidden="true"/> Notifications{notif.unread>0 && <span className="pill" style={{marginLeft:6}}>{notif.unread>9?"9+":notif.unread}</span>}
+            <button className="sb-report" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
+              <BellIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl"> Notifications</span>{notif.unread>0 && <span className="pill" style={{marginLeft:6}}>{notif.unread>9?"9+":notif.unread}</span>}
             </button>
-            <button className="sb-report" onClick={()=>setShowReport(true)}><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/> Report an issue</button>
-            <button className="sb-signout" onClick={()=>signOut(auth)}>Sign out</button>
-            <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
+            <button className="sb-report" onClick={()=>setShowReport(true)} aria-label="Report an issue"><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl"> Report an issue</span></button>
+            <button className="sb-signout" onClick={()=>signOut(auth)} aria-label="Sign out"><ArrowRightStartOnRectangleIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl"> Sign out</span></button>
+            <div className="sb-brandfoot lbl"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
           </div>
         </aside>
 
@@ -1030,24 +1051,28 @@ function Board({ profile, isAdmin }) {
             )}
           </div>
 
-          <nav className="sb-nav">
-            {nav.map(n => (
-              <button key={n.id} className={"sb-navbtn"+(tab===n.id?" on":"")} onClick={()=>setTab(n.id)}>
-                <span className="ico">{n.ico}</span>{n.label}
+          <nav className="sb-nav" aria-label="Main">
+            {mainNav.map(n => (
+              <button key={n.id} className={"sb-navbtn"+(tab===n.id?" on":"")} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
+                <span className="ico">{n.ico(tab===n.id)}</span>{n.label}
                 {n.badge>0 && <span className="pill">{n.badge}</span>}
               </button>
             ))}
+            <button className={"sb-navbtn"+(["team","admin"].includes(tab)?" on":"")} onClick={()=>setShowDrawer(true)} aria-label="Profile and more">
+              <span className="ico"><span className="sb-av sb-navav">{initials(me.name)}</span></span>Profile
+              {isAdmin && pendingCount>0 && <span className="pill">{pendingCount}</span>}
+            </button>
           </nav>
         </div>
       </div>
 
-      {isAdmin && tab==="board" && (
-        <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content">+</button>
+      {isAdmin && tab!=="admin" && (
+        <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content"><PlusIcon className="hi hi-nav" aria-hidden="true"/></button>
       )}
 
       {showDrawer && (
-        <ProfileDrawer me={me} isAdmin={isAdmin} unread={notif.unread}
-          onClose={()=>setShowDrawer(false)}
+        <ProfileDrawer me={me} isAdmin={isAdmin} unread={notif.unread} pendingCount={pendingCount}
+          onClose={()=>setShowDrawer(false)} onGoTab={setTab}
           onNotifications={()=>{ setShowDrawer(false); setNotifOpen(true); }}
           onReport={()=>{ setShowDrawer(false); setShowReport(true); }} />
       )}
