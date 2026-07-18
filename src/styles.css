@@ -169,7 +169,7 @@ a{color:var(--primary)}
    floating bottom nav — not a solid purple block. Profile lives in the bottom
    nav, so only Search + Notifications appear here. */
 .sb-top{flex:0 0 auto;z-index:40;display:flex;align-items:center;justify-content:space-between;
-  min-height:64px;padding:calc(10px + env(safe-area-inset-top)) 16px 10px;
+  min-height:54px;padding:calc(8px + env(safe-area-inset-top)) 16px 8px;
   background:color-mix(in srgb,var(--background) 88%,transparent);
   border-bottom:1px solid var(--border);
   backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%)}
@@ -177,13 +177,13 @@ a{color:var(--primary)}
   .sb-top{background:var(--background)} }
 @media(min-width:900px){ .sb-top{display:none} }
 .sb-top .brand{display:flex;align-items:center;gap:9px;color:var(--text-primary);min-width:0}
-.sb-top .brandwm{letter-spacing:-.015em;font-weight:600;font-size:20px;white-space:nowrap}
-.sb-spark{width:30px;height:30px;border-radius:9px;background:var(--gold);display:inline-flex;flex:none;
-  align-items:center;justify-content:center;color:#3a2a06;font-weight:700;font-family:Inter;font-size:16px}
+.sb-top .brandwm{letter-spacing:-.015em;font-weight:600;font-size:18px;white-space:nowrap}
+.sb-spark{width:28px;height:28px;border-radius:8px;background:var(--gold);display:inline-flex;flex:none;
+  align-items:center;justify-content:center;color:#3a2a06;font-weight:700;font-family:Inter;font-size:15px}
 @media(max-width:359px){ .sb-top{padding-left:12px;padding-right:12px} .sb-topactions{gap:8px} }
 .sb-topactions{display:flex;align-items:center;gap:10px;flex:none}
-.sb-hbtn{display:grid;place-items:center;width:44px;height:44px;flex:none;position:relative;
-  border:1px solid var(--border);border-radius:14px;background:var(--surface-elevated);color:var(--text-secondary);
+.sb-hbtn{display:grid;place-items:center;width:42px;height:42px;flex:none;position:relative;
+  border:1px solid color-mix(in srgb,var(--border) 60%,transparent);border-radius:13px;background:var(--surface-elevated);color:var(--text-secondary);
   transition:background-color var(--motion-fast) var(--ease-standard),
              border-color var(--motion-fast) var(--ease-standard),
              transform var(--motion-instant) var(--ease-standard)}
@@ -207,7 +207,7 @@ a{color:var(--primary)}
 .sb-drawer-state{margin-left:auto;font-size:11px;font-weight:700;color:var(--muted);
   background:var(--card);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
 
-.sb-page{padding:18px 16px 8px}
+.sb-page{padding:20px 16px 8px}
 @media(min-width:900px){ .sb-page{padding:30px 14px 24px} }
 .sb-eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);opacity:.85}
 .sb-h{font-size:30px;font-weight:700;margin:5px 0 6px;line-height:1.1;letter-spacing:-.02em}
@@ -421,23 +421,23 @@ a{color:var(--primary)}
 .sb-mlabel{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:12px 2px 8px}
 /* Upcoming events list on Home. */
 .sb-evlist{display:flex;flex-direction:column;gap:8px}
-/* Event cards (v1.1.2 mobile): stacked info + a single action that spans the
-   card on mobile and sits inline on desktop. Quiet status, minimal shadow. */
-.sb-ev{display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--border);
-  border-radius:14px;padding:14px}
-.sb-ev-top{display:flex;align-items:flex-start;gap:11px}
-.sb-ev-ic{font-size:22px;flex:none;line-height:1.2;color:var(--text-muted)}
+/* Event cards (v1.2): dense Apple-Reminders layout — emoji, title, relative
+   date, then a divider and a footer row (status · action link). Staggered in. */
+.sb-ev{display:flex;align-items:flex-start;gap:12px;background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;padding:13px 14px;animation:pageIn var(--motion-standard) var(--ease-enter) both;animation-delay:var(--d,0ms)}
+.sb-ev-ic{font-size:24px;flex:none;line-height:1;color:var(--text-muted);margin-top:1px}
+.sb-ev-body{flex:1;min-width:0}
 .sb-ev-name{font-weight:600;font-size:15px;line-height:1.3;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.sb-ev-sub{font-size:12.5px;color:var(--text-muted);margin-top:3px}
-.sb-ev-status{font-size:12px;margin-top:5px;font-weight:600;color:var(--text-secondary)}
+.sb-ev-sub{font-size:12.5px;color:var(--text-muted);margin-top:2px}
+.sb-ev-sub b{color:var(--text-secondary);font-weight:600}
+.sb-ev-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  margin-top:9px;padding-top:9px;border-top:1px solid var(--border)}
+.sb-ev-status{font-size:12px;font-weight:600;color:var(--text-muted)}
 .sb-ev-status.ok{color:var(--success)}
-.sb-ev-act{width:100%;justify-content:center}
-@media(min-width:560px){
-  .sb-ev{flex-direction:row;align-items:center}
-  .sb-ev-top{flex:1;min-width:0}
-  .sb-ev-act{width:auto}
-}
+.sb-ev-link{background:none;border:none;color:var(--primary);font-size:13px;font-weight:600;cursor:pointer;
+  padding:4px 2px;min-height:32px;flex:none;transition:opacity var(--motion-fast) var(--ease-standard)}
+.sb-ev-link:active{opacity:.6}
 .sb-ev-warn{color:var(--danger);font-weight:700}
 
 /* ===== Admin activity feed ===== */
@@ -615,10 +615,10 @@ a{color:var(--primary)}
 .sb-usage .grid b{color:var(--ink)}
 /* Bell buttons + unread badge */
 .sb-bellbtn{position:relative}
-.sb-belldot{position:absolute;top:5px;right:5px;background:var(--danger);color:#fff;
+.sb-belldot{position:absolute;top:-6px;right:-6px;background:var(--danger);color:#fff;
   font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:999px;
   display:flex;align-items:center;justify-content:center;line-height:1;
-  border:1.5px solid var(--surface-elevated);animation:badgePop var(--motion-standard) var(--ease-enter)}
+  border:2px solid var(--background);animation:badgePop var(--motion-standard) var(--ease-enter)}
 @keyframes badgePop{from{transform:scale(0)}to{transform:scale(1)}}
 
 /* Creative brief callout in the task detail sheet. */
@@ -646,7 +646,7 @@ a{color:var(--primary)}
 .sb-btnrow{display:flex;gap:9px}
 /* Compact action button — only as wide as its label (Open / Fetch / Approve /
    Add / Send). Use inside .sb-inline rows so the input keeps the width. */
-.sb-btn.compact{width:auto;flex:none;margin-top:0;padding:9px 14px;font-size:13.5px}
+.sb-btn.compact{width:auto;flex:none;margin-top:0;padding:8px 14px;min-height:38px;font-size:13.5px}
 /* Input + compact-button row: the field takes the space, the button hugs its
    label. The global form pattern (see also .sb-urlrow). */
 .sb-inline{display:flex;gap:9px;align-items:stretch}
@@ -1100,7 +1100,7 @@ a{color:var(--primary)}
 .sb-attnlist .sb-attn{border:none;border-radius:0;border-bottom:1px solid var(--border);box-shadow:none;margin:0}
 .sb-attnlist .sb-attn:last-child{border-bottom:none}
 /* Beta banner: compact status strip, no competition with headings */
-.sb-beta{padding:7px 12px;font-size:12px;border-radius:var(--r-control)}
+.sb-beta{padding:7px 12px;font-size:12px;border-radius:var(--r-control);margin-bottom:8px}
 .sb-beta b{font-weight:600}
 /* Team load share text quieter */
 .sb-cap .pct .share{color:var(--text-muted);font-weight:500}
@@ -1214,7 +1214,7 @@ a{color:var(--primary)}
   transition:background-color var(--motion-fast) var(--ease-standard),
              border-color var(--motion-fast) var(--ease-standard),
              transform var(--motion-instant) var(--ease-standard)}
-.sb-task-act:active,.sb-listrow:active,.sb-attn:active,.sb-notif:active{transform:scale(.995)}
+.sb-task-act:active,.sb-listrow:active,.sb-attn:active,.sb-notif:active{transform:scale(.985)}
 @media(hover:hover){ .sb-task-act:hover{border-color:var(--border-strong)} }
 
 /* Overlays: backdrop fade + token-eased entrances. */
@@ -1254,3 +1254,6 @@ input,textarea,select{transition:border-color var(--motion-fast) var(--ease-stan
 .sb-skel{transition:opacity var(--motion-standard) var(--ease-standard)}
 /* Unread dot fades + scales out when a notification is marked read. */
 .sb-notif .ndot.read{opacity:0;transform:scale(0)}
+/* FAB: tiny spring-in on mount. */
+.sb-fab{animation:fabIn var(--motion-standard) cubic-bezier(.34,1.56,.64,1)}
+@keyframes fabIn{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}

@@ -1268,7 +1268,7 @@ function Board({ profile, isAdmin }) {
         </div>
       </div>
 
-      {isAdmin && tab!=="admin" && (
+      {isAdmin && tab!=="admin" && tab!=="home" && (
         <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content"><PlusIcon className="hi hi-nav" aria-hidden="true"/></button>
       )}
 
@@ -1872,26 +1872,25 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, op
       {/* Coming up — what's on the ministry horizon */}
       {events.length>0 && <>
         <div className="sb-shead"><h2>Coming up</h2>
-          <button className="link subtle" onClick={()=>goTab("board")}>Open board →</button></div>
+          <button className="link subtle" onClick={()=>goTab("board")}>See all →</button></div>
         <div className="sb-evlist">
           {events.slice(0,3).map((e,i) => {
             const n = occurrenceContentCount(e, tasks);
+            const rel = e.daysAway===0 ? "Today" : e.daysAway===1 ? "Tomorrow" : `In ${e.daysAway} days`;
+            const act = n===0
+              ? (isAdmin && onNewForEvent && { label:"Create", onClick:()=>onNewForEvent(eventPrefill(e)) })
+              : (onViewEvent && { label:"View", onClick:()=>onViewEvent(e) });
             return (
-            <div className="sb-ev" key={e.eventOccurrenceId||i}>
-              <div className="sb-ev-top">
-                <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
-                <div style={{flex:1,minWidth:0}}>
-                  <div className="sb-ev-name">{e.name}</div>
-                  <div className="sb-ev-sub">{fmtEventDate(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}</div>
-                  <div className={"sb-ev-status"+(n>0?" ok":"")}>
-                    {n>0 ? `${n} content piece${n!==1?"s":""} planned` : "No content planned yet"}</div>
+            <div className="sb-ev" key={e.eventOccurrenceId||i} style={{ "--d": `${i*55}ms` }}>
+              <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+              <div className="sb-ev-body">
+                <div className="sb-ev-name">{e.name}</div>
+                <div className="sb-ev-sub"><b>{rel}</b> · {fmtEventDate(e.date)}</div>
+                <div className="sb-ev-foot">
+                  <span className={"sb-ev-status"+(n>0?" ok":"")}>{n>0 ? `${n} planned` : "Nothing planned"}</span>
+                  {act && <button className="sb-ev-link" onClick={act.onClick}>{act.label} →</button>}
                 </div>
               </div>
-              {n===0
-                ? (isAdmin && onNewForEvent &&
-                    <button className="sb-btn ghost compact sb-ev-act" onClick={()=>onNewForEvent(eventPrefill(e))}>Create content</button>)
-                : (onViewEvent &&
-                    <button className="sb-btn ghost compact sb-ev-act" onClick={()=>onViewEvent(e)}>View content</button>)}
             </div>
             );
           })}
