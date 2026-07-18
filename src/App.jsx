@@ -38,7 +38,7 @@ import {
   Cog6ToothIcon, BellIcon, MagnifyingGlassIcon, XMarkIcon, ChevronRightIcon,
   EllipsisHorizontalIcon, ExclamationTriangleIcon, SunIcon, MoonIcon, FunnelIcon,
   BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon,
-  ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon,
+  ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue } from "./logging";
 import { getTheme, setTheme } from "./theme";
@@ -151,11 +151,13 @@ const NOTIF_FILTERS = [
   { id:"unread",    label:"Unread" },
   { id:"assigned",  label:"Assignments", types:["assigned"] },
   { id:"reviews",   label:"Reviews",     types:["qa"] },
-  { id:"changes",   label:"Changes",     types:["changes"] },
   { id:"reminders", label:"Reminders",   types:["reminder","overdue"] },
-  { id:"approvals", label:"Approvals",   types:["approved","ready","account_approved"] },
-  { id:"system",    label:"System",      types:["leadership","mention"] },
+  { id:"changes",   label:"Changes",     types:["changes"],  more:true },
+  { id:"approvals", label:"Approvals",   types:["approved","ready","account_approved"], more:true },
+  { id:"system",    label:"System",      types:["leadership","mention"], more:true },
 ];
+const NOTIF_PRIMARY = NOTIF_FILTERS.filter(f=>!f.more);
+const NOTIF_MORE = NOTIF_FILTERS.filter(f=>f.more);
 // Date-group the loaded page of notifications: Today / Yesterday / This week / Earlier.
 function notifGroups(items) {
   const now = new Date(); const day0 = new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
@@ -173,7 +175,15 @@ function notifGroups(items) {
 function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
   const { items, unread, hasMore, loadMore, markRead, markAllRead } = notif;
   const [flt, setFlt] = useState("all");
+  const [moreOpen, setMoreOpen] = useState(false);
   const active = NOTIF_FILTERS.find(f=>f.id===flt) || NOTIF_FILTERS[0];
+  const moreActive = NOTIF_MORE.some(f=>f.id===flt);
+  // Lock the page behind the drawer while it is open.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
   const filtered = flt==="all" ? items
     : flt==="unread" ? items.filter(n=>!n.read)
     : items.filter(n=>(active.types||[]).includes(n.type));
@@ -207,10 +217,26 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
           </div>
         </div>
         <div className="sb-nfilters" role="tablist" aria-label="Filter notifications">
-          {NOTIF_FILTERS.map(fo => (
+          {NOTIF_PRIMARY.map(fo => (
             <button key={fo.id} role="tab" aria-selected={flt===fo.id}
-              className={"sb-fchip"+(flt===fo.id?" on":"")} onClick={()=>setFlt(fo.id)}>{fo.label}</button>
+              className={"sb-fchip"+(flt===fo.id?" on":"")}
+              onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
           ))}
+          <div className="sb-nmore">
+            <button className={"sb-fchip"+(moreActive?" on":"")} aria-haspopup="menu" aria-expanded={moreOpen}
+              onClick={()=>setMoreOpen(o=>!o)}>
+              {moreActive ? active.label : "More"} <ChevronDownIcon className="hi" style={{width:14,height:14}} aria-hidden="true"/>
+            </button>
+            {moreOpen && (
+              <div className="sb-nmore-menu" role="menu">
+                {NOTIF_MORE.map(fo => (
+                  <button key={fo.id} role="menuitemradio" aria-checked={flt===fo.id}
+                    className={flt===fo.id?"on":""}
+                    onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         {filtered.length===0
           ? <div className="sb-empty"><div className="big"><BellIcon className="hi hi-empty" aria-hidden="true"/></div>

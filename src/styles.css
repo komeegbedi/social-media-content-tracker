@@ -1047,3 +1047,32 @@ body,.sb-side,.sb-nav,.sb-sheet,.sb-drawer,.sb-notifpanel,.sb-ev,.sb-attn,.sb-pr
 .sb-dropzone span{font-size:12.5px}
 .sb-dropzone .hint{color:var(--text-muted);font-size:11.5px}
 .sb-dropzone input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+
+/* ============ Notification drawer: filter-layout fix ============
+   Three regions — header / filters / list — where ONLY the list
+   scrolls vertically. Overrides the earlier sticky/mask/scroll rules. */
+.sb-notifpanel{display:flex;flex-direction:column;overflow:hidden}
+.sb-notifhd{position:static;flex:0 0 auto}
+.sb-nfilters{position:static;flex:0 0 auto;display:flex;align-items:center;gap:8px;
+  padding:10px 16px;min-height:56px;border-bottom:1px solid var(--border);
+  -webkit-mask-image:none;mask-image:none;margin-bottom:0;
+  overflow:visible;white-space:nowrap}
+.sb-nfilters .sb-fchip{height:34px;min-height:34px;display:inline-flex;align-items:center;
+  padding:0 13px;flex:none}
+.sb-notiflist{flex:1 1 auto;min-height:0;overflow-y:auto;padding-top:2px}
+/* Mobile: horizontal-only scrolling, hidden scrollbar, fixed row height. */
+@media(max-width:899px){
+  .sb-nfilters{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .sb-nfilters::-webkit-scrollbar{display:none}
+}
+/* More menu: popover anchored to its chip. */
+.sb-nmore{position:relative;flex:none}
+.sb-nmore .sb-fchip{gap:4px}
+.sb-nmore-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:5;min-width:150px;
+  background:var(--surface-elevated);border:1px solid var(--border);border-radius:var(--r-card);
+  box-shadow:var(--shadow-lg);padding:5px;display:flex;flex-direction:column;
+  animation:rise var(--motion-micro) var(--ease-out)}
+.sb-nmore-menu button{background:none;border:none;text-align:left;font-size:13px;font-weight:600;
+  color:var(--text-secondary);padding:9px 11px;min-height:38px;border-radius:8px;cursor:pointer}
+.sb-nmore-menu button:hover{background:var(--surface-muted)}
+.sb-nmore-menu button.on{background:var(--primary-muted);color:var(--primary)}
