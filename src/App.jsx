@@ -1253,14 +1253,15 @@ function Board({ profile, isAdmin }) {
             )}
           </div>
 
-          <nav className="sb-nav" aria-label="Main">
+          <nav className="sb-nav" aria-label="Main" style={{ "--nav-i": ["home","myday","board","mine"].indexOf(tab) >= 0 ? ["home","myday","board","mine"].indexOf(tab) : 4 }}>
+            <span className="sb-nav-ind" aria-hidden="true" />
             {mainNav.map(n => (
               <button key={n.id} className={"sb-navbtn"+(tab===n.id?" on":"")} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
                 <span className="ico">{n.ico(tab===n.id)}</span><span className="lblx">{n.label}</span>
                 {n.badge>0 && <span className="pill">{n.badge}</span>}
               </button>
             ))}
-            <button className={"sb-navbtn"+(["team","admin"].includes(tab)?" on":"")} onClick={()=>setShowDrawer(true)} aria-label="Profile and more">
+            <button className={"sb-navbtn"+(["team","admin"].includes(tab)?" on":"")} onClick={()=>setShowDrawer(true)} aria-current={["team","admin"].includes(tab)?"page":undefined} aria-label="Profile and more">
               <span className="ico"><span className="sb-av sb-navav">{initials(me.name)}</span></span><span className="lblx">Profile</span>
               {isAdmin && pendingCount>0 && <span className="pill">{pendingCount}</span>}
             </button>

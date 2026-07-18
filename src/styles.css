@@ -100,9 +100,14 @@
 [data-theme="dark"] .sb-banner{color:var(--warning);border-color:#5A4A22}
 
 *{box-sizing:border-box;margin:0;padding:0}
+/* Controlled shell: the app is a fixed-height frame and ONE scroll region
+   (.sb-content) — the body itself never scrolls, which removes the iOS
+   standalone rubber-band bounce and any "two competing scrollers" behaviour. */
+html,body,#root{width:100%;height:100%;margin:0}
 body{font-family:Inter,system-ui,sans-serif;color:var(--text-primary);background:var(--background);
-  font-size:var(--text-body);-webkit-font-smoothing:antialiased}
-.sb-root{min-height:100vh}
+  font-size:var(--text-body);-webkit-font-smoothing:antialiased;
+  overflow:hidden;overscroll-behavior:none}
+.sb-root{height:100vh;height:100dvh;overflow:hidden}
 /* One sans-serif everywhere (v1.1.2). `.sb-serif` is kept as a legacy class
    name — it now means "display text": tighter, semibold, same family. */
 h1,h2,h3,.sb-serif{font-family:Inter,system-ui,sans-serif;letter-spacing:-.015em;font-weight:600}
@@ -117,15 +122,20 @@ a{color:var(--primary)}
 :focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:4px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
-.sb-shell{display:flex;min-height:100vh}
+.sb-shell{display:flex;height:100%;overflow:hidden}
 .sb-side{display:none}
-.sb-main{flex:1;min-width:0;padding-bottom:96px}
-.sb-content{width:100%;max-width:960px;margin:0 auto}
+.sb-main{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
+/* .sb-content is the single scroll region; the floating nav clearance lives
+   here once (not repeated in nested layouts). */
+.sb-content{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;
+  -webkit-overflow-scrolling:touch;width:100%;
+  padding-bottom:calc(104px + env(safe-area-inset-bottom))}
+.sb-content>*{max-width:960px;margin-left:auto;margin-right:auto}
 @media(min-width:900px){
-  .sb-side{display:flex;flex-direction:column;width:var(--side);flex:none;
-    border-right:1px solid var(--line);position:sticky;top:0;height:100vh;padding:22px 14px;background:var(--sidebar)}
-  .sb-main{padding-bottom:0}
-  .sb-content{max-width:1000px;padding:0 10px}
+  .sb-side{display:flex;flex-direction:column;width:var(--side);flex:none;height:100%;
+    border-right:1px solid var(--line);overflow-y:auto;padding:22px 14px;background:var(--sidebar)}
+  .sb-content{padding-bottom:24px}
+  .sb-content>*{max-width:1000px;padding-left:10px;padding-right:10px}
 }
 
 .sb-sbrand{letter-spacing:-.015em;font-weight:600;font-size:19px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
@@ -152,8 +162,8 @@ a{color:var(--primary)}
 .sb-report-top{background:rgba(255,255,255,.14);border:none;color:#fff;width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;
   border-radius:999px;font-size:14px;flex:none}
 
-.sb-top{position:sticky;top:0;z-index:30;background:var(--violet);color:#fff;
-  padding:9px 16px;display:flex;align-items:center;justify-content:space-between}
+.sb-top{flex:0 0 auto;z-index:30;background:var(--violet);color:#fff;
+  padding:calc(9px + env(safe-area-inset-top)) 16px 9px;display:flex;align-items:center;justify-content:space-between}
 .sb-top .brand{letter-spacing:-.015em;font-weight:600;font-size:17px;display:flex;align-items:center;gap:8px}
 .sb-spark{width:20px;height:20px;border-radius:6px;background:var(--gold);display:inline-flex;
   align-items:center;justify-content:center;color:#3a2a06;font-weight:700;font-family:Inter;font-size:12px}
@@ -320,30 +330,48 @@ a{color:var(--primary)}
 .sb-attn-sub .muted{font-size:12px;color:var(--muted)}
 .sb-attn-chev{display:inline-flex;align-items:center;color:var(--text-muted);flex:none}
 
-/* Bottom nav: five equal columns as one connected system (no space-around
-   gaps); larger legible icons with a soft lavender active capsule. */
-.sb-nav{position:fixed;bottom:0;left:0;right:0;background:color-mix(in srgb,var(--sidebar) 94%,transparent);
-  backdrop-filter:blur(12px);border-top:1px solid var(--border);
-  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
-  padding:6px 4px calc(6px + env(safe-area-inset-bottom));z-index:40}
+/* Floating "liquid glass" bottom nav (v1.2): a rounded capsule that hovers
+   above the home indicator, five equal columns, with one shared indicator
+   that glides behind the active tab. */
+.sb-nav{position:fixed;left:16px;right:16px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:50;
+  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:fixed;
+  min-height:66px;padding:6px;border-radius:26px;
+  border:1px solid rgba(255,255,255,.5);
+  background:color-mix(in srgb,var(--surface) 74%,transparent);
+  backdrop-filter:blur(22px) saturate(160%);-webkit-backdrop-filter:blur(22px) saturate(160%);
+  box-shadow:0 16px 40px rgba(31,24,56,.18),inset 0 1px 0 rgba(255,255,255,.6)}
 @media(min-width:900px){ .sb-nav{display:none} }
-.sb-navbtn{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:3px;
-  color:var(--text-muted);font-size:10.5px;font-weight:600;padding:5px 2px;min-height:52px;
-  border-radius:var(--r-control);position:relative;min-width:0;
+/* Non-blurred fallback where backdrop-filter is unsupported. */
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .sb-nav{background:var(--surface)} }
+[data-theme="dark"] .sb-nav{border-color:rgba(255,255,255,.1);
+  background:color-mix(in srgb,var(--surface-elevated) 80%,transparent);
+  box-shadow:0 18px 44px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.07)}
+/* Shared active indicator — one glass capsule, translated to the active tab. */
+.sb-nav-ind{position:absolute;top:6px;bottom:6px;left:6px;width:calc((100% - 12px)/5);
+  transform:translateX(calc(var(--nav-i,0) * 100%));border-radius:20px;z-index:0;
+  background:linear-gradient(145deg,rgba(255,255,255,.7),color-mix(in srgb,var(--primary-muted) 70%,transparent));
+  border:1px solid rgba(255,255,255,.6);
+  box-shadow:0 8px 22px rgba(83,63,166,.16),inset 0 1px 0 rgba(255,255,255,.8);
+  transition:transform 200ms cubic-bezier(.22,1,.36,1)}
+[data-theme="dark"] .sb-nav-ind{background:var(--primary-muted);border-color:rgba(255,255,255,.08);
+  box-shadow:0 8px 20px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.06)}
+@media (prefers-reduced-motion:reduce){ .sb-nav-ind{transition:none} }
+.sb-navbtn{background:none;border:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:var(--text-muted);font-size:10.5px;font-weight:600;padding:4px 2px;min-height:54px;
+  border-radius:20px;position:relative;z-index:1;min-width:0;
   transition:color var(--motion-micro) var(--ease-out)}
 .sb-navbtn .lblx{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sb-navbtn.on{color:var(--primary);font-weight:600}
-.sb-navbtn.on .ico{background:var(--primary-muted)}
-.sb-navbtn .ico{width:56px;max-width:100%;height:30px;border-radius:var(--r-pill);
-  display:flex;align-items:center;justify-content:center;
-  transition:background var(--motion-standard) var(--ease-out)}
-/* Bottom-nav icons are larger than the desktop sidebar (which uses --icon-nav). */
+.sb-navbtn .ico{display:flex;align-items:center;justify-content:center;
+  transition:transform var(--motion-standard) var(--ease-out)}
+.sb-navbtn.on .ico{transform:scale(1.03)}
 .sb-navbtn .ico .hi{width:23px;height:23px}
 .sb-navav{width:23px;height:23px;font-size:9px}
-.sb-navbtn .pill{position:absolute;top:2px;right:calc(50% - 26px);background:var(--danger);color:#fff;font-size:9px;
-  font-weight:700;border-radius:999px;padding:0 5px;line-height:15px;min-width:15px;text-align:center}
+.sb-navbtn .pill{position:absolute;top:1px;right:calc(50% - 24px);background:var(--danger);color:#fff;font-size:9px;
+  font-weight:700;border-radius:999px;padding:0 5px;line-height:15px;min-width:15px;text-align:center;z-index:2}
 
-.sb-fab{position:fixed;bottom:calc(84px + env(safe-area-inset-bottom));right:18px;z-index:41;width:58px;height:58px;
+.sb-fab{position:fixed;bottom:calc(94px + env(safe-area-inset-bottom));right:18px;z-index:41;width:58px;height:58px;
   border-radius:18px;background:var(--primary);color:#fff;border:none;box-shadow:var(--shadow-lg);
   display:flex;align-items:center;justify-content:center;
   transition:background var(--motion-micro) var(--ease-out),transform var(--motion-micro) var(--ease-out)}
@@ -618,10 +646,10 @@ a{color:var(--primary)}
 .sb-reactbtn{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 9px;font-size:13px}
 .sb-reactbtn.on{background:var(--violet-soft);border-color:var(--violet)}
 
-.sb-login{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;
-  padding:24px 20px calc(24px + env(safe-area-inset-bottom));
+.sb-login{height:100vh;height:100dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;
+  padding:24px 20px calc(24px + env(safe-area-inset-bottom));padding-top:calc(24px + env(safe-area-inset-top));
   background:radial-gradient(120% 120% at 50% 0%, var(--violet) 0%, var(--violet-deep) 70%)}
-.sb-loginbox{width:100%;max-width:440px}
+.sb-loginbox{width:100%;max-width:440px;margin:auto}
 /* Branding block — prominent, centered, brand-coloured */
 .sb-lbrand{text-align:center;margin-bottom:22px}
 .sb-login .logo{width:72px;height:72px;border-radius:20px;background:var(--gold);color:#3a2a06;
@@ -655,9 +683,9 @@ a{color:var(--primary)}
 .sb-lswitch span{font-size:13.5px;color:var(--muted);font-weight:600}
 .sb-lswitch .sb-btn{width:100%;margin-top:0}
 
-.sb-pending{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:26px;
+.sb-pending{height:100vh;height:100dvh;overflow-y:auto;display:flex;padding:26px;
   background:linear-gradient(160deg,var(--violet-deep),var(--violet));text-align:center}
-.sb-pending .box{max-width:380px;color:#fff}
+.sb-pending .box{max-width:380px;color:#fff;margin:auto}
 .sb-pending .ic{font-size:44px;margin-bottom:12px}
 .sb-pending h1{font-size:26px;font-weight:600}
 .sb-pending p{color:rgba(255,255,255,.8);font-size:14px;margin:10px 0 22px;line-height:1.55}
@@ -670,7 +698,7 @@ a{color:var(--primary)}
   box-shadow:0 2px 8px rgba(0,0,0,.15)}
 .sb-netbar.ok{background:var(--green);color:#fff}
 
-.sb-loading{min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px}
+.sb-loading{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px}
 .sb-spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--violet);
   animation:spin .8s linear infinite;margin:0 auto 14px}
 @keyframes spin{to{transform:rotate(360deg)}}
