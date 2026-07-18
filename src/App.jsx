@@ -195,9 +195,13 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
     <div className="sb-scrim sb-scrim-right" onMouseDown={onClose}>
       <div className="sb-notifpanel" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Notifications">
         <div className="sb-notifhd">
-          <b className="sb-serif" style={{fontSize:17}}>Notifications{unread>0 && <span className="sb-unreadct"> · {unread} unread</span>}</b>
+          <div className="sb-notifttl">
+            <b className="sb-serif" style={{fontSize:17}}>Notifications</b>
+            {unread>0 && <span className="sb-unreadct">{unread} unread</span>}
+          </div>
           <div className="sb-notifhd-actions">
-            {unread>0 && <button className="sb-markall" onClick={markAllRead}>Mark all read</button>}
+            {unread>0 && <button className="sb-markall" onClick={markAllRead}>
+              <CheckCircleIcon className="hi hi-sm" aria-hidden="true"/> Mark all read</button>}
             <button className="sb-iconbtn" onClick={onSettings} aria-label="Notification settings"><Cog6ToothIcon className="hi" aria-hidden="true"/></button>
             <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button>
           </div>
@@ -228,7 +232,7 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
                           {n.body && <span className="bo">{n.body}</span>}
                           <span className="mt">{meta.label} · {timeAgo(n.createdAt)}</span>
                         </span>
-                        {!n.read && <span className="ndot" aria-label="Unread" />}
+                        {!n.read && <span className="ndot top" aria-label="Unread" />}
                       </button>
                     );
                   })}
@@ -1044,17 +1048,17 @@ function Board({ profile, isAdmin }) {
           {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")} aria-label="New content">
             <PlusIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">New content</span></button>}
           <div className="sb-sfoot">
-            <div className="sb-suser">
-              <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(me.name)}</span>
-              <span className="lbl"><div className="nm">{me.name}</div><div className="rl">{isAdmin?"Admin":"Member"} · {me.email}</div></span>
-            </div>
-            <ThemeToggle />
             <button className="sb-report" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
-              <BellIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">Notifications</span>{notif.unread>0 && <span className="pill" style={{marginLeft:6}}>{notif.unread>9?"9+":notif.unread}</span>}
+              <span className="sb-bellwrap"><BellIcon className="hi hi-sm" aria-hidden="true"/>
+                {notif.unread>0 && <span className="sb-belldot">{notif.unread>9?"9+":notif.unread}</span>}</span>
+              <span className="lbl">Notifications</span>
             </button>
-            <button className="sb-report" onClick={()=>setShowReport(true)} aria-label="Report an issue"><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">Report an issue</span></button>
-            <button className="sb-signout" onClick={()=>signOut(auth)} aria-label="Sign out"><ArrowRightStartOnRectangleIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">Sign out</span></button>
-            <div className="sb-brandfoot lbl"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
+            {/* Profile menu holds Theme, Team/Admin, Report, Sign out */}
+            <button className="sb-suser sb-suserbtn" onClick={()=>setShowDrawer(true)} aria-label="Profile and settings">
+              <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(me.name)}</span>
+              <span className="lbl"><div className="nm">{me.name}</div><div className="rl">{isAdmin?"Admin":"Member"}</div></span>
+            </button>
+            <button className="sb-quietlink lbl" onClick={()=>setShowReport(true)}>Report an issue</button>
           </div>
         </aside>
 
@@ -1925,11 +1929,11 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
   return (
     <>
       {/* Quick actions first — the things a leader comes here to DO */}
-      <div className="sb-btnrow sb-quickrow">
-        <button className="sb-btn" onClick={onNewContent}>+ New content</button>
-        <button className="sb-btn ghost" onClick={onGoImport}><ArrowUpTrayIcon className="hi hi-sm" aria-hidden="true"/> Import CSV</button>
-        <button className="sb-btn ghost" onClick={()=>setEventNote(v=>!v)}><PlusIcon className="hi hi-sm" aria-hidden="true"/> Create event</button>
-        <button className="sb-btn gold" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign crew</button>
+      <div className="sb-toolbar">
+        <button className="sb-btn compact" onClick={onNewContent}><PlusIcon className="hi hi-sm" aria-hidden="true"/> New content</button>
+        <button className="sb-btn ghost compact" onClick={()=>setEventNote(v=>!v)}>Create event</button>
+        <button className="sb-btn ghost compact" onClick={onGoImport}>Import</button>
+        <button className="sb-tertiary" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign</button>
       </div>
       {eventNote && <div className="sb-assign" style={{marginTop:10}}>
         Event management is coming soon. Pastor birthdays &amp; key dates already power the reminders on Home.</div>}
@@ -2023,8 +2027,8 @@ function AdminContent({ tasks, h, filter, setFilter, onNewContent, onAutoAll }) 
   return (
     <>
       <div className="sb-btnrow" style={{marginBottom:12}}>
-        <button className="sb-btn" onClick={onNewContent}>+ New content</button>
-        <button className="sb-btn gold" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign empty</button>
+        <button className="sb-btn compact" onClick={onNewContent}><PlusIcon className="hi hi-sm" aria-hidden="true"/> New content</button>
+        <button className="sb-tertiary" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign empty</button>
       </div>
       <div className="sb-field" style={{marginBottom:10}}>
         <div className="sb-inline">
