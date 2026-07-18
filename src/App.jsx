@@ -1396,6 +1396,9 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
    =================================================================== */
 function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilter }) {
   const [filter, setFilter] = useState("all");
+  // Board (grouped cards) vs List (dense rows); the choice is remembered.
+  const [view, setView] = useState(() => loadPref("sb-board-view", "board"));
+  const pickView = (v) => { setView(v); savePref("sb-board-view", v); };
   const [sort, setSort] = useState("post-asc");
   const [filtersOpen, setFiltersOpen] = useState(false);  // collapsed by default → content first
   // Completed work starts collapsed; the choice is remembered across sessions.
@@ -1445,6 +1448,12 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
           {filter!=="all" && <span className="sb-filteractive">{activeFilter?.label}</span>}
           <span className={"sb-chev"+(filtersOpen?" open":"")}><ChevronRightIcon className="hi hi-sm" aria-hidden="true" /></span>
         </button>
+        <div className="sb-viewtoggle" role="group" aria-label="View">
+          <button className={view==="board"?"on":""} onClick={()=>pickView("board")} aria-pressed={view==="board"}>
+            <ViewColumnsIcon className="hi hi-sm" aria-hidden="true"/><span>Board</span></button>
+          <button className={view==="list"?"on":""} onClick={()=>pickView("list")} aria-pressed={view==="list"}>
+            <ClipboardDocumentListIcon className="hi hi-sm" aria-hidden="true"/><span>List</span></button>
+        </div>
         <label className="sb-sortlbl">
           <select className="sb-select" value={sort} onChange={e=>setSort(e.target.value)} aria-label="Sort">
             {BOARD_SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -1479,10 +1488,22 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
                   {archive && <span className="sb-archtag">Archive</span>}
                   <span className="sb-groupct">{g.items.length}</span>
                 </button>
-                {!isCollapsed && (
-                  <div className="sb-list">
-                    {g.items.map(t => <TaskCard key={t.id} t={t} me={me} onClick={()=>openTask(t.id)} />)}
-                  </div>
+                {!isCollapsed && (view==="list"
+                  ? <div className="sb-listrows">
+                      {g.items.map(t => {
+                        const d = daysTo(t.postDate);
+                        return (
+                        <button key={t.id} className="sb-listrow" onClick={()=>openTask(t.id)}>
+                          <span className="t">{t.title}</span>
+                          <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
+                          <span className="who"><span className="sb-av" style={{width:22,height:22,fontSize:9}}>{initials(t.owner)}</span></span>
+                          <span className={"due"+(d!==null&&d<0&&t.status!=="Posted"?" late":"")}>{fmt(t.postDate)}</span>
+                        </button>);
+                      })}
+                    </div>
+                  : <div className="sb-list">
+                      {g.items.map(t => <TaskCard key={t.id} t={t} me={me} onClick={()=>openTask(t.id)} />)}
+                    </div>
                 )}
               </section>
             );
@@ -2535,12 +2556,25 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
           </div>
           <div className="sb-nextline">Next: {nextStep(task.status)}</div>
 
-          {/* Phase progress: Planning → Creating → Review → Posting. */}
-          <div className="sb-phases">
-            {PHASES.map((p,i)=>(
-              <div key={p} className={"sb-phase"+(i<phase?" done":i===phase?" now":"")}><span/>{p}</div>
-            ))}
-          </div>
+          {/* Workflow stepper: the six forward steps; "Changes Requested" is a
+              returned branch on the review step, called out in text below. */}
+          {(() => {
+            const FLOW = ["Planned","In Progress","In Review","Approved","Ready to Post","Posted"];
+            const returned = task.status==="Changes Requested";
+            const flowIdx = returned ? 2 : FLOW.indexOf(task.status);
+            return (<>
+              <div className="sb-stepper" aria-label="Workflow progress">
+                {FLOW.map((st,i)=>(
+                  <div key={st} className={"sb-step"+(i<flowIdx?" done":i===flowIdx?" now":"")+(returned&&i===2?" branch":"")}>
+                    <span className="dot" aria-hidden="true">{i<flowIdx && <CheckCircleIcon className="hi hi-sm"/>}</span>
+                    <span className="stlbl">{st}</span>
+                  </div>
+                ))}
+              </div>
+              {returned && <div className="sb-step-note" role="status">
+                <ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/> Returned — changes requested. Resubmit for review when ready.</div>}
+            </>);
+          })()}
 
           {task.brief && (
             <div className="sb-brief">
