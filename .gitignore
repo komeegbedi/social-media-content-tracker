@@ -1,6 +1,7 @@
 # dependencies & build
 node_modules
 dist
+.vite
 
 # secrets & local config
 .env

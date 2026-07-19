@@ -9,9 +9,10 @@
     "preview": "vite preview",
     "emulators": "firebase emulators:start",
     "seed": "node scripts/seed.js",
-    "deploy": "npm run build && firebase deploy --only hosting,firestore:rules"
+    "deploy": "npm run build && firebase deploy --only hosting,firestore:rules,firestore:indexes"
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "firebase": "^10.12.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

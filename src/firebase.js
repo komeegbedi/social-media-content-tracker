@@ -1,6 +1,8 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, connectAuthEmulator } from "firebase/auth";
 import { initializeFirestore, connectFirestoreEmulator } from "firebase/firestore";
+import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
+import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -11,7 +13,17 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-const app = initializeApp(firebaseConfig);
+export const app = initializeApp(firebaseConfig);
+
+// App Check (optional hardening): only initializes when a reCAPTCHA v3 site key
+// is configured, so local dev and un-provisioned deploys are unaffected. Enforce
+// it per-service in the Firebase console once the key is set.
+const appCheckKey = import.meta.env.VITE_FIREBASE_APPCHECK_KEY;
+if (appCheckKey && typeof window !== "undefined" && import.meta.env.VITE_USE_EMULATOR !== "true") {
+  try { initializeAppCheck(app, { provider: new ReCaptchaV3Provider(appCheckKey), isTokenAutoRefreshEnabled: true }); }
+  catch { /* non-fatal — app still works without App Check */ }
+}
+
 export const auth = getAuth(app);
 // Auto-detect long-polling instead of the default streaming transport. On
 // Safari / iOS and flaky mobile networks the streaming channel can get stuck in
@@ -19,10 +31,13 @@ export const auth = getAuth(app);
 // reliably.
 export const db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
 export const googleProvider = new GoogleAuthProvider();
+// Callable Cloud Functions (e.g. the admin email test) — same region as deploy.
+export const functions = getFunctions(app, "northamerica-northeast1");
 
-// Local testing: route Auth + Firestore to the Firebase Emulator Suite.
+// Local testing: route Auth + Firestore + Functions to the Firebase Emulator Suite.
 // Enable with VITE_USE_EMULATOR=true (see README → Local testing).
 if (import.meta.env.VITE_USE_EMULATOR === "true") {
   connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
   connectFirestoreEmulator(db, "127.0.0.1", 8080);
+  connectFunctionsEmulator(functions, "127.0.0.1", 5001);
 }

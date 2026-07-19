@@ -7,6 +7,28 @@ export const STAGES = [
   "Planned", "In Progress", "In Review", "Changes Requested", "Approved", "Ready to Post", "Posted",
 ];
 
+// Email format validation (client). Trims, rejects missing @ / domain,
+// spaces, and multiple @. Mirrors the server-side EMAIL_RE in emailService.
+// Not a deliverability guarantee — format only.
+export function isValidEmail(raw) {
+  const e = (raw || "").trim();
+  if (!e || /\s/.test(e)) return false;
+  if ((e.match(/@/g) || []).length !== 1) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+}
+
+// Reminder-schedule building blocks (v1.1). Mirrors the server default in
+// functions/lib.js; the server falls back to this if settings aren't set.
+export const REMINDER_CHANNELS = ["in-app", "push", "email"];
+export const REMINDER_RECIPIENTS = ["owner", "crew", "lead", "admins"];
+export const MAX_REMINDERS = 10;
+export const DEFAULT_REMINDERS = [
+  { id: "d1", offset: 7, when: "before", channels: [...REMINDER_CHANNELS], recipients: ["owner", "crew"], enabled: true },
+  { id: "d2", offset: 3, when: "before", channels: [...REMINDER_CHANNELS], recipients: ["owner", "crew"], enabled: true },
+  { id: "d3", offset: 1, when: "before", channels: [...REMINDER_CHANNELS], recipients: ["owner", "crew"], enabled: true },
+  { id: "d4", offset: 3, when: "after",  channels: [...REMINDER_CHANNELS], recipients: ["owner", "admins"], enabled: true },
+];
+
 // For the progress bar, the 7 statuses group into 4 human phases.
 export const PHASES = ["Planning", "Creating", "Review", "Posting"];
 export const statusPhase = (s) =>
@@ -42,14 +64,28 @@ export const priorityClass = (p) =>
 const PENDING_ROLE = { shoot: "shooter", edit: "editor", coordinate: "coordinator", design: "designer", shadow: "shadow" };
 export const pendingRoleLabel = (role) => PENDING_ROLE[role] ? `Pending ${PENDING_ROLE[role]}` : "Pending assignment";
 
-// How many tasks are tied to an event (loose token match on relatedEvent),
-// so Upcoming can show "1 content item planned" vs "no content assigned".
-export function eventContentCount(eventName, tasks) {
-  const tokens = (eventName || "").toLowerCase().split(/\W+/)
-    .filter((w) => w.length > 3 && !["pastor", "birthday", "conference"].includes(w));
-  if (!tokens.length) return 0;
-  return (tasks || []).filter((t) =>
-    tokens.some((tok) => (t.relatedEvent || "").toLowerCase().includes(tok))).length;
+// Tasks tied to a SPECIFIC event occurrence. Primary match is the structured
+// `relatedEventOccurrenceId` so a recurring event's July content never counts
+// under its August occurrence. For annual events (birthdays/holidays) we keep a
+// loose name-token fallback so legacy content (linked before occurrence ids
+// existed) still shows — that's safe because there's only one per year.
+export function occurrenceTasks(occ, tasks) {
+  if (!occ) return [];
+  const tokens = occ.annual
+    ? (occ.name || "").toLowerCase().split(/\W+/)
+        .filter((w) => w.length > 3 && !["pastor", "birthday", "conference"].includes(w))
+    : [];
+  return (tasks || []).filter((t) => {
+    if (t.relatedEventOccurrenceId) return t.relatedEventOccurrenceId === occ.eventOccurrenceId;
+    if (!tokens.length) return false;
+    return tokens.some((tok) => (t.relatedEvent || "").toLowerCase().includes(tok));
+  });
+}
+
+// How many tasks are planned for an event occurrence, so Upcoming can show
+// "1 content item planned" vs "no content assigned".
+export function occurrenceContentCount(occ, tasks) {
+  return occurrenceTasks(occ, tasks).length;
 }
 
 // support-crew role code → human label.
@@ -802,7 +838,8 @@ export function myWorkSections(tasks, me) {
     { key: "approved", label: "Approved",          items: take((t) => t.status === "Approved") },
     { key: "progress", label: "In progress",       items: take((t) => t.status === "In Progress") },
     { key: "planned",  label: "Planned",           items: take((t) => t.status === "Planned") },
-    { key: "posted",   label: "Posted",            items: take((t) => t.status === "Posted") },
+    // Posted content is archived — it drops out of My Work (find it in the
+    // Workflow "Archived" group, Search, or Admin).
   ];
   return sections.filter((s) => s.items.length > 0);
 }

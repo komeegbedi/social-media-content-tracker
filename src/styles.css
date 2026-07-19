@@ -1,60 +1,152 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
+/* ===================================================================
+   DESIGN TOKENS (v1.1.2) — the single source of truth for color, type,
+   spacing, radius, elevation and motion. Components must consume these
+   semantic tokens; do not hard-code values in component rules.
+   Legacy variable names (--paper, --ink, --violet, …) are kept as
+   ALIASES of the semantic tokens so existing rules keep working while
+   surfaces migrate slice-by-slice.
+   =================================================================== */
 :root{
-  --paper:#FBFAF7; --card:#FFFFFF; --ink:#211B33; --muted:#6B6480;
-  --line:#ECE7F2; --violet:#4C3A8C; --violet-soft:#EEE9F7; --violet-deep:#2F2459;
-  --gold:#C98A1E; --gold-soft:#FBF0DA;
-  --green:#1F9D63; --green-soft:#E3F4EC;
-  --amber:#D9971F; --amber-soft:#FBEFD6;
-  --red:#CE4F4F; --red-soft:#FBE6E6;
-  --blue:#3D6FB5; --blue-soft:#E6EEF8;
-  --shadow:0 1px 2px rgba(33,27,51,.06),0 8px 24px rgba(33,27,51,.06);
+  /* -- color: neutrals -- */
+  --background:#F7F6FA;          /* canvas (design_changes.md) */
+  --background-muted:#F0EEF6;
+  --surface:#FFFFFF;
+  --surface-elevated:#FFFFFF;
+  --sidebar:#FFFFFF;
+  --surface-muted:#F0EEF6;
+  --text-primary:#211B32;
+  --text-secondary:#777187;
+  --text-muted:#8B849C;
+  --border:#E6E2EC;
+  --border-strong:#D6D1E0;
+  /* -- color: brand -- */
+  --primary:#6750C8;
+  --primary-hover:#5941BA;
+  --primary-pressed:#4C3AA4;
+  --primary-muted:#EEEAFE;
+  /* -- color: semantic -- */
+  --success:#258A5B;   --success-muted:#E3F4EC;
+  --warning:#C88513;   --warning-muted:#FBF0DA;
+  --danger:#D24F52;    --danger-muted:#FBE6E6;
+  --info:#3974B9;      --info-muted:#E6EEF8;
+  --focus-ring:#8D7FE0;
+  --overlay:rgba(33,27,51,.45);
+  /* -- typography scale -- */
+  --text-page:28px; --text-section:21px; --text-card:16px;
+  --text-body:14.5px; --text-support:13px; --text-label:12px; --text-meta:12px;
+  /* -- spacing scale -- */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px;
+  --sp-6:24px; --sp-7:32px; --sp-8:40px; --sp-9:48px; --sp-10:64px;
+  /* -- radius scale -- */
+  --r-control:10px; --r-input:12px; --r-card:12px; --r-panel:16px;
+  --r-modal:22px; --r-pill:999px;
+  /* -- elevation (soft, low opacity; prefer borders + spacing) -- */
+  --shadow-sm:0 1px 2px rgba(33,27,51,.05),0 2px 8px rgba(33,27,51,.05);
+  --shadow-lg:0 2px 6px rgba(33,27,51,.07),0 12px 32px rgba(33,27,51,.10);
+  /* -- motion (v1.2 shared system) -- */
+  --motion-instant:100ms; --motion-fast:160ms; --motion-standard:220ms; --motion-slow:280ms;
+  --ease-standard:cubic-bezier(.22,1,.36,1); --ease-enter:cubic-bezier(.16,1,.3,1); --ease-exit:cubic-bezier(.4,0,1,1);
+  /* legacy aliases so existing rules keep resolving to the shared scale */
+  --motion-micro:var(--motion-fast); --motion-overlay:var(--motion-slow);
+  --ease-out:var(--ease-standard); --ease-inout:var(--ease-standard);
+  /* -- icon sizes -- */
+  --icon-xs:14px; --icon-sm:16px; --icon-md:18px; --icon-nav:19px; --icon-empty:40px;
+  /* -- layout -- */
   --side:248px;
+  /* -- legacy aliases (do not use in NEW rules) -- */
+  --paper:var(--background); --card:var(--surface);
+  --ink:var(--text-primary); --muted:var(--text-muted);
+  --line:var(--border);
+  --violet:var(--primary); --violet-soft:var(--primary-muted); --violet-deep:var(--primary-pressed);
+  --gold:var(--warning); --gold-soft:var(--warning-muted);
+  --green:var(--success); --green-soft:var(--success-muted);
+  --amber:var(--warning); --amber-soft:var(--warning-muted);
+  --red:var(--danger); --red-soft:var(--danger-muted);
+  --blue:var(--info); --blue-soft:var(--info-muted);
+  --shadow:var(--shadow-sm);
   color-scheme:light;
 }
 
-/* ---- Dark theme: overrides the variables above (set via data-theme on <html>).
-   Soft/background tints become dark and the strong colours brighten so status
-   chips, progress bars and text stay readable. ---- */
+/* ---- Dark theme (set via data-theme on <html>): tints darken, strong
+   colours brighten so chips, progress and text stay readable. ---- */
+/* Dark mode (v1.1.2 polish): a deliberate LAYERED surface system —
+   app background < sidebar/cards < overlays/sheets — separated by tone
+   and hairline borders rather than heavy shadows. Accent brightens for
+   contrast but stays soft; text has three clear steps. */
 [data-theme="dark"]{
-  --paper:#141019; --card:#1E1A29; --ink:#ECE9F6; --muted:#9E96B2;
-  --line:#2F2A3E; --violet:#8E78D6; --violet-soft:#2A2442; --violet-deep:#171130;
-  --gold:#E0A53A; --gold-soft:#3A2E15;
-  --green:#41BA80; --green-soft:#163026;
-  --amber:#E0A53A; --amber-soft:#3A2E15;
-  --red:#E76E6E; --red-soft:#3B1E1E;
-  --blue:#73A0E0; --blue-soft:#172739;
-  --shadow:0 1px 2px rgba(0,0,0,.45),0 6px 16px rgba(0,0,0,.45);
+  --background:#0F0C16;          /* canvas */
+  --background-muted:#131019;
+  --sidebar:#14101D;             /* distinct sidebar level */
+  --surface:#191522;             /* cards, rows */
+  --surface-elevated:#211B2D;    /* sheets, drawers, popovers */
+  --surface-muted:#272035;       /* inputs, wells, chips */
+  --text-primary:#F5F2FA;
+  --text-secondary:#A9A2B7;
+  --text-muted:#817A90;
+  --border:#332A42;
+  --border-strong:#443A58;
+  --primary:#9A83EE; --primary-hover:#AD9AF3; --primary-pressed:#8770DC;
+  --primary-muted:#2B2345;
+  --success:#48B981; --success-muted:#132A1F;
+  --warning:#E0A43B; --warning-muted:#302412;
+  --danger:#EC7277;  --danger-muted:#331B1B;
+  --info:#7FA9E6;    --info-muted:#16222F;
+  --focus-ring:#AC9CFF;
+  --overlay:rgba(8,6,13,.62);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.5),0 2px 10px rgba(0,0,0,.35);
+  --shadow-lg:0 4px 12px rgba(0,0,0,.5),0 16px 40px rgba(0,0,0,.55);
   color-scheme:dark;
 }
 /* The info banner hardcodes dark-brown text/border; fix it for dark backgrounds. */
-[data-theme="dark"] .sb-banner{color:var(--gold);border-color:#5A4A22}
+[data-theme="dark"] .sb-banner{color:var(--warning);border-color:#5A4A22}
 
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--paper)}
-.sb-root{min-height:100vh}
-h1,h2,h3,.sb-serif{font-family:Fraunces,Georgia,serif}
+/* Controlled shell: the app is a fixed-height frame and ONE scroll region
+   (.sb-content) — the body itself never scrolls, which removes the iOS
+   standalone rubber-band bounce and any "two competing scrollers" behaviour. */
+html,body,#root{width:100%;height:100%;margin:0}
+body{font-family:Inter,system-ui,sans-serif;color:var(--text-primary);background:var(--background);
+  font-size:var(--text-body);-webkit-font-smoothing:antialiased;
+  overflow:hidden;overscroll-behavior:none}
+.sb-root{height:100vh;height:100dvh;overflow:hidden}
+/* One sans-serif everywhere (v1.1.2). `.sb-serif` is kept as a legacy class
+   name — it now means "display text": tighter, semibold, same family. */
+h1,h2,h3,.sb-serif{font-family:Inter,system-ui,sans-serif;letter-spacing:-.015em;font-weight:600}
 button{font-family:inherit;cursor:pointer}
-a{color:inherit}
+a{color:var(--primary)}
+/* Heroicons sizing — icons inherit color via currentColor. */
+.hi{width:var(--icon-md);height:var(--icon-md);flex:none}
+.hi-sm{width:var(--icon-sm);height:var(--icon-sm)}
+.hi-nav{width:var(--icon-nav);height:var(--icon-nav)}
+.hi-empty{width:var(--icon-empty);height:var(--icon-empty);opacity:.5}
+/* Visible keyboard focus everywhere. */
+:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:4px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
-.sb-shell{display:flex;min-height:100vh}
+.sb-shell{display:flex;height:100%;overflow:hidden}
 .sb-side{display:none}
-.sb-main{flex:1;min-width:0;padding-bottom:96px}
-.sb-content{width:100%;max-width:960px;margin:0 auto}
+.sb-main{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
+/* .sb-content is the single scroll region; the floating nav clearance lives
+   here once (not repeated in nested layouts). */
+.sb-content{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;
+  -webkit-overflow-scrolling:touch;width:100%;
+  padding-bottom:calc(104px + env(safe-area-inset-bottom))}
+.sb-content>*{max-width:960px;margin-left:auto;margin-right:auto}
 @media(min-width:900px){
-  .sb-side{display:flex;flex-direction:column;width:var(--side);flex:none;
-    border-right:1px solid var(--line);position:sticky;top:0;height:100vh;padding:22px 14px;background:var(--card)}
-  .sb-main{padding-bottom:0}
-  .sb-content{max-width:1000px;padding:0 10px}
+  .sb-side{display:flex;flex-direction:column;width:var(--side);flex:none;height:100%;
+    border-right:1px solid var(--line);overflow-y:auto;padding:22px 14px;background:var(--sidebar)}
+  .sb-content{padding-bottom:24px}
+  .sb-content>*{max-width:1000px;padding-left:10px;padding-right:10px}
 }
 
-.sb-sbrand{font-family:Fraunces;font-weight:600;font-size:19px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
+.sb-sbrand{letter-spacing:-.015em;font-weight:600;font-size:19px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
 .sb-brandtext{display:flex;flex-direction:column;line-height:1.05}
 .sb-brandtext .ifc{font-family:Inter;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);font-weight:700}
 .sb-brandfoot{margin-top:14px;padding-top:11px;border-top:1px solid var(--line);
   display:flex;flex-direction:column;font-size:11px;color:var(--muted);line-height:1.5}
-.sb-brandfoot b{color:var(--ink);font-weight:600;font-size:12px;font-family:Fraunces}
+.sb-brandfoot b{color:var(--ink);font-weight:600;font-size:12px}
 .sb-snav{display:flex;flex-direction:column;gap:3px}
 .sb-snav button{display:flex;align-items:center;gap:11px;background:none;border:none;width:100%;
   padding:11px 12px;border-radius:11px;color:var(--muted);font-size:14px;font-weight:600;text-align:left}
@@ -66,24 +158,42 @@ a{color:inherit}
 .sb-suser{display:flex;align-items:center;gap:10px;padding:6px 8px}
 .sb-suser .nm{font-size:13.5px;font-weight:600}
 .sb-suser .rl{font-size:11px;color:var(--muted);word-break:break-all}
-.sb-signout{margin-top:8px;width:100%;background:var(--paper);border:1px solid var(--line);
+.sb-signout{margin-top:8px;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:7px;background:var(--surface);border:1px solid var(--border);
   border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;color:var(--muted)}
-.sb-report{margin-top:8px;width:100%;background:var(--card);border:1px solid var(--line);
+.sb-report{margin-top:8px;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:7px;background:var(--surface);border:1px solid var(--border);
   border-radius:10px;padding:9px;font-size:12.5px;font-weight:600;color:var(--muted)}
-.sb-report-top{background:rgba(255,255,255,.14);border:none;color:#fff;width:30px;height:30px;
+.sb-report-top{background:rgba(255,255,255,.14);border:none;color:#fff;width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;
   border-radius:999px;font-size:14px;flex:none}
 
-.sb-top{position:sticky;top:0;z-index:30;background:var(--violet);color:#fff;
-  padding:9px 16px;display:flex;align-items:center;justify-content:space-between}
-.sb-top .brand{font-family:Fraunces;font-weight:600;font-size:17px;display:flex;align-items:center;gap:8px}
-.sb-spark{width:20px;height:20px;border-radius:6px;background:var(--gold);display:inline-flex;
-  align-items:center;justify-content:center;color:#3a2a06;font-weight:700;font-family:Inter;font-size:12px}
-.sb-avbtn{background:none;border:none;padding:0;border-radius:999px;line-height:0}
-.sb-avbtn .sb-av{background:rgba(255,255,255,.2);color:#fff}
+/* Mobile header (v1.2): a light translucent glass surface that complements the
+   floating bottom nav — not a solid purple block. Profile lives in the bottom
+   nav, so only Search + Notifications appear here. */
+.sb-top{flex:0 0 auto;z-index:40;display:flex;align-items:center;justify-content:space-between;
+  min-height:54px;padding:calc(8px + env(safe-area-inset-top)) 16px 8px;
+  background:var(--background); /* solid fallback for iOS < 16.2 (no color-mix) */
+  background:color-mix(in srgb,var(--background) 88%,transparent);
+  border-bottom:1px solid var(--border);
+  backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%)}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .sb-top{background:var(--background)} }
 @media(min-width:900px){ .sb-top{display:none} }
+.sb-top .brand{display:flex;align-items:center;gap:9px;color:var(--text-primary);min-width:0}
+.sb-top .brandwm{letter-spacing:-.015em;font-weight:600;font-size:18px;white-space:nowrap}
+.sb-spark{width:28px;height:28px;border-radius:8px;background:var(--gold);display:inline-flex;flex:none;
+  align-items:center;justify-content:center;color:#3a2a06;font-weight:700;font-family:Inter;font-size:15px}
+@media(max-width:359px){ .sb-top{padding-left:12px;padding-right:12px} .sb-topactions{gap:8px} }
+.sb-topactions{display:flex;align-items:center;gap:10px;flex:none}
+.sb-hbtn{display:grid;place-items:center;width:42px;height:42px;flex:none;position:relative;
+  border:1px solid color-mix(in srgb,var(--border) 60%,transparent);border-radius:13px;background:var(--surface-elevated);color:var(--text-secondary);
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-hbtn:hover{background:var(--surface-muted);color:var(--text-primary)}
+.sb-hbtn:active{transform:scale(.96)}
+.sb-hbtn .hi{width:21px;height:21px}
 
 /* Account drawer (mobile) — bottom sheet from the header avatar */
-.sb-drawer{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+.sb-drawer{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
   padding:10px 12px calc(20px + env(safe-area-inset-bottom));animation:rise .2s ease}
 @media(min-width:900px){ .sb-drawer{border-radius:20px} }
 .sb-drawer-user{display:flex;align-items:center;gap:12px;padding:10px 10px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
@@ -98,10 +208,11 @@ a{color:inherit}
 .sb-drawer-state{margin-left:auto;font-size:11px;font-weight:700;color:var(--muted);
   background:var(--card);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
 
-.sb-page{padding:18px 16px 8px}
+.sb-page{padding:20px 16px 8px}
 @media(min-width:900px){ .sb-page{padding:30px 14px 24px} }
 .sb-eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);opacity:.85}
-.sb-h{font-size:27px;font-weight:600;margin:5px 0 6px;line-height:1.1}
+.sb-h{font-size:30px;font-weight:700;margin:5px 0 6px;line-height:1.1;letter-spacing:-.02em}
+@media(min-width:900px){ .sb-h{font-size:38px} }
 @media(min-width:900px){ .sb-h{font-size:40px} }
 .sb-sub{color:var(--muted);font-size:14px;line-height:1.5;margin-bottom:22px}
 .sb-greet{font-size:14.5px;line-height:1.65;max-width:42ch;margin:10px 0 18px}
@@ -112,14 +223,14 @@ a{color:inherit}
 .sb-strip{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 22px;
   padding:13px 4px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-bottom:18px}
 .sb-stat{display:inline-flex;align-items:baseline;gap:7px;background:none;border:none;padding:0;color:var(--ink)}
-.sb-stat .num{font-family:Fraunces;font-size:21px;font-weight:600;line-height:1}
+.sb-stat .num{letter-spacing:-.015em;font-size:21px;font-weight:600;line-height:1}
 .sb-stat .lbl{font-size:12.5px;color:var(--muted);font-weight:600}
 .dot-amber{color:var(--amber)} .dot-green{color:var(--green)}
 .dot-blue{color:var(--blue)} .dot-red{color:var(--red)} .dot-violet{color:var(--violet)}
 
-.sb-shead{display:flex;align-items:baseline;justify-content:space-between;margin:28px 2px 13px}
-.sb-shead h2{font-size:20px;font-weight:600}
-@media(min-width:900px){ .sb-shead h2{font-size:23px} }
+.sb-shead{display:flex;align-items:baseline;justify-content:space-between;margin:30px 2px 12px}
+.sb-shead h2{font-size:19px;font-weight:600;letter-spacing:-.01em}
+@media(min-width:900px){ .sb-shead h2{font-size:21px} }
 .sb-shead .link{font-size:12.5px;color:var(--violet);font-weight:600;background:none;border:none;padding:0}
 .sb-shead .link.subtle{color:var(--muted);font-weight:500;font-size:12px}
 .sb-shead-strong h2{font-size:19px;font-weight:700}
@@ -148,7 +259,7 @@ a{color:inherit}
 
 /* 3-dot "more actions" kebab menu */
 .sb-kebab{position:relative;display:inline-flex}
-.sb-kebab-btn{width:28px;height:28px;border:none;background:transparent;border-radius:8px;cursor:pointer;
+.sb-kebab-btn{width:40px;height:40px;border:none;background:transparent;border-radius:var(--r-control);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;color:var(--text-muted);
   color:var(--muted);font-size:18px;line-height:1;display:grid;place-items:center;padding:0}
 .sb-kebab-btn:hover{background:var(--line);color:var(--ink)}
 .sb-kebab-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:20;min-width:148px;
@@ -238,25 +349,66 @@ a{color:inherit}
 .sb-attn-title{display:block;font-weight:600;font-size:14.5px;line-height:1.25}
 .sb-attn-sub{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:5px}
 .sb-attn-sub .muted{font-size:12px;color:var(--muted)}
-.sb-attn-chev{font-size:22px;color:var(--muted);flex:none;line-height:1}
+.sb-attn-chev{display:inline-flex;align-items:center;color:var(--text-muted);flex:none}
 
-.sb-nav{position:fixed;bottom:0;left:0;right:0;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);
-  border-top:1px solid var(--line);display:flex;justify-content:space-around;
-  padding:8px 6px calc(8px + env(safe-area-inset-bottom));z-index:40}
+/* Floating "liquid glass" bottom nav (v1.2): a rounded capsule that hovers
+   above the home indicator, five equal columns, with one shared indicator
+   that glides behind the active tab. */
+.sb-nav{position:fixed;left:16px;right:16px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:50;
+  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
+  min-height:66px;padding:6px;border-radius:26px;
+  border:1px solid rgba(255,255,255,.5);
+  /* Solid fallback first: on iOS < 16.2 color-mix() is invalid and the whole
+     `background` declaration is dropped — without this the capsule renders
+     fully transparent. The color-mix line below wins where it's supported. */
+  background:var(--surface);
+  background:color-mix(in srgb,var(--surface) 74%,transparent);
+  backdrop-filter:blur(22px) saturate(160%);-webkit-backdrop-filter:blur(22px) saturate(160%);
+  box-shadow:0 16px 40px rgba(31,24,56,.18),inset 0 1px 0 rgba(255,255,255,.6)}
 @media(min-width:900px){ .sb-nav{display:none} }
-.sb-navbtn{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:3px;
-  color:var(--muted);font-size:10.5px;font-weight:600;padding:4px 8px;border-radius:10px;flex:1;position:relative}
-.sb-navbtn.on{color:var(--violet)}
-.sb-navbtn.on .ico{background:var(--violet-soft)}
-.sb-navbtn .ico{width:30px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px}
-.sb-navbtn .pill{position:absolute;top:0;right:14px;background:var(--red);color:#fff;font-size:9px;
-  font-weight:700;border-radius:999px;padding:0 5px}
+/* Non-blurred fallback where backdrop-filter is unsupported. */
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .sb-nav{background:var(--surface)} }
+[data-theme="dark"] .sb-nav{border-color:rgba(255,255,255,.1);
+  background:color-mix(in srgb,var(--surface-elevated) 80%,transparent);
+  box-shadow:0 18px 44px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.07)}
+/* Shared active indicator — one glass capsule, translated to the active tab. */
+.sb-nav-ind{position:absolute;top:6px;bottom:6px;left:6px;width:calc((100% - 12px)/5);
+  /* translate3d promotes the indicator to its own compositor layer so the glide
+     stays smooth (and actually renders) in mobile Safari; translateX alone can
+     drop frames or fail to animate the calc() input there. */
+  transform:translate3d(calc(var(--nav-i,0) * 100%),0,0);border-radius:20px;z-index:0;will-change:transform;
+  /* Solid fallback first — if color-mix() is unsupported the gradient below is
+     dropped and the active pill would otherwise be invisible. */
+  background:var(--primary-muted);
+  background:linear-gradient(145deg,rgba(255,255,255,.7),color-mix(in srgb,var(--primary-muted) 70%,transparent));
+  border:1px solid rgba(255,255,255,.6);
+  box-shadow:0 8px 22px rgba(83,63,166,.16),inset 0 1px 0 rgba(255,255,255,.8);
+  transition:transform 200ms cubic-bezier(.22,1,.36,1)}
+[data-theme="dark"] .sb-nav-ind{background:var(--primary-muted);border-color:rgba(255,255,255,.08);
+  box-shadow:0 8px 20px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.06)}
+@media (prefers-reduced-motion:reduce){ .sb-nav-ind{transition:none} }
+.sb-navbtn{background:none;border:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:var(--text-muted);font-size:10.5px;font-weight:600;padding:4px 2px;min-height:54px;
+  border-radius:20px;position:relative;z-index:1;min-width:0;
+  transition:color var(--motion-micro) var(--ease-out)}
+.sb-navbtn .lblx{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-navbtn.on{color:var(--primary);font-weight:600}
+.sb-navbtn .ico{display:flex;align-items:center;justify-content:center;
+  transition:transform var(--motion-standard) var(--ease-out)}
+.sb-navbtn.on .ico{transform:scale(1.03)}
+.sb-navbtn .ico .hi{width:23px;height:23px}
+.sb-navav{width:23px;height:23px;font-size:9px}
+.sb-navbtn .pill{position:absolute;top:1px;right:calc(50% - 24px);background:var(--danger);color:#fff;font-size:9px;
+  font-weight:700;border-radius:999px;padding:0 5px;line-height:15px;min-width:15px;text-align:center;z-index:2}
 
-.sb-fab{position:fixed;bottom:84px;right:18px;z-index:41;width:60px;height:60px;border-radius:18px;
-  background:var(--violet);color:#fff;border:none;font-size:26px;box-shadow:0 8px 22px rgba(76,58,140,.4);
-  display:flex;align-items:center;justify-content:center}
+.sb-fab{position:fixed;bottom:calc(94px + env(safe-area-inset-bottom));right:18px;z-index:41;width:58px;height:58px;
+  border-radius:18px;background:var(--primary);color:#fff;border:none;box-shadow:var(--shadow-lg);
+  display:flex;align-items:center;justify-content:center;
+  transition:background var(--motion-micro) var(--ease-out),transform var(--motion-micro) var(--ease-out)}
+.sb-fab:hover{background:var(--primary-hover)}
 .sb-fab:active{transform:scale(.94)}
-@media(min-width:900px){ .sb-fab{bottom:28px;right:28px;width:58px;height:58px} }
+@media(min-width:900px){ .sb-fab{display:none} }
 
 .sb-seg{display:flex;gap:6px;overflow-x:auto;padding:2px 0 4px;margin-bottom:6px;-webkit-overflow-scrolling:touch}
 .sb-seg::-webkit-scrollbar{display:none}
@@ -274,18 +426,30 @@ a{color:inherit}
 .sb-wincards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:4px}
 @media(min-width:680px){ .sb-wincards{grid-template-columns:repeat(4,1fr)} }
 .sb-wincard{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:10px 12px;box-shadow:var(--shadow)}
-.sb-wincard .n{font-family:Fraunces;font-size:22px;font-weight:600;line-height:1}
+.sb-wincard .n{letter-spacing:-.015em;font-size:22px;font-weight:600;line-height:1}
 .sb-wincard .lbl{font-size:11.5px;color:var(--muted);font-weight:600;margin-top:3px}
 /* Sub-label inside a section (This month / Last month / Across the team). */
 .sb-mlabel{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:12px 2px 8px}
 /* Upcoming events list on Home. */
 .sb-evlist{display:flex;flex-direction:column;gap:8px}
-.sb-ev{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
-  border-radius:13px;padding:12px 14px;box-shadow:var(--shadow)}
-.sb-ev-ic{font-size:22px;flex:none}
-.sb-ev-name{font-weight:600;font-size:14.5px}
-.sb-ev-sub{font-size:12px;color:var(--muted);margin-top:2px}
-.sb-ev-warn{color:var(--red);font-weight:700}
+/* Event cards (v1.2): dense Apple-Reminders layout — emoji, title, relative
+   date, then a divider and a footer row (status · action link). Staggered in. */
+.sb-ev{display:flex;align-items:flex-start;gap:12px;background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;padding:13px 14px;animation:pageIn var(--motion-standard) var(--ease-enter) both;animation-delay:var(--d,0ms)}
+.sb-ev-ic{font-size:24px;flex:none;line-height:1;color:var(--text-muted);margin-top:1px}
+.sb-ev-body{flex:1;min-width:0}
+.sb-ev-name{font-weight:600;font-size:15px;line-height:1.3;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sb-ev-sub{font-size:12.5px;color:var(--text-muted);margin-top:2px}
+.sb-ev-sub b{color:var(--text-secondary);font-weight:600}
+.sb-ev-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  margin-top:9px;padding-top:9px;border-top:1px solid var(--border)}
+.sb-ev-status{font-size:12px;font-weight:600;color:var(--text-muted)}
+.sb-ev-status.ok{color:var(--success)}
+.sb-ev-link{background:none;border:none;color:var(--primary);font-size:13px;font-weight:600;cursor:pointer;
+  padding:4px 2px;min-height:32px;flex:none;transition:opacity var(--motion-fast) var(--ease-standard)}
+.sb-ev-link:active{opacity:.6}
+.sb-ev-warn{color:var(--danger);font-weight:700}
 
 /* ===== Admin activity feed ===== */
 .sb-actfeed{display:flex;flex-direction:column}
@@ -304,7 +468,8 @@ a{color:inherit}
 @media(min-width:900px){ .sb-beta{margin:14px 0 0} }
 .sb-beta-tag{font-size:11px;font-weight:700;letter-spacing:.03em;background:var(--violet);color:#fff;
   border-radius:999px;padding:3px 9px;flex:none}
-.sb-beta-txt{flex:1;min-width:0;font-size:12.5px;color:var(--violet-deep);line-height:1.4}
+.sb-beta-txt{flex:1;min-width:0;font-size:12.5px;color:var(--violet-deep);line-height:1.4;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 [data-theme="dark"] .sb-beta-txt{color:var(--ink)}
 .sb-beta-report{flex:none;background:var(--card);border:1px solid var(--violet);color:var(--violet);
   border-radius:8px;padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer}
@@ -372,26 +537,100 @@ a{color:inherit}
 .sb-overload{font-size:10.5px;color:var(--red);font-weight:700;margin-left:6px}
 .sb-idle{font-size:10.5px;color:var(--amber);font-weight:700;margin-left:6px}
 
-.sb-scrim{position:fixed;inset:0;height:100dvh;background:rgba(33,27,51,.45);z-index:50;
+.sb-scrim{position:fixed;inset:0;height:100vh;height:100dvh;background:rgba(33,27,51,.45);z-index:50;
   display:flex;align-items:flex-end;justify-content:center}
 /* Cap the sheet to the *visible* viewport (dvh), minus the top safe-area, so a
    bottom-anchored sheet's top can never hide under the iPhone Safari/Chrome URL
    bar. `vh` is the fallback for browsers without dvh. */
-.sb-sheet{background:var(--paper);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+.sb-sheet{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
   max-height:calc(100vh - 48px);
   max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
-  overflow-y:auto;-webkit-overflow-scrolling:touch;animation:rise .22s ease}
+  display:flex;flex-direction:column;overflow:hidden;-webkit-overflow-scrolling:touch;
+  animation:rise .22s ease;overscroll-behavior:contain}
 @media(min-width:900px){ .sb-scrim{align-items:center;padding:20px}
   .sb-sheet{border-radius:20px;max-height:86dvh} }
 @keyframes rise{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
 /* Sticky header pins the type badge + ✕ to the top of the panel, always
    visible and tappable; extra top padding clears the notch/home indicator. */
-.sb-sheet .hd{position:sticky;top:0;background:var(--paper);
+.sb-sheet .hd{flex:0 0 auto;background:var(--surface-elevated);
   padding:16px 18px 12px;border-bottom:1px solid var(--line);
   display:flex;align-items:center;justify-content:space-between;z-index:3}
 @media(max-width:899px){ .sb-sheet .hd{padding-top:calc(18px + env(safe-area-inset-top))} }
-.sb-sheet .bd{padding:16px 18px calc(26px + env(safe-area-inset-bottom))}
-.sb-x{background:var(--line);border:none;width:36px;height:36px;border-radius:50%;font-size:17px;color:var(--ink);flex:none;cursor:pointer}
+.sb-sheet .bd{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  padding:16px 18px calc(26px + env(safe-area-inset-bottom))}
+.sb-x{background:var(--surface-muted);border:1px solid var(--border);width:40px;height:40px;border-radius:50%;
+  color:var(--text-primary);flex:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+@media(max-width:899px){ .sb-x{width:44px;height:44px} }
+
+/* --- Notification Center --- */
+.sb-notifpanel{background:var(--surface-elevated);width:100%;max-width:440px;border-radius:22px 22px 0 0;
+  max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
+  display:flex;flex-direction:column;overflow:hidden;animation:rise .22s ease}
+@media(min-width:900px){ .sb-notifpanel{border-radius:20px;max-height:80dvh} }
+.sb-notifhd{position:sticky;top:0;background:var(--surface-elevated);padding:16px 16px 10px;
+  border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}
+@media(max-width:899px){ .sb-notifhd{padding-top:calc(18px + env(safe-area-inset-top))} }
+.sb-notifhd-actions{display:flex;align-items:center;gap:8px}
+.sb-iconbtn{background:var(--surface-muted);border:1px solid var(--border);width:40px;height:40px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:15px;color:var(--ink);cursor:pointer}
+.sb-notiflist{overflow-y:auto;-webkit-overflow-scrolling:touch;padding:6px 0 calc(14px + env(safe-area-inset-bottom))}
+.sb-notif{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;
+  background:none;border:none;cursor:pointer;padding:12px 16px;border-bottom:1px solid var(--line)}
+.sb-notif:hover{background:var(--card)}
+.sb-notif.unread{background:color-mix(in srgb,var(--violet) 8%,transparent)}
+.sb-notif .ic{width:38px;height:38px;border-radius:50%;flex:none;
+  display:inline-flex;align-items:center;justify-content:center}
+.tint-primary{background:var(--primary-muted);color:var(--primary)}
+.tint-success{background:var(--success-muted);color:var(--success)}
+.tint-warning{background:var(--warning-muted);color:var(--warning)}
+.tint-danger{background:var(--danger-muted);color:var(--danger)}
+.tint-info{background:var(--info-muted);color:var(--info)}
+.tint-neutral{background:var(--surface-muted);color:var(--text-secondary)}
+.sb-notif .bd{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.sb-notif .ti{font-size:13.5px;font-weight:600;color:var(--ink)}
+.sb-notif .bo{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.sb-notif .mt{font-size:11px;color:var(--muted);margin-top:1px}
+.sb-notif .ndot{width:8px;height:8px;border-radius:50%;background:var(--violet);flex:none;margin-top:5px}
+/* Push enrollment note inside notification settings */
+.sb-push{font-size:12.5px;color:var(--muted);background:var(--card);border:1px solid var(--line);
+  border-radius:12px;padding:11px 13px;margin:4px 0 8px}
+.sb-push.ok{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
+.sb-push b{color:var(--ink);display:block;margin-bottom:5px;font-size:13px}
+.sb-push ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+/* Foreground push toast */
+.sb-toast{position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(78px + env(safe-area-inset-bottom));z-index:70;
+  background:var(--ink);color:var(--paper);border:none;border-radius:999px;
+  padding:11px 18px;font-size:13px;font-weight:600;max-width:88vw;cursor:pointer;
+  box-shadow:0 8px 24px rgba(0,0,0,.28);animation:rise .2s ease}
+@media(min-width:900px){ .sb-toast{bottom:24px} }
+/* Reminder schedule editor */
+.sb-remlist{display:flex;flex-direction:column;gap:9px;margin-top:8px}
+.sb-rem{border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:var(--card)}
+.sb-rem.off{opacity:.55}
+.sb-rem .hd{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.sb-rem .hd input[type=number]{width:52px;padding:6px 8px;font-size:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink)}
+.sb-rem .hd select{padding:6px 8px;font-size:13px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink)}
+.sb-remtog{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);margin-left:auto}
+.sb-rem-x{background:var(--line);border:none;width:26px;height:26px;border-radius:50%;font-size:12px;color:var(--ink);cursor:pointer;flex:none}
+.sb-rem .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.sb-rchip{font-size:11px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--paper);color:var(--muted);cursor:pointer}
+.sb-rchip.on{background:var(--violet);color:#fff;border-color:var(--violet)}
+/* Admin email-usage dashboard */
+.sb-usage{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 13px;margin:4px 0 10px}
+.sb-usage .bar{height:8px;border-radius:999px;background:var(--line);overflow:hidden;margin-bottom:9px}
+.sb-usage .bar span{display:block;height:100%;border-radius:999px;transition:width .3s}
+.sb-usage .row{display:flex;justify-content:space-between;align-items:center;font-size:13.5px;margin-bottom:8px}
+.sb-usage .grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font-size:12px;color:var(--muted)}
+.sb-usage .grid b{color:var(--ink)}
+/* Bell buttons + unread badge */
+.sb-bellbtn{position:relative}
+.sb-belldot{position:absolute;top:-6px;right:-6px;background:var(--danger);color:#fff;
+  font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:999px;
+  display:flex;align-items:center;justify-content:center;line-height:1;
+  border:2px solid var(--background);animation:badgePop var(--motion-standard) var(--ease-enter)}
+@keyframes badgePop{from{transform:scale(0)}to{transform:scale(1)}}
 
 /* Creative brief callout in the task detail sheet. */
 .sb-brief{background:var(--violet-soft);border:1px solid var(--line);border-radius:13px;
@@ -404,7 +643,12 @@ a{color:inherit}
 .sb-field input,.sb-field select,.sb-field textarea{width:100%;border:1px solid var(--line);border-radius:11px;
   padding:11px 12px;font-size:16px;font-family:inherit;background:var(--card);color:var(--ink)}
 .sb-field input:focus,.sb-field select:focus,.sb-field textarea:focus{outline:2px solid var(--violet);border-color:transparent}
-.sb-btn{width:100%;background:var(--violet);color:#fff;border:none;padding:12px 14px;border-radius:12px;font-size:14.5px;font-weight:600;margin-top:4px}
+.sb-btn{width:100%;display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  background:var(--primary);color:#fff;border:none;padding:12px 14px;min-height:44px;
+  border-radius:var(--r-input);font-size:14.5px;font-weight:600;margin-top:4px;
+  transition:background var(--motion-micro) var(--ease-out)}
+.sb-btn:hover{background:var(--primary-hover)}
+.sb-btn:active{background:var(--primary-pressed)}
 .sb-btn:disabled{opacity:.5}
 .sb-btn.ghost{background:var(--card);color:var(--violet);border:1px solid var(--violet)}
 .sb-btn.danger{background:var(--red-soft);color:var(--red)}
@@ -413,7 +657,7 @@ a{color:inherit}
 .sb-btnrow{display:flex;gap:9px}
 /* Compact action button — only as wide as its label (Open / Fetch / Approve /
    Add / Send). Use inside .sb-inline rows so the input keeps the width. */
-.sb-btn.compact{width:auto;flex:none;margin-top:0;padding:9px 14px;font-size:13.5px}
+.sb-btn.compact{width:auto;flex:none;margin-top:0;padding:8px 14px;min-height:38px;font-size:13.5px}
 /* Input + compact-button row: the field takes the space, the button hugs its
    label. The global form pattern (see also .sb-urlrow). */
 .sb-inline{display:flex;gap:9px;align-items:stretch}
@@ -436,22 +680,22 @@ a{color:inherit}
 .sb-reactbtn{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 9px;font-size:13px}
 .sb-reactbtn.on{background:var(--violet-soft);border-color:var(--violet)}
 
-.sb-login{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;
-  padding:24px 20px calc(24px + env(safe-area-inset-bottom));
+.sb-login{height:100vh;height:100dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;
+  padding:24px 20px calc(24px + env(safe-area-inset-bottom));padding-top:calc(24px + env(safe-area-inset-top));
   background:radial-gradient(120% 120% at 50% 0%, var(--violet) 0%, var(--violet-deep) 70%)}
-.sb-loginbox{width:100%;max-width:440px}
+.sb-loginbox{width:100%;max-width:440px;margin:auto}
 /* Branding block — prominent, centered, brand-coloured */
 .sb-lbrand{text-align:center;margin-bottom:22px}
 .sb-login .logo{width:72px;height:72px;border-radius:20px;background:var(--gold);color:#3a2a06;
-  display:inline-flex;align-items:center;justify-content:center;font-family:Fraunces;font-weight:700;
+  display:inline-flex;align-items:center;justify-content:center;letter-spacing:-.015em;font-weight:700;
   font-size:40px;margin:0 auto 18px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
-.sb-login h1{color:#fff;font-size:34px;font-weight:600;line-height:1.05;font-family:Fraunces}
+.sb-login h1{color:#fff;font-size:34px;font-weight:600;line-height:1.05}
 .sb-tagline{color:var(--gold);font-weight:700;font-size:16px;letter-spacing:.02em;margin-top:10px}
 .sb-login p{color:rgba(255,255,255,.78);font-size:14.5px;margin:8px 0 0}
 @media(min-width:560px){ .sb-login h1{font-size:40px} .sb-login .logo{width:78px;height:78px;font-size:44px} }
 
 .sb-lcard{background:var(--card);border-radius:20px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.32)}
-.sb-lcardhd{font-family:Fraunces;font-size:19px;font-weight:600;color:var(--ink);margin-bottom:16px}
+.sb-lcardhd{letter-spacing:-.015em;font-size:19px;font-weight:600;color:var(--ink);margin-bottom:16px}
 .sb-lerr{background:var(--red-soft);color:var(--red);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
 .sb-lok{background:var(--green-soft);color:var(--green);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
 .sb-gbtn{width:100%;background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px;
@@ -473,9 +717,9 @@ a{color:inherit}
 .sb-lswitch span{font-size:13.5px;color:var(--muted);font-weight:600}
 .sb-lswitch .sb-btn{width:100%;margin-top:0}
 
-.sb-pending{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:26px;
+.sb-pending{height:100vh;height:100dvh;overflow-y:auto;display:flex;padding:26px;
   background:linear-gradient(160deg,var(--violet-deep),var(--violet));text-align:center}
-.sb-pending .box{max-width:380px;color:#fff}
+.sb-pending .box{max-width:380px;color:#fff;margin:auto}
 .sb-pending .ic{font-size:44px;margin-bottom:12px}
 .sb-pending h1{font-size:26px;font-weight:600}
 .sb-pending p{color:rgba(255,255,255,.8);font-size:14px;margin:10px 0 22px;line-height:1.55}
@@ -488,13 +732,13 @@ a{color:inherit}
   box-shadow:0 2px 8px rgba(0,0,0,.15)}
 .sb-netbar.ok{background:var(--green);color:#fff}
 
-.sb-loading{min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px}
+.sb-loading{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px}
 .sb-spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--violet);
   animation:spin .8s linear infinite;margin:0 auto 14px}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 .sb-empty{text-align:center;color:var(--muted);font-size:13px;padding:34px 20px}
-.sb-empty .big{font-size:34px;margin-bottom:8px}
+.sb-empty .big{margin-bottom:10px;color:var(--text-muted);display:flex;justify-content:center}
 .sb-tag{display:inline-block;font-size:10.5px;font-weight:600;color:var(--muted);background:var(--line);padding:2px 7px;border-radius:6px}
 .sb-link{color:var(--violet);font-size:12.5px;font-weight:600;word-break:break-all}
 .sb-banner{background:var(--amber-soft);border:1px solid #F0DDB0;border-radius:12px;padding:11px 13px;
@@ -539,7 +783,7 @@ a{color:inherit}
 .sb-grouphd{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;cursor:pointer;
   padding:8px 2px;text-align:left}
 .sb-grouphd .sb-status{font-size:12.5px;font-weight:700}
-.sb-chev{display:inline-block;color:var(--muted);font-size:16px;transition:transform .15s;flex:none}
+.sb-chev{display:inline-flex;align-items:center;color:var(--text-muted);transition:transform var(--motion-micro) var(--ease-out);flex:none}
 .sb-chev.open{transform:rotate(90deg)}
 .sb-archtag{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
   color:var(--muted);background:var(--line);padding:2px 7px;border-radius:6px}
@@ -594,7 +838,7 @@ a{color:inherit}
   background:var(--card);border:1px solid var(--line);border-left:3px solid var(--line);
   border-radius:12px;padding:12px 13px}
 .sb-hcard:hover{box-shadow:var(--shadow)}
-.sb-hcard .n{font-size:24px;font-weight:700;line-height:1.1;font-family:'Fraunces',Georgia,serif}
+.sb-hcard .n{font-size:24px;font-weight:700;line-height:1.1;letter-spacing:-.015em}
 .sb-hcard .l{font-size:12px;color:var(--muted);font-weight:600}
 .sb-hcard.tone-red{border-left-color:var(--red)} .sb-hcard.tone-red .n{color:var(--red)}
 .sb-hcard.tone-amber{border-left-color:var(--amber)} .sb-hcard.tone-amber .n{color:var(--amber)}
@@ -629,3 +873,403 @@ a{color:inherit}
 .sb-sheadbtn h2{margin:0}
 .sb-sheadbtn .sb-tag{margin-left:auto}
 
+
+/* --- Skeleton loading primitive (v1.1.2) --- */
+.sb-skel{background:linear-gradient(90deg,var(--surface-muted) 25%,var(--background-muted) 50%,var(--surface-muted) 75%);
+  background-size:200% 100%;animation:skel 1.4s ease infinite;border-radius:var(--r-control)}
+@keyframes skel{from{background-position:200% 0}to{background-position:-200% 0}}
+
+/* --- Sidebar grouping + medium-width icon collapse (v1.1.2) --- */
+.sb-navgroup{font-size:10.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text-muted);padding:14px 12px 4px}
+@media(min-width:900px) and (max-width:1139px){
+  :root{--side:76px}
+  .sb-side .lbl,.sb-side .sb-kbd,.sb-side .sb-brandtext{display:none}
+  .sb-side{padding:22px 10px;align-items:center}
+  .sb-snav{width:100%}
+  .sb-snav button{justify-content:center;padding:11px 0}
+  .sb-searchbtn{justify-content:center;width:44px;padding:10px 0}
+  .sb-side .sb-btn{width:44px;padding:12px 0}
+  .sb-sfoot{width:100%;display:flex;flex-direction:column;align-items:center}
+  .sb-suser{padding:6px 0}
+  .sb-report,.sb-signout{width:44px;padding:9px 0}
+  .sb-report .pill{position:absolute;transform:translate(12px,-10px)}
+  .sb-snav button .pill{position:absolute;right:6px;top:6px;margin-left:0}
+  .sb-snav button{position:relative}
+}
+
+/* --- Home: team progress card + compact empty (v1.1.2) --- */
+.sb-progress{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:var(--sp-4) var(--sp-4) var(--sp-3)}
+.sb-progress .row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.sb-progress .row b{font-size:var(--text-card);font-weight:600}
+.sb-progress .pct{font-size:var(--text-support);font-weight:700;color:var(--primary)}
+.sb-progress .bar{height:8px;border-radius:var(--r-pill);background:var(--background-muted);overflow:hidden}
+.sb-progress .bar span{display:block;height:100%;border-radius:var(--r-pill);background:var(--primary);
+  transition:width var(--motion-overlay) var(--ease-out)}
+.sb-progress .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.sb-progress .chips button{font-size:var(--text-label);font-weight:600;padding:6px 12px;min-height:32px;
+  border-radius:var(--r-pill);border:1px solid var(--border);background:var(--surface-muted);
+  color:var(--text-secondary);cursor:pointer}
+.sb-progress .chips button.warn{background:var(--danger-muted);color:var(--danger);border-color:transparent}
+.sb-empty.compact{padding:18px 16px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-card);text-align:left}
+
+/* --- Workflow stepper (task detail, v1.1.2) --- */
+.sb-stepper{display:flex;gap:2px;margin:14px 0 4px;overflow-x:auto;padding-bottom:4px}
+.sb-step{flex:1;min-width:64px;display:flex;flex-direction:column;align-items:center;gap:5px;position:relative}
+.sb-step::before{content:"";position:absolute;top:9px;left:-50%;width:100%;height:2px;background:var(--border)}
+.sb-step:first-child::before{display:none}
+.sb-step.done::before,.sb-step.now::before{background:var(--primary)}
+.sb-step .dot{width:19px;height:19px;border-radius:50%;background:var(--surface);border:2px solid var(--border);
+  display:flex;align-items:center;justify-content:center;position:relative;z-index:1;color:var(--primary);
+  transition:border-color var(--motion-standard) var(--ease-out)}
+.sb-step.done .dot{border-color:var(--primary);background:var(--primary-muted)}
+.sb-step.now .dot{border-color:var(--primary);background:var(--primary)}
+.sb-step.branch .dot{border-color:var(--warning);background:var(--warning-muted)}
+.sb-step .stlbl{font-size:10.5px;font-weight:600;color:var(--text-muted);text-align:center;line-height:1.2}
+.sb-step.now .stlbl{color:var(--primary)}
+.sb-step.branch .stlbl{color:var(--warning)}
+.sb-step-note{display:flex;align-items:center;gap:7px;font-size:var(--text-support);color:var(--warning);
+  background:var(--warning-muted);border-radius:var(--r-control);padding:8px 12px;margin-bottom:10px}
+
+/* --- Board/List view toggle + dense list rows (v1.1.2) --- */
+.sb-viewtoggle{display:flex;background:var(--surface-muted);border:1px solid var(--border);
+  border-radius:var(--r-control);padding:2px;gap:2px}
+.sb-viewtoggle button{display:inline-flex;align-items:center;gap:5px;border:none;background:none;
+  padding:7px 11px;min-height:36px;border-radius:8px;font-size:var(--text-label);font-weight:600;
+  color:var(--text-muted);transition:background var(--motion-micro) var(--ease-out)}
+.sb-viewtoggle button.on{background:var(--surface);color:var(--primary);box-shadow:var(--shadow-sm)}
+@media(max-width:559px){ .sb-viewtoggle button span{display:none} }
+.sb-listrows{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--r-card);
+  overflow:hidden;background:var(--surface)}
+.sb-listrow{display:grid;grid-template-columns:1fr auto auto auto;gap:10px;align-items:center;
+  padding:12px 14px;min-height:48px;background:none;border:none;border-bottom:1px solid var(--border);
+  text-align:left;cursor:pointer;transition:background var(--motion-micro) var(--ease-out)}
+.sb-listrow:last-child{border-bottom:none}
+.sb-listrow:hover{background:var(--surface-muted)}
+.sb-listrow .t{font-size:var(--text-body);font-weight:600;color:var(--text-primary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-listrow .due{font-size:var(--text-label);color:var(--text-muted);font-variant-numeric:tabular-nums}
+.sb-listrow .due.late{color:var(--danger);font-weight:700}
+@media(max-width:559px){ .sb-listrow{grid-template-columns:1fr auto;grid-template-rows:auto auto}
+  .sb-listrow .who{display:none} .sb-listrow .due{grid-column:1;justify-self:start} }
+
+/* --- Switch control (replaces browser checkboxes, v1.1.2) --- */
+.sb-sw{width:40px;height:24px;border-radius:var(--r-pill);border:none;background:var(--border-strong);
+  position:relative;flex:none;cursor:pointer;padding:0;
+  transition:background var(--motion-micro) var(--ease-out)}
+.sb-sw span{position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left var(--motion-micro) var(--ease-out)}
+.sb-sw.on{background:var(--primary)}
+.sb-sw.on span{left:18px}
+
+/* --- Reminder summary card (task form, v1.1.2) --- */
+.sb-remsum{background:var(--surface-muted);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:var(--sp-3) var(--sp-4);display:flex;flex-direction:column;gap:10px;margin-top:6px}
+.sb-remsum .bd{display:flex;flex-direction:column;gap:3px}
+.sb-remsum .bd b{font-size:var(--text-support);font-weight:600}
+.sb-remsum .bd span{font-size:var(--text-label);color:var(--text-muted);line-height:1.45}
+.sb-remsum .sb-btn{margin-top:0}
+
+/* --- Reminder timeline (bottom sheet, v1.1.2) --- */
+.sb-remtl{display:flex;flex-direction:column;margin:12px 0 4px;position:relative}
+.sb-tlrow{display:flex;gap:12px;align-items:flex-start;position:relative;padding:10px 0}
+.sb-tlrow::before{content:"";position:absolute;left:8px;top:34px;bottom:-8px;width:2px;background:var(--border)}
+.sb-tlrow:last-child::before{display:none}
+.sb-tlrow.off{opacity:.55}
+.tl-dot{width:18px;height:18px;border-radius:50%;background:var(--primary-muted);border:2px solid var(--primary);
+  flex:none;margin-top:4px;position:relative;z-index:1}
+.sb-tlrow.off .tl-dot{border-color:var(--border-strong);background:var(--surface-muted)}
+.tl-main{flex:1;min-width:0}
+.tl-head{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  background:none;border:none;text-align:left;padding:0;cursor:pointer}
+.tl-when{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tl-when b{font-size:var(--text-body);font-weight:600;color:var(--text-primary)}
+.tl-date{font-size:var(--text-label);color:var(--text-secondary)}
+.tl-meta{font-size:var(--text-label);color:var(--text-muted)}
+.tl-err{font-size:var(--text-label);color:var(--danger);background:var(--danger-muted);
+  border-radius:var(--r-control);padding:6px 10px;margin-top:7px}
+.tl-adv{margin-top:10px;background:var(--surface-muted);border:1px solid var(--border);
+  border-radius:var(--r-card);padding:12px;animation:rise var(--motion-standard) var(--ease-out)}
+.tl-time{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.tl-time input{width:56px;padding:8px;font-size:15px;border:1px solid var(--border);
+  border-radius:var(--r-control);background:var(--surface);color:var(--text-primary)}
+.tl-time select{padding:8px;font-size:14px;border:1px solid var(--border);
+  border-radius:var(--r-control);background:var(--surface);color:var(--text-primary)}
+.tl-lbl{font-size:var(--text-label);font-weight:700;color:var(--text-secondary);margin:8px 0 5px}
+.tl-adv .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.tl-adv .sb-rchip{min-height:34px;padding:6px 13px;font-size:var(--text-label)}
+.link.danger{color:var(--danger);background:none;border:none;font-size:var(--text-support);
+  font-weight:600;padding:6px 0;cursor:pointer}
+
+/* --- Notification drawer (desktop) + filters + grouping (v1.1.2) --- */
+.sb-unreadct{font-weight:600;font-size:13px;color:var(--text-muted)}
+.sb-nfilters{display:flex;gap:6px;overflow-x:auto;padding:10px 16px 4px;scrollbar-width:none}
+.sb-nfilters::-webkit-scrollbar{display:none}
+.sb-nfilters .sb-fchip{flex:none}
+.sb-ngroup{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--text-muted);padding:12px 16px 4px}
+@media(min-width:900px){
+  .sb-scrim-right{justify-content:flex-end;align-items:stretch;padding:0}
+  .sb-scrim-right .sb-notifpanel{width:440px;max-width:92vw;height:100dvh;max-height:100dvh;
+    border-radius:var(--r-panel) 0 0 var(--r-panel);animation:slidein var(--motion-overlay) var(--ease-out)}
+}
+@keyframes slidein{from{transform:translateX(40px);opacity:.5}to{transform:translateX(0);opacity:1}}
+
+/* ============ v1.1.2 polish pass — premium refinements ============ */
+/* Emoji glyphs (e.g. the birthday cake) sized to match icons. */
+.sb-emoji{font-size:19px;line-height:1;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  width:var(--icon-md);height:var(--icon-md)}
+
+/* (Theme switching now uses the one-shot .theme-anim cross-fade — see the
+   motion pass — instead of permanent per-element colour transitions.) */
+
+/* Card hover: quiet lift, no heavy shadow. */
+@media(hover:hover){
+  .sb-ev:hover,.sb-attn:hover{border-color:var(--border-strong);background:var(--surface-muted)}
+}
+
+/* Sidebar rhythm: perfect icon/label alignment + refined active state. */
+.sb-snav button{gap:12px;align-items:center}
+.sb-snav button .ico{display:inline-flex;align-items:center;justify-content:center;width:24px}
+.sb-snav button.on{background:var(--primary-muted);color:var(--primary);font-weight:600}
+.sb-report,.sb-signout{justify-content:flex-start;padding:9px 12px}
+.sb-report .lbl,.sb-signout .lbl{flex:1;text-align:left}
+.sb-report .pill{margin-left:0}
+.sb-sfoot{display:flex;flex-direction:column;gap:2px}
+
+/* Notification panel: aligned filters, balanced header, scannable rows. */
+.sb-notifhd-actions{gap:6px}
+.sb-markall{display:inline-flex;align-items:center;gap:5px;border:none;background:none;
+  color:var(--primary);font-size:12.5px;font-weight:600;padding:6px 8px;min-height:34px;
+  border-radius:var(--r-control);cursor:pointer}
+.sb-markall:hover{background:var(--primary-muted)}
+.sb-nfilters{padding:12px 16px 10px;border-bottom:1px solid var(--border);margin-bottom:2px}
+.sb-nfilters .sb-fchip{min-height:34px;display:inline-flex;align-items:center}
+.sb-ngroup{padding:14px 16px 6px;font-size:10.5px}
+.sb-notif{padding:12px 16px;gap:12px}
+.sb-notif .ti{line-height:1.35}
+.sb-notif .mt{margin-top:2px}
+.sb-notif .ndot{align-self:center;margin-top:0}
+.sb-notif.unread{background:var(--primary-muted); /* solid fallback where color-mix() is unsupported */
+  background:color-mix(in srgb,var(--primary) 6%,transparent)}
+.sb-notif.unread .ti{font-weight:650}
+
+/* Reminder surfaces feel native to the card system. */
+.sb-remsum{background:var(--surface);border-radius:var(--r-card)}
+.sb-remsum .sb-btn{width:auto;align-self:flex-start;min-height:38px;padding:9px 14px}
+.tl-adv{background:var(--surface-muted)}
+.sb-rchip{transition:background var(--motion-micro) var(--ease-out),color var(--motion-micro) var(--ease-out)}
+.sb-rchip.on{background:var(--primary);border-color:var(--primary)}
+
+/* Inputs read as their own layer in dark mode. */
+[data-theme="dark"] input,[data-theme="dark"] textarea,[data-theme="dark"] select{
+  background:var(--surface-muted);border-color:var(--border);color:var(--text-primary)}
+/* Button hierarchy: ghost = quiet secondary (soft border, tinted hover). */
+.sb-btn.ghost{border-color:color-mix(in srgb,var(--primary) 35%,var(--border));background:var(--surface)}
+.sb-btn.ghost:hover{background:var(--primary-muted);border-color:var(--primary)}
+.sb-btn.ghost:active{background:var(--primary-muted)}
+
+/* --- design_changes.md pass: admin toolbar, quiet sidebar utilities --- */
+.sb-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.sb-toolbar .sb-btn.compact{margin-top:0}
+.sb-tertiary{display:inline-flex;align-items:center;gap:6px;background:none;border:none;
+  color:var(--text-secondary);font-size:13px;font-weight:600;padding:9px 10px;min-height:38px;
+  border-radius:var(--r-control);cursor:pointer;transition:background var(--motion-micro) var(--ease-out)}
+.sb-tertiary:hover{background:var(--surface-muted);color:var(--text-primary)}
+@media(max-width:559px){ .sb-toolbar{display:grid;grid-template-columns:1fr 1fr} .sb-tertiary{justify-content:center} }
+.sb-bellwrap{position:relative;display:inline-flex;flex:none}
+.sb-bellwrap .sb-belldot{top:-6px;right:-8px}
+.sb-suserbtn{width:100%;background:none;border:none;border-radius:var(--r-control);cursor:pointer;text-align:left;
+  transition:background var(--motion-micro) var(--ease-out)}
+.sb-suserbtn:hover{background:var(--surface-muted)}
+.sb-quietlink{background:none;border:none;color:var(--text-muted);font-size:11.5px;padding:6px 8px;
+  text-align:left;cursor:pointer}
+.sb-quietlink:hover{color:var(--text-secondary);text-decoration:underline}
+
+/* Notification drawer: header hierarchy, sticky no-clip filters, title-aligned dot. */
+.sb-notifttl{display:flex;flex-direction:column;gap:1px;min-width:0}
+.sb-notifttl .sb-unreadct{font-size:12px;color:var(--text-muted);font-weight:500}
+.sb-notifhd{align-items:flex-start}
+.sb-notifhd-actions{align-items:center}
+.sb-nfilters{position:sticky;top:0;z-index:2;background:var(--surface-elevated);
+  -webkit-mask-image:linear-gradient(90deg,#000 92%,transparent);
+  mask-image:linear-gradient(90deg,#000 92%,transparent)}
+.sb-nfilters .sb-fchip{white-space:nowrap}
+.sb-notif{min-height:76px;align-items:flex-start}
+.sb-notif .ic{width:32px;height:32px;margin-top:2px}
+.sb-notif .ic .hi{width:17px;height:17px}
+.sb-notif .ndot.top{align-self:flex-start;margin-top:8px}
+
+/* --- design_changes.md pass: list headers, focus rows, banner, dropzone --- */
+.sb-listhead{display:grid;grid-template-columns:1fr auto auto auto;gap:10px;padding:9px 14px;
+  font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);
+  border-bottom:1px solid var(--border);background:var(--surface-muted)}
+@media(max-width:559px){ .sb-listhead{display:none} }
+/* Home "Your focus": flat divided rows instead of stacked cards */
+.sb-attnlist{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);overflow:hidden}
+.sb-attnlist .sb-attn{border:none;border-radius:0;border-bottom:1px solid var(--border);box-shadow:none;margin:0}
+.sb-attnlist .sb-attn:last-child{border-bottom:none}
+/* Beta banner: compact status strip, no competition with headings */
+.sb-beta{padding:7px 12px;font-size:12px;border-radius:var(--r-control);margin-bottom:8px}
+.sb-beta b{font-weight:600}
+/* Team load share text quieter */
+.sb-cap .pct .share{color:var(--text-muted);font-weight:500}
+.sb-overload{text-transform:none;letter-spacing:0}
+/* Designed CSV drop zone */
+.sb-dropzone{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;
+  border:1.5px dashed var(--border-strong);border-radius:var(--r-card);padding:26px 16px;cursor:pointer;
+  color:var(--text-secondary);background:var(--surface-muted);
+  transition:border-color var(--motion-micro) var(--ease-out),background var(--motion-micro) var(--ease-out)}
+.sb-dropzone:hover{border-color:var(--primary);background:var(--primary-muted)}
+.sb-dropzone b{color:var(--text-primary);font-size:14.5px;margin-top:4px}
+.sb-dropzone span{font-size:12.5px}
+.sb-dropzone .hint{color:var(--text-muted);font-size:11.5px}
+.sb-dropzone input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+
+/* ============ Notification drawer: filter-layout fix ============
+   Three regions — header / filters / list — where ONLY the list
+   scrolls vertically. Overrides the earlier sticky/mask/scroll rules. */
+.sb-notifpanel{display:flex;flex-direction:column;overflow:hidden}
+.sb-notifhd{position:static;flex:0 0 auto}
+.sb-nfilters{position:static;flex:0 0 auto;display:flex;align-items:center;gap:8px;
+  padding:10px 16px;min-height:56px;border-bottom:1px solid var(--border);
+  -webkit-mask-image:none;mask-image:none;margin-bottom:0;
+  overflow:visible;white-space:nowrap}
+.sb-nfilters .sb-fchip{height:34px;min-height:34px;display:inline-flex;align-items:center;
+  padding:0 13px;flex:none}
+.sb-notiflist{flex:1 1 auto;min-height:0;overflow-y:auto;padding-top:2px}
+/* Mobile: horizontal-only scrolling, hidden scrollbar, fixed row height. */
+@media(max-width:899px){
+  .sb-nfilters{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .sb-nfilters::-webkit-scrollbar{display:none}
+}
+/* More menu: popover anchored to its chip. */
+.sb-nmore{position:relative;flex:none}
+.sb-nmore .sb-fchip{gap:4px}
+.sb-nmore-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:5;min-width:150px;
+  background:var(--surface-elevated);border:1px solid var(--border);border-radius:var(--r-card);
+  box-shadow:var(--shadow-lg);padding:5px;display:flex;flex-direction:column;
+  animation:rise var(--motion-micro) var(--ease-out)}
+.sb-nmore-menu button{background:none;border:none;text-align:left;font-size:13px;font-weight:600;
+  color:var(--text-secondary);padding:9px 11px;min-height:38px;border-radius:8px;cursor:pointer}
+.sb-nmore-menu button:hover{background:var(--surface-muted)}
+.sb-nmore-menu button.on{background:var(--primary-muted);color:var(--primary)}
+
+/* Profile row: clearly interactive (chevron, hover, pressed). */
+.sb-suserbtn{display:flex;align-items:center;gap:10px}
+.sb-suserbtn .chev{margin-left:auto;color:var(--text-muted);flex:none}
+.sb-suserbtn:active{background:var(--background-muted)}
+
+/* What's new + profile-menu badge */
+.sb-relitem{display:flex;flex-direction:column;gap:2px;padding:10px 0;border-bottom:1px solid var(--border)}
+.sb-relitem:last-child{border-bottom:none}
+.sb-relitem b{font-size:14px;font-weight:600}
+.sb-relitem span{font-size:13px;color:var(--text-secondary);line-height:1.5}
+.sb-newbadge{margin-left:auto;background:var(--primary);color:#fff;font-size:10px;font-weight:700;
+  border-radius:var(--r-pill);padding:2px 8px}
+
+/* Login field refinements (v1.1.2) */
+.sb-fielderr{font-size:12px;color:var(--danger);margin-top:5px}
+.sb-fieldlink{background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;
+  margin-left:auto;cursor:pointer;padding:0}
+.sb-field label{display:flex;align-items:center}
+.sb-pwwrap{position:relative;display:flex}
+.sb-pwwrap input{flex:1;padding-right:44px}
+.sb-pwtoggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:36px;height:36px;
+  display:flex;align-items:center;justify-content:center;background:none;border:none;color:var(--text-muted);cursor:pointer}
+.sb-pwtoggle:hover{color:var(--text-secondary)}
+
+/* Admin push-status badge (People) — text + tone, not colour alone */
+.sb-pushbadge{font-size:11px;font-weight:600;padding:2px 9px;border-radius:var(--r-pill);
+  border:1px solid var(--border)}
+.sb-pushbadge.on{background:var(--success-muted);color:var(--success);border-color:transparent}
+.sb-pushbadge.off{background:var(--surface-muted);color:var(--text-muted)}
+.sb-pushbadge.none{background:var(--warning-muted);color:var(--warning);border-color:transparent}
+
+/* Designed confirmation dialog */
+.sb-confirm{background:var(--surface-elevated);border-radius:var(--r-panel);padding:22px;width:100%;max-width:400px;
+  margin:auto;box-shadow:var(--shadow-lg);animation:rise var(--motion-standard) var(--ease-out)}
+@media(max-width:559px){ .sb-confirm{margin:auto 0 0;border-radius:var(--r-panel) var(--r-panel) 0 0;max-width:100%} }
+.sb-confirm p{font-size:13.5px;color:var(--text-secondary);line-height:1.5;margin-top:8px}
+.sb-confirm .sb-btnrow .sb-btn{margin-top:0}
+.sb-btn.danger{background:var(--danger);color:#fff}
+.sb-btn.danger:hover{background:var(--danger);filter:brightness(.94)}
+
+/* =================================================================
+   MOTION PASS (v1.2) — one shared system, transform/opacity only.
+   All of this is disabled by the global prefers-reduced-motion rule.
+   ================================================================= */
+
+/* Page enter: each tab's content fades + rises once on mount (tab switch).
+   Does NOT replay on Firestore refresh (the page stays mounted). */
+.sb-page{animation:pageIn var(--motion-standard) var(--ease-enter)}
+@keyframes pageIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* Buttons: responsive press feedback + smooth state colour changes. */
+.sb-btn,.sb-btn.ghost,.sb-btn.gold,.sb-btn.green,.sb-tertiary,.sb-fchip,.sb-segbtn,.sb-rchip,.sb-viewtoggle button,.sb-markall,.link{
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             color var(--motion-fast) var(--ease-standard),
+             box-shadow var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-btn:active,.sb-tertiary:active,.sb-gbtn:active{transform:translateY(1px) scale(.99)}
+.sb-btn:disabled{opacity:.6;cursor:default}
+.sb-btn:disabled:active{transform:none}
+.sb-fab:active{transform:scale(.94)}
+/* Loading buttons keep their width (no layout shift). */
+.sb-lprimary,.sb-gbtn{min-width:0}
+
+/* Interactive cards / rows: restrained hover + clear press. */
+.sb-task-act,.sb-listrow,.sb-attn,.sb-ev,.sb-notif,.sb-drawer-item{
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-task-act:active,.sb-listrow:active,.sb-attn:active,.sb-notif:active{transform:scale(.985)}
+@media(hover:hover){ .sb-task-act:hover{border-color:var(--border-strong)} }
+
+/* Overlays: backdrop fade + token-eased entrances. */
+.sb-scrim{animation:scrimIn var(--motion-fast) var(--ease-standard)}
+@keyframes scrimIn{from{opacity:0}to{opacity:1}}
+.sb-sheet{animation:sheetUp var(--motion-slow) var(--ease-enter)}
+@keyframes sheetUp{from{transform:translateY(24px);opacity:.4}to{transform:none;opacity:1}}
+.sb-drawer{animation:sheetUp var(--motion-slow) var(--ease-enter)}
+.sb-confirm{animation:modalIn var(--motion-standard) var(--ease-enter)}
+@keyframes modalIn{from{opacity:0;transform:scale(.98) translateY(8px)}to{opacity:1;transform:none}}
+@media(min-width:900px){ .sb-scrim-right .sb-notifpanel{animation:drawerIn var(--motion-slow) var(--ease-enter)} }
+@keyframes drawerIn{from{transform:translateX(100%);opacity:.96}to{transform:none;opacity:1}}
+
+/* Notification mark-as-read: tint + dot fade smoothly (no row-height animation). */
+.sb-notif{transition:background-color var(--motion-standard) var(--ease-standard)}
+.sb-notif .ndot{transition:opacity var(--motion-standard) var(--ease-standard),transform var(--motion-standard) var(--ease-standard)}
+.sb-notif .ti{transition:font-weight var(--motion-fast) var(--ease-standard)}
+
+/* Accordion / disclosure content: fade+rise the revealed content, animate chevron. */
+.sb-chev,.sb-navbtn .ico,.sb-rchip{will-change:auto}
+.sb-list,.sb-listrows,.tl-adv,.sb-remsum{animation:revealIn var(--motion-standard) var(--ease-enter)}
+@keyframes revealIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+
+/* Form validation: gentle error appearance, stable field positions. */
+.sb-fielderr,.sb-lerr,.tl-err{animation:revealIn var(--motion-fast) var(--ease-enter)}
+input,textarea,select{transition:border-color var(--motion-fast) var(--ease-standard),
+  background-color var(--motion-fast) var(--ease-standard)}
+
+/* Theme switch: a brief one-shot colour cross-fade (added on <html> during
+   toggle, then removed) — avoids permanent per-element transitions + flashing. */
+.theme-anim,.theme-anim *{transition:background-color var(--motion-standard) var(--ease-standard),
+  border-color var(--motion-standard) var(--ease-standard),
+  color var(--motion-standard) var(--ease-standard),
+  fill var(--motion-standard) var(--ease-standard)!important}
+
+/* Skeletons fade into content. */
+.sb-skel{transition:opacity var(--motion-standard) var(--ease-standard)}
+/* Unread dot fades + scales out when a notification is marked read. */
+.sb-notif .ndot.read{opacity:0;transform:scale(0)}
+/* FAB: tiny spring-in on mount. */
+.sb-fab{animation:fabIn var(--motion-standard) cubic-bezier(.34,1.56,.64,1)}
+@keyframes fabIn{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+/* Archived (Posted) workflow group: de-emphasised, since it's completed work. */
+.sb-group.archived{opacity:.72}
+.sb-status.st-archived{color:var(--text-muted)}
+.sb-status.st-archived .pip{background:var(--text-muted)}

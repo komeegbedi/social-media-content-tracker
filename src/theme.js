@@ -22,9 +22,23 @@ function applyTheme(theme) {
   if (typeof document !== "undefined") document.documentElement.setAttribute("data-theme", theme);
 }
 
+// A brief colour cross-fade on theme change: add a class to <html> that enables
+// colour transitions for ~250ms, then remove it — no permanent transitions and
+// no full-page flash. Skipped when the user prefers reduced motion.
+let _themeAnimTimer;
+function themeCrossfade() {
+  if (typeof document === "undefined") return;
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const el = document.documentElement;
+  el.classList.add("theme-anim");
+  clearTimeout(_themeAnimTimer);
+  _themeAnimTimer = setTimeout(() => el.classList.remove("theme-anim"), 260);
+}
+
 // theme: "light" | "dark" | "system" (system clears the stored override).
 export function setTheme(theme) {
   try { theme === "system" ? localStorage.removeItem(KEY) : localStorage.setItem(KEY, theme); } catch { /* ignore */ }
+  themeCrossfade();
   applyTheme(getTheme());
   return getTheme();
 }
