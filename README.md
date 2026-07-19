@@ -98,9 +98,10 @@ skills: ["shoot" | "edit" | "coordinate" | "design" | "shadow"]
 location: ["479" | "828"]
 deprioritize, limited, manualSchedule: boolean   // auto-assign tuning
 notifPrefs: { push, email, perType: { assigned, reminder, … } }   // self-editable
+pushDeviceCount, pushUpdatedAt   // server-maintained push summary (no raw tokens)
 createdAt
 ```
-Subcollection **`users/{uid}/fcmTokens/{token}`** — `{ token, ua, createdAt, lastSeen }` — web-push device tokens (one per device; a user manages only their own).
+Subcollection **`users/{uid}/fcmTokens/{token}`** — `{ token, ua, createdAt, lastSeen }` — web-push device tokens (one per device; a user manages only their own). A server trigger rolls these up into `pushDeviceCount`/`pushUpdatedAt` on the parent doc so admins can see push status without the tokens ever being exposed.
 
 **`tasks/{id}`**
 ```
@@ -134,6 +135,8 @@ Subcollection **`tasks/{id}/comments/{commentId}`** — `{ who, uid, txt, tm, me
 
 **`settings/notifications`** — admin doc: `{ defaultReminders[], reminderHourLocal (9), leadershipAlertRoles }`.
 
+**`eventSeries/{id}`** — admin-managed recurring events (approved-read, admin-write). `{ name, emoji, rule (monthly | yearly | nth-weekday | last-weekday | last-day | everyXMonths | everyXWeeks), anchorDate, … }`. Merged with the built-in `events.js` series to drive Home's upcoming-events cards.
+
 The **7 statuses** group into four phases for the progress bar — Planning (Planned), Creating (In Progress, Changes Requested), Review (In Review, Approved), Posting (Ready to Post, Posted) — and the **next action is system-driven** (`workflowAction` / `nextStep` in `data.js`), so contributors never pick the next step manually.
 
 **`issues/{id}`** — bug/crash/feedback reports and auto-captured runtime errors (see [Logging & Monitoring](#logging--monitoring)).
@@ -166,20 +169,22 @@ Roles are flags/fields on the `users` doc; a person can hold more than one. Dash
 - **Role-based dashboards** — Home (celebration), My Day (operational, role-aware), My Work (urgency-ordered), Team load.
 - **Admin leadership dashboard** — quick actions, severity-coded health cards, "needs attention", "ready to move", and a cross-task **activity feed**.
 - **Wins & metrics** — personal + team wins, avg approval time, most active contributors (folded into Home).
-- **Recurring ministry events** — a real recurrence engine (`events.js`) generates the next occurrence of Cross Over Service (last day of month), Praise & Testimony Night (last Friday), the Bi-Monthly Mini Vigil (3rd Friday every other month), plus birthdays/holidays — no hardcoded monthly dates. Home cards show the next date, days remaining, and per-**occurrence** content status ("2 content pieces planned" vs "Content has not been planned yet") with **Create content** (pre-fills a task stamped with that occurrence) / **View content** actions.
-- **Notifications** — an in-app **Notification Center** (bell + unread badge + panel, mark-read, click-through) with per-user **preferences** (push/email channels + per-type toggles), fed by a server-side notification engine (see [Notifications & Reminders](#notifications--reminders-v11)).
-- **Global search & archive** — search every task across all statuses; posted/completed work moves to an Archive view.
-- **CSV / Google Sheet import** with **intelligent name matching** — bulk-create tasks; unknown owners/crew import as **Pending**, and the importer reconciles shortened/alternate/ambiguous sheet names against real accounts (see [Intelligent Name Matching](#intelligent-name-matching-import-reconciliation)).
+- **Recurring ministry events (admin-managed)** — a real recurrence engine (`events.js`) generates the next occurrence of Cross Over Service (last day of month), Praise & Testimony Night (last Friday), the Bi-Monthly Mini Vigil (3rd Friday every other month), plus birthdays/holidays — no hardcoded monthly dates. Admins now **create/edit their own recurring series** (name, emoji, cadence rule, anchor date) in **Admin → Events**, stored in the Firestore **`eventSeries`** collection and merged into Home alongside the built-ins. Home cards show the next date, days remaining, and per-**occurrence** content status ("2 content pieces planned" vs "Content has not been planned yet") with **Create content** (pre-fills a task stamped with that occurrence) / **View content** actions.
+- **Notifications** — an in-app **Notification Center** (bell + unread badge + panel, mark-read, click-through) with per-user **preferences** (push/email channels + per-type toggles), fed by a server-side notification engine with **responsibility-based channel routing** (see [Notifications & Reminders](#notifications--reminders-v11)).
+- **Weekly Saturday check-in** — a gentle **Saturday 9:00 PM** reminder (in-app + push) nudging the team to check what they're shooting/preparing for Sunday.
+- **What's New & feature requests** — a **What's New** page surfaces plain-language release notes (with a badge when there's something unseen); **Submit feature request** (profile menu) files a structured idea (title · problem · who it helps · link) into the `issues` collection for admin review.
+- **Global search & archive** — search every task across all statuses (Posted/archived included); active surfaces stay forward-looking while archived work remains one filter away.
+- **CSV / Google Sheet import** with **intelligent name matching** — bulk-create tasks; unknown owners/crew import as **Pending**, and the importer reconciles shortened/alternate/ambiguous sheet names against real accounts (see [Intelligent Name Matching](#intelligent-name-matching-import-reconciliation)). _Currently **hidden behind a build flag** (`ENABLE_CSV_IMPORT = false` in `App.jsx`) — flip it to expose the Import tab for launch/bulk loads._
 - **Issue reporting & error tracking** — see [Logging & Monitoring](#logging--monitoring).
-- **Beta mode** — a dismissible in-app banner inviting bug/feedback reports during the test phase.
-- **Mobile-first** — slim header + account drawer, role-aware nav, collapsible filters/sections, and safe-area handling so modals clear the iPhone Safari/Chrome URL bar.
-- **Dark mode** — system preference + manual toggle, remembered.
+- **Beta mode** — a compact, dismissible in-app banner inviting bug/feedback reports during the test phase.
+- **Mobile-first** — floating liquid-glass bottom nav + glass header, single controlled scroll region, role-aware nav, collapsible filters/sections, and safe-area handling so modals clear the iPhone Safari/Chrome URL bar.
+- **Dark mode** — system preference + manual toggle, remembered, with a brief one-shot colour cross-fade on switch.
 
 **In progress (v1.1):**
 - **Web push (FCM)** delivery — the in-app center, backend, and per-device token handling are built; enabling real push needs the Blaze plan + a VAPID key. iPhone/iPad push requires the app be added to the Home Screen first. **Email delivery via Resend is built and verified** (see [Email](#email-resend)).
 
 **Planned (not yet built):**
-- **Department-lead dashboards** and a full **Events calendar** page (creating/editing events; the recurrence rules currently live in `events.js`).
+- **Department-lead dashboards** and a full **Events calendar** page. _(Admins can already create/edit recurring series in **Admin → Events** — stored in `eventSeries`; what's left is a month/agenda calendar view and event content templates.)_
 - **Preferred names / nicknames** — store a legal name + a preferred name (e.g. "Jonathan Smith" → display **"Jon"**) and show the preferred name everywhere; global search matches all forms. _(The import-side matching below already exists; this is the in-app display half.)_
 - **Workload-aware crew suggestions** in the manual picker — rank people by skill match **and** current active-assignment count, steering work away from overloaded volunteers (`autoAssign`/`computeCapacity`/`userActiveTasks` already model this).
 - **Self-service profiles** — let users edit their own name/nickname/email/avatar and trigger a password reset (needs a scoped rules change; members currently can't self-edit).
@@ -249,7 +254,9 @@ To make the app **proactive** — telling the team what's due, who needs to act,
    fans out per channel, records outcomes, retries, emits leadership digest.
 ```
 
-**Immediate (event-driven) notifications** — `onTaskWrite`: assignment (owner + crew), and status transitions → **In Review** (QA + admins), **Changes Requested** (owner), **Approved** (owner + caption team), **Ready to Post** (posting team). `onCommentCreate`: **@mentions**. `onUserWrite`: new registration → admins, and approval → the user (account/security messages bypass preferences).
+**Immediate (event-driven) notifications** — `onTaskWrite`: assignment (owner + crew), and status transitions → **In Review** (QA + admins), **Changes Requested** (owner), **Approved** (owner in-app + caption team push), **Ready to Post** (posting team). `onCommentCreate`: **@mentions**. `onUserWrite`: new registration → admins, and approval → the user (account/security messages bypass preferences). `weeklyTaskCheck` (`onSchedule`, **Saturday 9:00 PM Winnipeg**): a team-wide in-app + push nudge to review what's due for Sunday, idempotent per week. `onFcmTokenWrite` keeps a privacy-safe `pushDeviceCount`/`pushUpdatedAt` on the user doc so admins can see push status **without** the raw tokens ever being exposed.
+
+**Responsibility-based channel routing** — in-app is the **system of record**; each notification type has a channel + priority policy (`NOTIFY_POLICY` in `functions/lib.js`) built around *"notify the person who owns the next action."* **Email is reserved for blocked / required / escalation cases** so routine activity never fills inboxes: only *Changes Requested* and *account approved* email by default; assigned/QA/approved/ready/reminder/overdue/mention/weekly-check ride in-app (+ push). Callers may still override channels per event (the reminder dispatcher strips email to send a single digest; the Approved handler gives the caption team push while the owner gets an in-app-only heads-up). Users' own per-type/per-channel preferences layer on top.
 
 **Reminders** — each task carries a **reminder schedule** (offset · before/after the due date · channels · recipients · enabled; **max 10**, defaulting from `settings/notifications`). When a task's due date or schedule changes, `onTaskWrite` **materializes** `reminderInstances` (fire time = **9:00 AM America/Winnipeg** on the due date ± offset, stored **UTC**), skipping past times and cancelling on Posted/archive.
 
@@ -309,16 +316,19 @@ The Resend plan allows **3,000 emails/month**; the app caps *itself* well below 
 
 v1.1.2 is a **mobile-first design refresh** — visual/interaction only; all v1.0/v1.1 functionality and data structures are unchanged.
 
-- **Tokens** ([src/styles.css](src/styles.css) `:root`): semantic colors (light + dark), type scale (page 28 / section 21 / card 16 / body 14.5 / support 13 / label 12), spacing 4–64px, radius 10–22px, two soft shadows, motion durations (150/220/280ms) + easings, icon sizes. Legacy variable names are aliases — new rules must use semantic tokens.
+- **Tokens** ([src/styles.css](src/styles.css) `:root`): semantic colors (light + dark), type scale (page 28 / section 21 / card 16 / body 14.5 / support 13 / label 12), spacing 4–64px, radius 10–22px, two soft shadows, motion durations (**100 / 160 / 220 / 280ms**) + three easings, icon sizes. Legacy variable names are aliases — new rules must use semantic tokens.
 - **Typography:** single sans-serif (**Inter**); the serif (Fraunces) was removed. Hierarchy via weight/spacing.
-- **Color:** refined indigo-violet primary `#5B4BC4` used selectively (actions, active nav, selection, progress); muted semantic colors; warm off-white lavender background.
-- **Icons:** **Heroicons** (`@heroicons/react/24/outline`; solid variants for active nav), imported individually, sized via `.hi/.hi-sm/.hi-nav/.hi-empty`, `currentColor`, `aria-hidden` + labels on icon-only buttons. No emoji/unicode functional icons remain.
-- **Motion:** CSS-first (transform/opacity, token durations); full `prefers-reduced-motion` support; no animation library added (Motion One is the designated escalation if sequencing needs appear).
-- **Navigation:** mobile bottom nav = Home · My Day · Board · My Work · Profile (Team/Admin in the profile sheet; admin badge on the avatar), solid-icon active states, 44px+ targets, safe-area padding; desktop sidebar has Main/Management groups and collapses to icons at 900–1139px. Admin FAB on all content tabs.
-- **Home:** greeting → upcoming events → **Your focus** (only what needs you) → compact **Team progress** card → wins.
-- **Tasks:** persisted **Board/List** view toggle; task detail gains a six-step **workflow stepper** with a Changes-Requested branch state.
+- **Color:** refined indigo-violet primary — `#6750C8` (light) / `#9A83EE` (dark) — used selectively (actions, active nav, selection, progress); muted semantic colors; warm off-white lavender background (`#F7F6FA`) over a layered dark canvas (`#0F0C16` → sidebar → surface → elevated).
+- **Icons:** **Heroicons** (`@heroicons/react/24/outline`), imported individually, sized via `.hi/.hi-sm/.hi-nav/.hi-empty`, `currentColor`, `aria-hidden` + labels on icon-only buttons. The birthday cake 🎂 (and admin-set event emoji) are the only intentional glyphs; no emoji/unicode *functional* icons remain.
+- **Motion:** one shared **CSS-first** system (transform/opacity only — no `height:auto`, `top`/`left`, or filter animations), token durations/easings, and a single global `prefers-reduced-motion` reset. No animation library added. See **Cross-browser motion** below.
+- **Single-scroll shell:** the app is a fixed `100dvh` frame with **exactly one scroll region** (`.sb-content`); `body` never scrolls. This removes the iOS standalone rubber-band bounce and the "two competing scrollers" behaviour in the installed PWA. Fixed overlays (nav, FAB, toasts) live at the shell level, never inside a transformed ancestor.
+- **Navigation (mobile):** a floating **"liquid glass" bottom nav** — a rounded, blurred capsule hovering above the home indicator with five equal columns (Home · My Day · Board · My Work · Profile) and one shared **active indicator that glides** behind the current tab (`translate3d`, GPU-composited). Team/Admin live in the profile sheet (admin badge on the avatar); 44px+ targets, safe-area padding. Desktop sidebar has Main/Management groups and collapses to icons at 900–1139px. Admin FAB on content tabs.
+- **Header (mobile):** a translucent **glass surface** (not a solid purple block) with Search + Notifications only — the profile moved into the bottom nav.
+- **Home:** shorter greeting → **forward-looking** upcoming events (dense Apple-Reminders-style cards: emoji · title · relative date · status/action footer) → **Your focus** (only what needs you) → compact **Team progress** card → wins.
+- **Tasks:** persisted **Board/List** view toggle; task detail gains a six-step **workflow stepper** with a Changes-Requested branch state. **Posted = auto-archived:** reaching *Posted* stamps `archivedAt` and drops the task from every active surface (Home, My Day, My Work, the active Workflow list, team load, reminders, notifications); the Workflow group is relabelled a muted **Archived**. Nothing is deleted — it stays in Search, the Board *Archive* filter, Reports, and Admin.
 - **Reminders:** the task form shows a summary ("Using team default · 4 reminders"); the schedule opens in a bottom sheet as a chronological **timeline** (computed dates at 9:00 AM Winnipeg, switches, expandable delivery options, reset to default, validation).
-- **Notifications:** desktop **right-side drawer**, unread count, category filters, date grouping (Today/Yesterday/This week/Earlier).
+- **Notifications:** desktop **right-side drawer**, unread count, category filters (five primary + a More menu), date grouping (Today/Yesterday/This week/Earlier), three-region layout so only the list scrolls.
+- **Cross-browser motion (Safari-safe):** every `backdrop-filter` ships `-webkit-backdrop-filter` + an `@supports` opaque fallback; every `color-mix()` glass surface (bottom nav, active indicator, header, unread rows) carries a **solid `background` fallback first**, so on iOS < 16.2 the surface stays visible instead of rendering transparent; `100dvh` is always paired with a `100vh` fallback. See the addendum in [design_changes.md](design_changes.md).
 - **Breakpoints:** 560 / 680 / 900 (desktop shell) / 1140 (full sidebar).
 - **Known limitations:** Calendar view for tasks and a dedicated mobile notifications *page* are deferred; the JS bundle grew ~27 kB gzip from the icon set (route-level code-splitting is the planned mitigation).
 
@@ -327,7 +337,7 @@ v1.1.2 is a **mobile-first design refresh** — visual/interaction only; all v1.
 ## Future Roadmap
 
 - Finish **push + email** delivery for notifications (in-app center + backend are done); notification retention cleanup + App Check.
-- **Department-lead** dashboards and a dedicated **Events** page (moving the recurrence rules into Firestore + event content templates).
+- **Department-lead** dashboards and a dedicated **Events calendar** page (admin event CRUD + Firestore `eventSeries` already ship; next is a calendar view + event content templates).
 - **Preferred names / nicknames** stored on the profile (the import-side matcher is the first half).
 - **Passwordless auth** (magic link / email code / passkeys) to ease volunteer onboarding.
 - **Analytics / content performance** tracking (IG / Facebook / YouTube).
@@ -342,6 +352,7 @@ All monitoring data lives in the Firestore **`issues`** collection.
 
 - **Automatic capture** — uncaught errors, unhandled promise rejections, and React render crashes are logged via `src/logging.js` + an `ErrorBoundary`, with full context: user id/email, route, action, message, stack, browser/device, viewport.
 - **Manual reports** — any signed-in user can file a bug/crash/feedback note via **"Report an issue"** (sidebar, or the ⚠︎ button on mobile); the same context is attached automatically.
+- **Feature requests** — **Submit feature request** (profile menu) writes a structured `kind: "feature_request"` entry (title · problem · beneficiary · link) to the same `issues` collection for admins to review.
 - **Admin review** — **Admin → Issues**: filter by Reports/Errors and Open/Resolved, expand the stack trace, mark resolved/reopen.
 - **Security** — clients may only *create* issues under their own uid; only admins can read, triage, or delete (enforced in `firestore.rules`).
 
@@ -369,7 +380,9 @@ This is a small, deliberately flat codebase. Most "components" are functions ins
 │   ├── onTaskWrite.js        # Assignment + status notifications; reminder materialization
 │   ├── onCommentCreate.js    # @mention notifications
 │   ├── onUserWrite.js        # Pending→admins, approval→user
+│   ├── onFcmTokenWrite.js    # Maintains privacy-safe pushDeviceCount on the user doc
 │   ├── dispatchReminders.js  # Hourly dispatcher (atomic lease) + leadership digest
+│   ├── weeklyTaskCheck.js    # Saturday 9PM Winnipeg team check-in (in-app + push)
 │   ├── cleanupRetention.js   # Daily retention pruning of notification collections
 │   └── sendTestEmail.js      # Admin-only callable to verify the email pipeline
 ├── scripts/
@@ -382,14 +395,17 @@ This is a small, deliberately flat codebase. Most "components" are functions ins
     ├── data.js               # Pure logic & helpers (no React, no Firebase) — easy to test
     ├── events.js             # Recurrence engine + ministry events (birthdays/holidays/services)
     ├── events.test.js        # Node unit tests for the recurrence engine
+    ├── data.email.test.js    # Node unit tests for email-preference/validation helpers
     ├── notifications.js      # Notification Center hook + preference helpers
-    ├── logging.js            # Error capture, issue reporting, route tracking
-    ├── theme.js              # Light/dark theme (system pref + persistence)
+    ├── push.js               # FCM web-push enrollment (token registration, foreground)
+    ├── releases.js           # What's New release notes (LATEST_RELEASE + RELEASES)
+    ├── logging.js            # Error capture, issue reporting, feature requests, route tracking
+    ├── theme.js              # Light/dark theme (system pref + persistence + cross-fade)
     └── styles.css            # All styles + the light/dark CSS variables
 ```
 
 Conceptual mapping for newcomers:
-- **Pages / components** → functions in `src/App.jsx` (`Home`, `MyDay`, `BoardList`, `Mine`, `Team`, `Admin`, `TaskDetail`, `TaskEditor`, `UserEditor`, `ImportPanel`, `IssueLog`, …).
+- **Pages / components** → functions in `src/App.jsx` (`Home`, `MyDay`, `BoardList`, `Mine`, `Team`, `Admin`, `AdminEvents`, `EventSeriesEditor`, `TaskDetail`, `TaskEditor`, `UserEditor`, `ImportPanel`, `IssueLog`, `WhatsNew`, `FeatureRequestModal`, `ConfirmDialog`, …).
 - **Hooks** → `useAuthUser` / `useProfile` / `useCollection` in `App.jsx`.
 - **Services** → `src/firebase.js` (Auth + Firestore); scripts under `scripts/`.
 - **Utilities** → `src/data.js` (statuses, auto-assign, capacity, search, wins/metrics, CSV parsing, **intelligent name matching** — `matchUserScored` / `matchUser` / `reconcileNames`), `src/events.js`, `src/theme.js`, `src/logging.js`.

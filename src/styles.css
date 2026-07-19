@@ -170,6 +170,7 @@ a{color:var(--primary)}
    nav, so only Search + Notifications appear here. */
 .sb-top{flex:0 0 auto;z-index:40;display:flex;align-items:center;justify-content:space-between;
   min-height:54px;padding:calc(8px + env(safe-area-inset-top)) 16px 8px;
+  background:var(--background); /* solid fallback for iOS < 16.2 (no color-mix) */
   background:color-mix(in srgb,var(--background) 88%,transparent);
   border-bottom:1px solid var(--border);
   backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%)}
@@ -354,9 +355,13 @@ a{color:var(--primary)}
    above the home indicator, five equal columns, with one shared indicator
    that glides behind the active tab. */
 .sb-nav{position:fixed;left:16px;right:16px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:50;
-  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:fixed;
+  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
   min-height:66px;padding:6px;border-radius:26px;
   border:1px solid rgba(255,255,255,.5);
+  /* Solid fallback first: on iOS < 16.2 color-mix() is invalid and the whole
+     `background` declaration is dropped — without this the capsule renders
+     fully transparent. The color-mix line below wins where it's supported. */
+  background:var(--surface);
   background:color-mix(in srgb,var(--surface) 74%,transparent);
   backdrop-filter:blur(22px) saturate(160%);-webkit-backdrop-filter:blur(22px) saturate(160%);
   box-shadow:0 16px 40px rgba(31,24,56,.18),inset 0 1px 0 rgba(255,255,255,.6)}
@@ -369,7 +374,13 @@ a{color:var(--primary)}
   box-shadow:0 18px 44px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.07)}
 /* Shared active indicator — one glass capsule, translated to the active tab. */
 .sb-nav-ind{position:absolute;top:6px;bottom:6px;left:6px;width:calc((100% - 12px)/5);
-  transform:translateX(calc(var(--nav-i,0) * 100%));border-radius:20px;z-index:0;
+  /* translate3d promotes the indicator to its own compositor layer so the glide
+     stays smooth (and actually renders) in mobile Safari; translateX alone can
+     drop frames or fail to animate the calc() input there. */
+  transform:translate3d(calc(var(--nav-i,0) * 100%),0,0);border-radius:20px;z-index:0;will-change:transform;
+  /* Solid fallback first — if color-mix() is unsupported the gradient below is
+     dropped and the active pill would otherwise be invisible. */
+  background:var(--primary-muted);
   background:linear-gradient(145deg,rgba(255,255,255,.7),color-mix(in srgb,var(--primary-muted) 70%,transparent));
   border:1px solid rgba(255,255,255,.6);
   box-shadow:0 8px 22px rgba(83,63,166,.16),inset 0 1px 0 rgba(255,255,255,.8);
@@ -526,7 +537,7 @@ a{color:var(--primary)}
 .sb-overload{font-size:10.5px;color:var(--red);font-weight:700;margin-left:6px}
 .sb-idle{font-size:10.5px;color:var(--amber);font-weight:700;margin-left:6px}
 
-.sb-scrim{position:fixed;inset:0;height:100dvh;background:rgba(33,27,51,.45);z-index:50;
+.sb-scrim{position:fixed;inset:0;height:100vh;height:100dvh;background:rgba(33,27,51,.45);z-index:50;
   display:flex;align-items:flex-end;justify-content:center}
 /* Cap the sheet to the *visible* viewport (dvh), minus the top safe-area, so a
    bottom-anchored sheet's top can never hide under the iPhone Safari/Chrome URL
@@ -1041,7 +1052,8 @@ a{color:var(--primary)}
 .sb-notif .ti{line-height:1.35}
 .sb-notif .mt{margin-top:2px}
 .sb-notif .ndot{align-self:center;margin-top:0}
-.sb-notif.unread{background:color-mix(in srgb,var(--primary) 6%,transparent)}
+.sb-notif.unread{background:var(--primary-muted); /* solid fallback where color-mix() is unsupported */
+  background:color-mix(in srgb,var(--primary) 6%,transparent)}
 .sb-notif.unread .ti{font-weight:650}
 
 /* Reminder surfaces feel native to the card system. */
