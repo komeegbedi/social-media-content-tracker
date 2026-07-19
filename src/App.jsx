@@ -12,7 +12,7 @@ import {
 import { auth, db, googleProvider, functions } from "./firebase";
 import { httpsCallable } from "firebase/functions";
 import {
-  STAGES, statusClass, roleLabel, initials, emailFor,
+  STAGES, statusClass, roleLabel, initials, emailFor, capTitle,
   fmt, daysTo, autoAssign, computeCapacity,
   parseCSV, rowToTask, sheetCsvUrl,
   PRIORITIES, priorityClass, attentionItems, matchUser, reconcileNames, matchTier,
@@ -107,6 +107,7 @@ function ThemeToggle({ compact }) {
 function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onNotifications, onNotifPrefs, onWhatsNew, onFeatureRequest, onReport, onGoTab }) {
   const [theme, setT] = useState(getTheme());
   const toggleTheme = () => { const next = theme==="dark"?"light":"dark"; setTheme(next); setT(next); };
+  const drag = useSheetDrag(onClose);
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -114,7 +115,8 @@ function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onN
   }, [onClose]);
   return (
     <div className="sb-scrim" onMouseDown={onClose}>
-      <div className="sb-drawer" onMouseDown={e=>e.stopPropagation()}>
+      <div className="sb-drawer" onMouseDown={e=>e.stopPropagation()} style={drag.sheetStyle}>
+        <div className="sb-grab" {...drag.handleProps}><span/></div>
         <div className="sb-drawer-user">
           <span className="sb-av" style={{width:46,height:46,fontSize:16}}>{initials(me.name)}</span>
           <div style={{minWidth:0}}>
@@ -229,7 +231,7 @@ function FeatureRequestModal({ onClose }) {
             </>
           ) : (
             <>
-              <div className="sb-field"><label>What would you like to see?</label>
+              <div className="sb-field"><label>What would you like to see?<span className="sb-req" aria-hidden="true">*</span></label>
                 <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. A calendar view of all content" /></div>
               <div className="sb-field"><label>What problem would this solve?</label>
                 <textarea rows={3} value={f.problem} onChange={e=>set("problem",e.target.value)} /></div>
@@ -278,6 +280,7 @@ function notifGroups(items) {
 
 function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
   const { items, unread, hasMore, loadMore, markRead, markAllRead } = notif;
+  const drag = useSheetDrag(onClose);
   const [flt, setFlt] = useState("all");
   const [moreOpen, setMoreOpen] = useState(false);
   const active = NOTIF_FILTERS.find(f=>f.id===flt) || NOTIF_FILTERS[0];
@@ -307,7 +310,8 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
   };
   return (
     <div className="sb-scrim sb-scrim-right" onMouseDown={onClose}>
-      <div className="sb-notifpanel" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Notifications">
+      <div className="sb-notifpanel" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Notifications" style={drag.sheetStyle}>
+        <div className="sb-grab" {...drag.handleProps}><span/></div>
         <div className="sb-notifhd">
           <div className="sb-notifttl">
             <b className="sb-serif" style={{fontSize:17}}>Notifications</b>
@@ -321,11 +325,13 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
           </div>
         </div>
         <div className="sb-nfilters" role="tablist" aria-label="Filter notifications">
-          {NOTIF_PRIMARY.map(fo => (
-            <button key={fo.id} role="tab" aria-selected={flt===fo.id}
-              className={"sb-fchip"+(flt===fo.id?" on":"")}
-              onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
-          ))}
+          <div className="sb-nfilters-scroll">
+            {NOTIF_PRIMARY.map(fo => (
+              <button key={fo.id} role="tab" aria-selected={flt===fo.id}
+                className={"sb-fchip"+(flt===fo.id?" on":"")}
+                onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
+            ))}
+          </div>
           <div className="sb-nmore">
             <button className={"sb-fchip"+(moreActive?" on":"")} aria-haspopup="menu" aria-expanded={moreOpen}
               onClick={()=>setMoreOpen(o=>!o)}>
@@ -906,8 +912,7 @@ function Login({ online = true }) {
     <div className="sb-login">
       <div className="sb-loginbox">
         <div className="sb-lbrand">
-          <div className="logo">✦</div>
-          <h1>IFC Creatives Board</h1>
+          <div className="sb-lwordmark"><span className="ifc">IFC</span>Creatives Board</div>
           <div className="sb-tagline">Plan. Create. Review. Publish.</div>
           <p>The home of the IFC Creative Team.</p>
         </div>
@@ -926,13 +931,13 @@ function Login({ online = true }) {
             <div className="sb-field"><label>Your name</label>
               <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="e.g. John Smith" /></div>
           )}
-          <div className="sb-field"><label>Email</label>
+          <div className="sb-field"><label>Email<span className="sb-req" aria-hidden="true">*</span></label>
             <input type="email" inputMode="email" autoComplete="username" value={email}
               aria-invalid={!!emailErr} aria-describedby={emailErr?"login-email-err":undefined}
               onChange={(e)=>{ setEmail(e.target.value); if(emailErr) setEmailErr(""); }} placeholder="you@email.com" />
             {emailErr && <div className="sb-fielderr" id="login-email-err" role="alert">{emailErr}</div>}</div>
           <div className="sb-field">
-            <label>Password{mode!=="register" && <button type="button" className="sb-fieldlink" onClick={doReset}>Forgot?</button>}</label>
+            <label>Password<span className="sb-req" aria-hidden="true">*</span>{mode!=="register" && <button type="button" className="sb-fieldlink" onClick={doReset}>Forgot?</button>}</label>
             <div className="sb-pwwrap">
               <input type={showPw?"text":"password"} autoComplete={mode==="register"?"new-password":"current-password"}
                 value={pw} onChange={(e)=>setPw(e.target.value)} placeholder="••••••••"
@@ -986,6 +991,55 @@ function Pending({ profile }) {
   );
 }
 
+/* A light page skeleton shown briefly during tab transitions — shimmer rows
+   instead of a blank flash. */
+function PageSkeleton() {
+  return (
+    <div className="sb-page sb-pageskel" aria-hidden="true">
+      <span className="sb-skel" style={{width:"38%",height:26,display:"block"}}/>
+      <span className="sb-skel" style={{width:"58%",height:14,display:"block",marginTop:12}}/>
+      <div className="sb-skelgrid">
+        {[0,1,2,3].map(i=><span className="sb-skel" key={i} style={{height:74}}/>)}
+      </div>
+      {[0,1,2].map(i=><span className="sb-skel" key={i} style={{height:56,display:"block",marginTop:10}}/>)}
+    </div>
+  );
+}
+
+/* Drag-to-dismiss for bottom sheets: the sheet follows the finger downward from
+   a grab handle, then either flings closed (enough distance or downward
+   velocity) or springs back. Pointer/touch based; scrolling is unaffected
+   because only the handle starts a drag. */
+function useSheetDrag(onClose) {
+  const [y, setY] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const st = useRef(null);
+  const start = (e) => {
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    st.current = { y0:cy, last:cy, t:Date.now(), lt:Date.now() };
+    setDragging(true);
+  };
+  const move = (e) => {
+    if (!st.current) return;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    st.current.last = cy; st.current.lt = Date.now();
+    setY(Math.max(0, cy - st.current.y0));
+  };
+  const end = () => {
+    if (!st.current) return;
+    const dy = Math.max(0, st.current.last - st.current.y0);
+    const v = dy / Math.max(1, st.current.lt - st.current.t);     // px per ms
+    st.current = null; setDragging(false);
+    if (dy > 110 || v > 0.55) onClose(); else setY(0);
+  };
+  return {
+    handleProps: { onTouchStart:start, onTouchMove:move, onTouchEnd:end,
+      onPointerDown:start, onPointerMove:(e)=>{ if(st.current) move(e); }, onPointerUp:end },
+    sheetStyle: { transform:`translateY(${y}px)`,
+      transition: dragging ? "none" : "transform .28s cubic-bezier(.32,1.32,.5,1)" },
+  };
+}
+
 /* ===================================================================
    MAIN BOARD (approved users)
    =================================================================== */
@@ -995,12 +1049,27 @@ function Board({ profile, isAdmin }) {
   const [usersAll] = useCollection("users", true);
   const users = usersAll.filter(u => u.status === "approved" || u.role === "admin");
   const [allUsers] = useCollection("users", isAdmin);
-  const [tasks, tasksLoaded] = useCollection("tasks", true);
+  const [tasksRaw, tasksLoaded] = useCollection("tasks", true);
+  // Titles always show capitalized, whatever the user typed. Normalising here at
+  // the source means every downstream surface (cards, modal, search, activity,
+  // admin, the edit form) inherits it — and saves store the tidy version.
+  const tasks = useMemo(() => tasksRaw.map(t => t.title ? { ...t, title: capTitle(t.title) } : t), [tasksRaw]);
   const [issues] = useCollection("issues", isAdmin); // admin-only (rules)
   const notifSettings = useDoc("settings/notifications", true); // reminder defaults
   const [eventSeries] = useCollection("eventSeries", true); // admin-managed recurring events
 
   const [tab, setTab] = useState("home");
+  // Inter-page transition: a brief skeleton on tab change so switching screens
+  // feels intentional (cross-fade in), never a blank flash. Data's already in
+  // memory, so this is purely a ~280ms polish beat — not real latency.
+  const [navLoading, setNavLoading] = useState(false);
+  const firstNav = useRef(true);
+  useEffect(() => {
+    if (firstNav.current) { firstNav.current = false; return; }   // no skeleton on very first mount
+    setNavLoading(true);
+    const t = setTimeout(() => setNavLoading(false), 280);
+    return () => clearTimeout(t);
+  }, [tab]);
   const [openId, setOpenId] = useState(null);
   const [editTask, setEditTask] = useState(null);
   const [editPrefill, setEditPrefill] = useState(null);  // defaults for a new task (e.g. from an event)
@@ -1307,6 +1376,8 @@ function Board({ profile, isAdmin }) {
 
           <div className="sb-content">
             <BetaBanner onReport={()=>setShowReport(true)} />
+            {navLoading && <PageSkeleton />}
+            <div className={navLoading ? "sb-pagehide" : "sb-pageshow"}>
             {tab==="home"  && <Home tasks={tasks} tasksLoaded={tasksLoaded} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
             {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
             {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} />}
@@ -1320,6 +1391,7 @@ function Board({ profile, isAdmin }) {
                 onAutoAll={autoAll} onAutoOne={autoOne} onImport={importTasks} onResolveIssue={resolveIssue}
                 onAssignSuggested={assignSuggested} onNewForEvent={newForEvent} />
             )}
+            </div>
           </div>
 
           <nav className="sb-nav" aria-label="Main" style={{ "--nav-i": ["home","myday","board","mine"].indexOf(tab) >= 0 ? ["home","myday","board","mine"].indexOf(tab) : 4 }}>
@@ -1435,7 +1507,7 @@ function ReportIssue({ onClose }) {
             <div className="sb-sub" style={{marginTop:0}}>
               Tell us what went wrong or felt off. We'll automatically include your
               account, the screen you're on, and your device details.</div>
-            <div className="sb-field"><label>What happened?</label>
+            <div className="sb-field"><label>What happened?<span className="sb-req" aria-hidden="true">*</span></label>
               <textarea rows={5} value={note} onChange={e=>setNote(e.target.value)}
                 placeholder="e.g. I tried to mark a reel Approved and nothing happened." /></div>
             {state==="error" && <div className="sb-lerr">Couldn't send that. Please try again.</div>}
@@ -2379,7 +2451,7 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
           <button className="sb-x" onClick={requestClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
         <div className="bd">
           <div className="sb-btnrow">
-            <div className="sb-field" style={{flex:1}}><label>Event name</label>
+            <div className="sb-field" style={{flex:1}}><label>Event name<span className="sb-req" aria-hidden="true">*</span></label>
               <input value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Praise Night" /></div>
             <div className="sb-field" style={{width:90}}><label>Emoji</label>
               <input value={f.emoji} onChange={e=>set("emoji",e.target.value)} placeholder="🎤" maxLength={4} /></div>
@@ -2394,7 +2466,7 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
               <input type="number" min="1" max="12" value={f.interval} onChange={e=>set("interval",e.target.value)} /></div>
           </div>
           <div className="sb-btnrow">
-            <div className="sb-field" style={{flex:1}}><label>Next occurrence (anchor)</label>
+            <div className="sb-field" style={{flex:1}}><label>Next occurrence (anchor)<span className="sb-req" aria-hidden="true">*</span></label>
               <input type="date" value={f.anchorDate} onChange={e=>set("anchorDate",e.target.value)} /></div>
             <div className="sb-field" style={{flex:1}}><label>End date (optional)</label>
               <input type="date" value={f.endDate||""} onChange={e=>set("endDate",e.target.value)} /></div>
@@ -2436,8 +2508,6 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEdi
 
   return (
     <div className="sb-page">
-      <div className="sb-h">Admin</div>
-      <div className="sb-sub">What needs leadership attention.</div>
       <div className="sb-seg" style={{marginBottom:14}}>
         {tabs.map(([id,label]) => (
           <button key={id} className={"sb-segbtn"+(sec===id?" on":"")} onClick={()=>setSec(id)}>{label}</button>
@@ -2446,6 +2516,7 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEdi
 
       {sec==="overview" && <AdminOverview tasks={tasks} users={users} h={h}
         onGoContent={goContent} onGoPeople={()=>setSec("people")} onGoImport={()=>setSec("import")}
+        onGoEvents={()=>setSec("events")}
         onNewContent={()=>onEditTask("new")} onAutoAll={onAutoAll} onNewForEvent={onNewForEvent}
         onEditUser={onEditUser} onDeleteUser={onDeleteUser} onAssignSuggested={onAssignSuggested} />}
 
@@ -2473,123 +2544,213 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEdi
   );
 }
 
-/* Overview = the admin landing page: health at a glance, then only the things
-   that need a leader — stuck work, approvals, unassigned content — plus recent
-   activity and quick actions. No endless content list. */
-function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, onNewContent, onAutoAll, onEditUser, onDeleteUser, onAssignSuggested, onNewForEvent }) {
+/* Compact "New" actions menu — moves the old admin toolbar into a single
+   top-right dropdown so the overview leads with information, not buttons. */
+function AdminActions({ onNewContent, onNewEvent, onAutoAll, onImport }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const f = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const k = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", f); document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("mousedown", f); document.removeEventListener("keydown", k); };
+  }, [open]);
+  return (
+    <div className="sb-kebab" ref={ref}>
+      <button className="sb-btn compact" onClick={()=>setOpen(o=>!o)} aria-haspopup="menu" aria-expanded={open}>
+        <PlusIcon className="hi hi-sm" aria-hidden="true"/> New <ChevronDownIcon className="hi hi-sm" aria-hidden="true"/></button>
+      {open && (
+        <div className="sb-kebab-menu" role="menu" style={{right:0,minWidth:180}}>
+          <button className="sb-kebab-item" role="menuitem" onClick={()=>{ setOpen(false); onNewContent(); }}>New content</button>
+          <button className="sb-kebab-item" role="menuitem" onClick={()=>{ setOpen(false); onNewEvent(); }}>New recurring event</button>
+          <button className="sb-kebab-item" role="menuitem" onClick={()=>{ setOpen(false); onAutoAll(); }}>Auto-assign crew</button>
+          {ENABLE_CSV_IMPORT && <button className="sb-kebab-item" role="menuitem" onClick={()=>{ setOpen(false); onImport(); }}>Import CSV</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Overview = the LEADERSHIP dashboard: decision-first, not data-first. Reuses
+   Home's hierarchy — a hero + digest that answers "what needs me right now",
+   then paired widgets (Needs attention · Approvals · Upcoming · Team health ·
+   Ready to publish · Activity). Same visual language as Home, leadership data. */
+function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, onGoEvents, onNewContent, onAutoAll, onEditUser, onDeleteUser, onAssignSuggested, onNewForEvent }) {
   const health = adminHealth(tasks, users);
   const attention = adminNeedsAttention(tasks);
   const pending = users.filter(u => u.status === "pending");
   const ready = adminReadyToMove(tasks);
-  const activity = recentActivity(tasks, 8);
+  const activity = recentActivity(tasks, 6);
   const events = upcomingEvents(3);
-  const [eventNote, setEventNote] = useState(false);
+  const hi = new Date().getHours();
+  const greet = hi<12?"Good morning":hi<17?"Good afternoon":"Good evening";
+  const pl = (n) => n===1?"":"s";
 
-  // Does any active task reference this event? Loose token match on relatedEvent.
   const eventCount = (e) => occurrenceContentCount(e, tasks);
-  const ago = (ms) => {
-    const m = Math.round((Date.now()-ms)/60000);
-    if (m<1) return "just now"; if (m<60) return `${m}m ago`;
-    const hrs = Math.round(m/60); if (hrs<24) return `${hrs}h ago`;
-    return `${Math.round(hrs/24)}d ago`;
-  };
+  const eventsNoContent = events.filter(e => eventCount(e)===0);
+  const blockerName = tasks.filter(t => t.blockedOn && t.status!=="Posted")[0]?.blockedOn;
 
-  // Severity-coded so a leader can scan instantly: red = broken, amber =
-  // slipping, gold = waiting on QA, green = good to go, violet = people.
-  const cards = [
-    { k:"blocked", n:health.blocked,      label:"Blocked",           tone:"red",    go:()=>onGoContent("blocked") },
-    { k:"overdue", n:health.overdue,      label:"Overdue",           tone:"amber",  go:()=>onGoContent("overdue") },
-    { k:"qa",      n:health.awaitingQA,   label:"Awaiting QA",       tone:"gold",   go:()=>onGoContent("qa") },
-    { k:"ready",   n:health.ready,        label:"Ready to post",     tone:"green",  go:()=>onGoContent("ready") },
-    { k:"pending", n:health.pendingUsers, label:"Awaiting approval", tone:"violet", go:onGoPeople },
-    { k:"unassig", n:health.unassigned,   label:"Unassigned",        tone:"blue",   go:()=>onGoContent("needowner") },
+  // Team health from live workload — ranked people, busiest first.
+  const team = users.filter(u => u.status==="approved" || u.role==="admin");
+  const teamRanked = team.map(u => ({ name:u.name, n:userActiveTasks(u, tasks) })).sort((a,b)=>b.n-a.n);
+  const maxLoad = Math.max(4, ...teamRanked.map(x=>x.n));
+  const busy = teamRanked.filter(x => x.n>=4).length;
+
+  const agoT = (ms) => { const m=Math.round((Date.now()-ms)/60000); if(m<1)return"just now";
+    if(m<60)return m+"m ago"; const hr=Math.round(m/60); if(hr<24)return hr+"h ago"; return Math.round(hr/24)+"d ago"; };
+
+  // Leadership digest — a morning briefing in plain language (leaders think in
+  // stories, not metrics): name names, name events, phrase as sentences.
+  const nc = eventsNoContent;
+  const digest = [];
+  if (health.blocked>0)      digest.push(`${health.blocked} project${pl(health.blocked)} ${health.blocked===1?"is":"are"} blocked${blockerName?`, waiting on ${blockerName}`:""}.`);
+  if (health.overdue>0)      digest.push(`${health.overdue} item${pl(health.overdue)} ${health.overdue===1?"has":"have"} slipped past ${health.overdue===1?"its":"their"} deadline.`);
+  if (health.awaitingQA>0)   digest.push(`${health.awaitingQA} piece${pl(health.awaitingQA)} ${health.awaitingQA===1?"needs":"need"} QA before going out.`);
+  if (nc.length>0)           digest.push(nc.length===1 ? `${nc[0].name} still has no assigned content.` : `${nc[0].name} and ${nc.length-1} other event${pl(nc.length-1)} have no content yet.`);
+  if (pending.length>0)      digest.push(`${pending.length} volunteer account${pl(pending.length)} ${pending.length===1?"is":"are"} waiting to be approved.`);
+  if (health.ready>0)        digest.push(`${health.ready} piece${pl(health.ready)} ${health.ready===1?"is":"are"} ready to post.`);
+  const primary = health.blocked>0 ? { label:"Review blockers", go:()=>onGoContent("blocked") }
+    : health.overdue>0    ? { label:"Review overdue",   go:()=>onGoContent("overdue") }
+    : pending.length>0    ? { label:"Review approvals", go:onGoPeople }
+    : health.awaitingQA>0 ? { label:"See the QA queue", go:()=>onGoContent("qa") }
+    : null;
+
+  // Ranked health strip — severity order, only tinted when there's something.
+  const chips = [
+    { n:health.blocked,    label:"Blocked",    tone:"red",     go:()=>onGoContent("blocked") },
+    { n:health.overdue,    label:"Overdue",    tone:"amber",   go:()=>onGoContent("overdue") },
+    { n:health.awaitingQA, label:"Awaiting QA",tone:"blue",    go:()=>onGoContent("qa") },
+    { n:pending.length,    label:"Approvals",  tone:"violet",  go:onGoPeople },
+    { n:health.ready,      label:"Ready",      tone:"green",   go:()=>onGoContent("ready") },
+    { n:health.unassigned, label:"Unassigned", tone:"neutral", go:()=>onGoContent("needowner") },
   ];
 
   return (
     <>
-      {/* Quick actions first — the things a leader comes here to DO */}
-      <div className="sb-toolbar">
-        <button className="sb-btn compact" onClick={onNewContent}><PlusIcon className="hi hi-sm" aria-hidden="true"/> New content</button>
-        <button className="sb-btn ghost compact" onClick={()=>setEventNote(v=>!v)}>Create event</button>
-        {ENABLE_CSV_IMPORT && <button className="sb-btn ghost compact" onClick={onGoImport}>Import</button>}
-        <button className="sb-tertiary" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign</button>
-      </div>
-      {eventNote && <div className="sb-assign" style={{marginTop:10}}>
-        Event management is coming soon. Pastor birthdays &amp; key dates already power the reminders on Home.</div>}
-
-      {/* Health overview */}
-      <div className="sb-health" style={{marginTop:18}}>
-        {cards.map(c => (
-          <button key={c.k} className={"sb-hcard tone-"+c.tone} onClick={c.go}>
-            <span className="n">{c.n}</span><span className="l">{c.label}</span>
-          </button>
-        ))}
+      <div className="sb-eyebrow">{greet}</div>
+      <div className="sb-adhead">
+        <div className="sb-h">Leadership overview</div>
+        <AdminActions onNewContent={onNewContent} onNewEvent={onGoEvents} onAutoAll={onAutoAll} onImport={onGoImport} />
       </div>
 
-      {/* Decision #1: people waiting to be let in */}
-      {pending.length>0 && <>
-        <div className="sb-shead sb-shead-strong"><h2>Waiting for approval</h2><span className="sb-tag">{pending.length}</span></div>
-        <div className="sb-prowlist">
-          {pending.map(u => (
-            <PendingRow key={u.id} u={u} tasks={tasks}
-              onReview={()=>onEditUser(u)} onReject={onDeleteUser} onAssignSuggested={onAssignSuggested} />
-          ))}
+      {/* Briefing row: the summary + project health, side by side (compact). */}
+      <div className="sb-adtop">
+        <div className="sb-digest">
+          <div className="sb-digest-h"><SparklesIcon className="hi hi-sm" aria-hidden="true"/> Today’s summary</div>
+          {digest.length===0
+            ? <div className="sb-digest-clear">Everything’s on track — nothing needs you right now. 🎉</div>
+            : <ul className="sb-digest-list">{digest.slice(0,4).map((d,i)=><li key={i}>{d}</li>)}</ul>}
+          {primary && <button className="sb-btn compact" style={{marginTop:12,alignSelf:"flex-start"}} onClick={primary.go}>{primary.label} →</button>}
         </div>
-      </>}
+        <div className="sb-healthcard">
+          <div className="sb-digest-h">Project health</div>
+          <div className="sb-healthrows">
+            {chips.map((c,i)=>(
+              <button key={i} className={"sb-healthrow tone-"+c.tone+(c.n>0?" active":"")} onClick={c.go}>
+                <span className="hdot" aria-hidden="true"/><span className="hl">{c.label}</span><span className="hn">{c.n}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
-      {/* Only problematic items — overdue, blocked, missing owner/crew */}
-      <div className="sb-shead sb-shead-strong"><h2>Needs attention</h2><span className="sb-tag">{attention.length}</span></div>
-      {attention.length===0
-        ? <div className="sb-empty"><div className="big">✓</div>Nothing currently needs leadership attention.</div>
-        : <div className="sb-list">{attention.slice(0,6).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>}
-      {attention.length>6 && <button className="sb-morelink" onClick={()=>onGoContent("overdue")}>See everything that's stuck in Content →</button>}
+      {/* Decision grid — same language as Home. */}
+      <div className="sb-adash">
+        {/* Needs attention — the hero: broken/overdue/unassigned work. */}
+        <section className="sb-awd wd-attn">
+          <div className="sb-shead sb-shead-primary">
+            <div className="sb-shead-main"><h2>Needs attention</h2>
+              {attention.length>0 && <span className="sb-headcount danger">{attention.length}</span>}</div>
+            {attention.length>4 && <button className="link subtle" onClick={()=>onGoContent("overdue")}>See all →</button>}
+          </div>
+          {attention.length===0
+            ? <div className="sb-empty compact sb-empty-glad"><span className="sb-empty-emoji" aria-hidden="true">✅</span>
+                <b>All clear.</b><span>Nothing is stuck right now.</span></div>
+            : <div className="sb-list">{attention.slice(0,4).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>}
+        </section>
 
-      {/* Healthy work that can advance with a nudge */}
-      {ready.length>0 && <>
-        <div className="sb-shead"><h2>Ready to move</h2><span className="sb-tag">{ready.length}</span></div>
-        <div className="sb-list">{ready.slice(0,5).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>
-        {ready.length>5 && <button className="sb-morelink" onClick={()=>onGoContent("ready")}>See all ready to move →</button>}
-      </>}
+        {/* Approvals — accounts waiting to be let in. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><div className="sb-shead-main"><h2>Waiting for approval</h2>
+            {pending.length>0 && <span className="sb-headcount">{pending.length}</span>}</div></div>
+          {pending.length===0
+            ? <div className="sb-empty compact">No one is waiting to be approved.</div>
+            : <div className="sb-prowlist">{pending.map(u => (
+                <PendingRow key={u.id} u={u} tasks={tasks} onReview={()=>onEditUser(u)} onReject={onDeleteUser} onAssignSuggested={onAssignSuggested} />
+              ))}</div>}
+        </section>
 
-      {/* Upcoming events with a "no content yet" flag */}
-      {events.length>0 && <>
-        <div className="sb-shead"><h2>Upcoming</h2></div>
-        <div className="sb-evlist">
-          {events.map((e,i) => {
-            const n = eventCount(e);
-            return (
-              <div className="sb-ev" key={i}>
-                <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
-                <div style={{flex:1,minWidth:0}}>
-                  <div className="sb-ev-name">{e.name}</div>
-                  <div className="sb-ev-sub">
-                    {fmtEventDate(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
-                    {n>0
-                      ? <> · {n} content item{n!==1?"s":""} planned</>
-                      : <span className="sb-ev-warn"> · ⚠ no content assigned</span>}
+        {/* Upcoming — events + whether they have content yet. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><h2>Upcoming</h2>
+            <button className="link subtle" onClick={onGoEvents}>Manage →</button></div>
+          {events.length===0 ? <div className="sb-empty compact">No upcoming events.</div>
+            : <div className="sb-evlist">{events.map((e,i)=>{
+                const n = eventCount(e);
+                return (
+                  <div className="sb-ev" key={i}>
+                    <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+                    <div className="sb-ev-body">
+                      <div className="sb-ev-name">{e.name}</div>
+                      <div className="sb-ev-sub"><b>{e.daysAway===0?"Today":e.daysAway===1?"Tomorrow":`In ${e.daysAway} days`}</b> · {fmtEventDate(e.date)}</div>
+                      <div className="sb-ev-foot">
+                        <span className={"sb-ev-status"+(n>0?" ok":" sb-ev-warn")}>{n>0?`${n} planned`:"No content assigned"}</span>
+                        {n===0 && onNewForEvent && <button className="sb-ev-link" onClick={()=>onNewForEvent(eventPrefill(e))}>Create →</button>}
+                      </div>
+                    </div>
                   </div>
-                </div>
-                {n===0 && onNewForEvent &&
-                  <button className="sb-btn ghost compact" onClick={()=>onNewForEvent(eventPrefill(e))}>Create content</button>}
-              </div>
-            );
-          })}
-        </div>
-      </>}
+                );
+              })}</div>}
+        </section>
 
-      {/* Recent activity feed — who did what across the team */}
-      {activity.length>0 && <>
-        <div className="sb-shead"><h2>Activity</h2></div>
-        <div className="sb-actfeed">
-          {activity.map((a,i) => (
-            <button className="sb-actrow" key={i} onClick={()=>h.open(a.taskId)}>
-              <span className="sb-act-dot"/>
-              <span className="sb-act-txt"><b>{a.who}</b> {a.verb} “{a.title}”</span>
-              <span className="sb-act-ago">{ago(a.at)}</span>
-            </button>
-          ))}
-        </div>
-      </>}
+        {/* Team health — the people, ranked by workload with a tiny load bar. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><div className="sb-shead-main"><h2>Team health</h2>
+            {busy>0 && <span className="sb-headcount">{busy} busy</span>}</div>
+            <button className="link subtle" onClick={onGoPeople}>People →</button></div>
+          <div className="sb-teamlist sb-widcard">
+            {teamRanked.slice(0,5).map((m,i)=>{
+              const tone = m.n>=4 ? "over" : m.n===0 ? "free" : "ok";
+              const tag  = m.n>=4 ? "Overloaded" : m.n===0 ? "Available" : "Healthy";
+              return (
+                <button className="sb-teamrow" key={i} onClick={onGoPeople}>
+                  <span className="sb-av" aria-hidden="true">{initials(m.name)}</span>
+                  <span className="sb-teamrow-name">{m.name}</span>
+                  <span className="sb-teambar"><i className={"t-"+tone} style={{width:`${Math.max(6,Math.min(100,(m.n/maxLoad)*100))}%`}}/></span>
+                  <span className={"sb-teamrow-tag t-"+tone}>{m.n} · {tag}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Ready to publish — healthy work a nudge from done. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><div className="sb-shead-main"><h2>Ready to post</h2>
+            {ready.length>0 && <span className="sb-headcount ok">{ready.length}</span>}</div>
+            {ready.length>4 && <button className="link subtle" onClick={()=>onGoContent("ready")}>See all →</button>}</div>
+          {ready.length===0 ? <div className="sb-empty compact">Nothing’s ready to post yet.</div>
+            : <div className="sb-list">{ready.slice(0,4).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>}
+        </section>
+
+        {/* Recent activity — who did what, GitHub-style. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><h2>Recent activity</h2></div>
+          {activity.length===0 ? <div className="sb-empty compact">No activity yet.</div>
+            : <div className="sb-actfeed2 sb-widcard">{activity.map((a,i)=>(
+                <button className="sb-actrow2" key={i} onClick={()=>h.open(a.taskId)}>
+                  <span className="sb-av sb-actrow2-av" aria-hidden="true">{initials(a.who)}
+                    <span className={"sb-actrow2-dot type-"+a.type}/></span>
+                  <span className="sb-actrow2-body">
+                    <span className="sb-actrow2-name">{a.who}</span>
+                    <span className="sb-actrow2-act">{a.verb} <span className="ct">{a.title}</span></span>
+                    <span className="sb-actrow2-meta">{agoT(a.at)}</span>
+                  </span>
+                </button>
+              ))}</div>}
+        </section>
+      </div>
     </>
   );
 }
@@ -3624,23 +3785,25 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
   const initial = useRef(JSON.stringify(f));
   const isDirty = JSON.stringify(f) !== initial.current;
   const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
+  const drag = useSheetDrag(requestClose);
   return (
     <>
     <div className="sb-scrim" onClick={requestClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} style={drag.sheetStyle}>
+        <div className="sb-grab" {...drag.handleProps}><span/></div>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{task?"Edit content":"Plan content"}</b>
           <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           <div className="sb-sub" style={{marginTop:0}}>Plan a piece of content. The team adds the deliverable links later, when it's ready for QA.</div>
-          <div className="sb-field"><label>Content title</label>
+          <div className="sb-field"><label>Content title<span className="sb-req" aria-hidden="true">*</span></label>
             <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Sunday welcome reel" /></div>
           <div className="sb-btnrow">
-            <div className="sb-field" style={{flex:1}}><label>Type</label>
+            <div className="sb-field" style={{flex:1}}><label>Type<span className="sb-req" aria-hidden="true">*</span></label>
               <select value={f.type} onChange={e=>set("type",e.target.value)}>{TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
-            <div className="sb-field" style={{flex:1}}><label>Location</label>
+            <div className="sb-field" style={{flex:1}}><label>Location<span className="sb-req" aria-hidden="true">*</span></label>
               <select value={f.location} onChange={e=>set("location",e.target.value)}><option>479</option><option>828</option><option>Both</option></select></div>
           </div>
-          <div className="sb-field"><label>Owner: who brings the idea / leads</label>
+          <div className="sb-field"><label>Owner: who brings the idea / leads<span className="sb-req" aria-hidden="true">*</span></label>
             <select value={f.owner||"Pending"} onChange={e=>set("owner",e.target.value)}>
               <option value="Pending">Pending: unassigned</option>
               {users.map(u=><option key={u.id}>{u.name}</option>)}</select>
@@ -3774,7 +3937,7 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
         <div className="bd">
           {isPending && <div className="sb-banner">Set their skills and location, then approve to let them in.</div>}
 
-          <div className="sb-field"><label>Name</label>
+          <div className="sb-field"><label>Name<span className="sb-req" aria-hidden="true">*</span></label>
             <input value={f.name} onChange={e=>set("name",e.target.value)} /></div>
           <div className="sb-field"><label>Email (login)</label>
             <input value={user.email} disabled style={{opacity:.7}} /></div>
@@ -3789,12 +3952,12 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
               <option value="">No department yet</option>
               {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
 
-          <div className="sb-field"><label>Skills (what they can do)</label>
+          <div className="sb-field"><label>Skills (what they can do)<span className="sb-req" aria-hidden="true">*</span></label>
             <div className="sb-seg" style={{flexWrap:"wrap"}}>
               {SK.map(s=>(<button key={s} className={"sb-segbtn"+(f.skills.includes(s)?" on":"")}
                 onClick={()=>toggleSkill(s)}>{roleLabel(s)}</button>))}</div></div>
 
-          <div className="sb-field"><label>Service location</label>
+          <div className="sb-field"><label>Service location<span className="sb-req" aria-hidden="true">*</span></label>
             <div className="sb-seg">{["479","828"].map(l=>(
               <button key={l} className={"sb-segbtn"+(f.location.includes(l)?" on":"")} onClick={()=>toggleLoc(l)}>{l}</button>))}</div></div>
 

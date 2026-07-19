@@ -563,7 +563,7 @@ a{color:var(--primary)}
 .sb-overload{font-size:10.5px;color:var(--red);font-weight:700;margin-left:6px}
 .sb-idle{font-size:10.5px;color:var(--amber);font-weight:700;margin-left:6px}
 
-.sb-scrim{position:fixed;inset:0;height:100vh;height:100dvh;background:rgba(33,27,51,.45);z-index:50;
+.sb-scrim{position:fixed;inset:0;height:100vh;height:100dvh;background:var(--overlay);z-index:50;
   display:flex;align-items:flex-end;justify-content:center}
 /* Cap the sheet to the *visible* viewport (dvh), minus the top safe-area, so a
    bottom-anchored sheet's top can never hide under the iPhone Safari/Chrome URL
@@ -1950,3 +1950,211 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
     transform var(--motion-fast) var(--ease-standard)}
   .sb-shead .link:hover,.sb-ev-link:hover,.sb-proglink:hover{color:var(--primary)}
 }
+
+/* =================================================================
+   LEADERSHIP OVERVIEW (Admin) — decision-first, Home's language.
+   ================================================================= */
+
+/* Hero head: title + top-right "New" actions menu. */
+.sb-adhead{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}
+.sb-adhead .sb-h{margin:0}
+
+/* Leadership digest — the "what matters now" summary card. */
+.sb-digest{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:16px 18px 16px 20px;box-shadow:var(--shadow-sm);position:relative;overflow:hidden}
+.sb-digest::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary)}
+.sb-digest-h{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;
+  color:var(--primary);margin-bottom:10px}
+.sb-digest-h .hi{color:var(--primary)}
+.sb-digest-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.sb-digest-list li{font-size:14px;color:var(--text-primary);line-height:1.5}
+.sb-digest-clear{font-size:14px;color:var(--text-secondary)}
+
+/* Ranked health strip — tinted only when the count matters. */
+.sb-healthbar{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 4px}
+.sb-healthchip{display:inline-flex;align-items:center;gap:7px;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r-control);padding:7px 12px;cursor:pointer;
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard)}
+.sb-healthchip:hover{border-color:var(--border-strong)}
+.sb-healthchip .hn{font-size:15px;font-weight:700;color:var(--text-primary);font-variant-numeric:tabular-nums}
+.sb-healthchip .hl{font-size:12.5px;color:var(--text-secondary);font-weight:500}
+.sb-healthchip.tone-red.active{background:var(--danger-muted)}    .sb-healthchip.tone-red.active .hn{color:var(--danger)}
+.sb-healthchip.tone-amber.active{background:var(--warning-muted)} .sb-healthchip.tone-amber.active .hn{color:var(--warning)}
+.sb-healthchip.tone-blue.active{background:var(--info-muted)}     .sb-healthchip.tone-blue.active .hn{color:var(--info)}
+.sb-healthchip.tone-violet.active{background:var(--primary-muted)}.sb-healthchip.tone-violet.active .hn{color:var(--primary)}
+.sb-healthchip.tone-green.active{background:var(--success-muted)} .sb-healthchip.tone-green.active .hn{color:var(--success)}
+
+/* Decision grid — paired widgets, same rhythm as Home. */
+.sb-adash{display:flex;flex-direction:column;gap:26px;margin-top:22px}
+.sb-awd{display:flex;flex-direction:column;min-width:0}
+@media(min-width:900px){ .sb-adash{display:grid;grid-template-columns:1fr 1fr;gap:34px 24px} }
+
+/* Section-count variants: attention = danger, ready = success. */
+.sb-headcount.danger{background:var(--danger-muted);color:var(--danger)}
+.sb-headcount.ok{background:var(--success-muted);color:var(--success)}
+
+/* Team-health tiles. */
+.sb-teamhealth{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.sb-thstat{display:flex;flex-direction:column;align-items:flex-start;gap:2px;cursor:pointer;text-align:left;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:14px;
+  transition:border-color var(--motion-fast) var(--ease-standard),transform var(--motion-instant) var(--ease-standard)}
+.sb-thstat:hover{border-color:var(--border-strong);transform:translateY(-1px)}
+.sb-thstat .n{font-size:22px;font-weight:700;line-height:1;color:var(--text-primary);font-variant-numeric:tabular-nums}
+.sb-thstat .l{font-size:12px;color:var(--text-muted);font-weight:500;margin-top:3px}
+.sb-thstat.warn .n{color:var(--warning)}
+
+/* =================================================================
+   LEADERSHIP OVERVIEW v2 — compact briefing + people panel.
+   ================================================================= */
+
+/* Briefing row: summary (wider) + project health, side by side. */
+.sb-adtop{display:flex;flex-direction:column;gap:16px}
+@media(min-width:900px){ .sb-adtop{display:grid;grid-template-columns:1.6fr 1fr;gap:20px;align-items:start} }
+.sb-digest{padding:14px 16px 14px 18px;display:flex;flex-direction:column}
+.sb-digest-list{gap:5px}
+.sb-digest-list li{font-size:13.5px}
+
+/* Project health — one card, severity rows; count tints only when it matters. */
+.sb-healthcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:14px 16px;box-shadow:var(--shadow-sm)}
+.sb-healthcard .sb-digest-h{color:var(--text-secondary)}
+.sb-healthrows{display:flex;flex-direction:column;gap:1px}
+.sb-healthrow{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:6px;border-radius:8px;transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-healthrow:hover{background:var(--surface-muted)}
+.sb-healthrow .hdot{width:8px;height:8px;border-radius:50%;background:var(--border-strong);flex:none}
+.sb-healthrow .hl{flex:1;min-width:0;font-size:13px;color:var(--text-secondary)}
+.sb-healthrow .hn{font-size:14px;font-weight:700;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.sb-healthrow.active .hl,.sb-healthrow.active .hn{color:var(--text-primary)}
+.sb-healthrow.tone-red.active .hdot{background:var(--danger)}
+.sb-healthrow.tone-amber.active .hdot{background:var(--warning)}
+.sb-healthrow.tone-blue.active .hdot{background:var(--info)}
+.sb-healthrow.tone-violet.active .hdot{background:var(--primary)}
+.sb-healthrow.tone-green.active .hdot{background:var(--success)}
+
+/* Team health — people ranked by workload with a tiny load bar. */
+.sb-teamlist{display:flex;flex-direction:column;padding:2px 12px}
+.sb-teamrow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:9px 2px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);
+  transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-teamrow:last-child{border-bottom:none}
+.sb-teamrow:hover{background:var(--surface-muted)}
+.sb-teamrow .sb-av{width:26px;height:26px;font-size:10px;border:none;flex:none}
+.sb-teamrow-name{font-size:13.5px;font-weight:500;color:var(--text-primary);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:0;max-width:130px}
+.sb-teambar{flex:1;height:6px;border-radius:999px;background:var(--surface-muted);overflow:hidden;min-width:40px}
+.sb-teambar i{display:block;height:100%;border-radius:999px;background:var(--primary)}
+.sb-teambar i.t-over{background:var(--warning)} .sb-teambar i.t-free{background:var(--border-strong)}
+.sb-teambar i.t-ok{background:var(--success)}
+.sb-teamrow-tag{font-size:11.5px;font-weight:600;flex:none;color:var(--text-muted);white-space:nowrap}
+.sb-teamrow-tag.t-over{color:var(--warning)} .sb-teamrow-tag.t-ok{color:var(--text-secondary)}
+
+/* =================================================================
+   MOBILE POLISH PASS — spacing, layering, overflow, sheets, login.
+   ================================================================= */
+
+/* 1 — Beta banner: real padding on mobile, aligned to page content. */
+@media(max-width:899px){ .sb-beta{padding:8px 16px;margin:12px 0 4px} }
+
+/* 2 — Notification "More": only the chips scroll; the menu escapes above the
+   list with a subtle fade+scale. */
+.sb-nfilters{overflow:visible}
+.sb-nfilters-scroll{display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0;
+  overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.sb-nfilters-scroll::-webkit-scrollbar{display:none}
+@media(max-width:899px){ .sb-nfilters{overflow-x:visible;overflow-y:visible} }
+.sb-nmore-menu{z-index:40;transform-origin:top right;
+  animation:menuPop var(--motion-fast) var(--ease-enter)}
+@keyframes menuPop{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:none}}
+
+/* 3 — Profile sheet: match the rest of the app exactly (current tokens). */
+.sb-drawer{border-radius:var(--r-modal) var(--r-modal) 0 0;
+  padding:10px 12px calc(16px + env(safe-area-inset-bottom))}
+.sb-drawer-user{border-bottom-color:var(--border)}
+.sb-drawer-user .rl{color:var(--text-muted)}
+.sb-drawer-item{border-radius:var(--r-control);min-height:46px;color:var(--text-primary)}
+.sb-drawer-item:hover,.sb-drawer-item:active{background:var(--surface-muted)}
+.sb-drawer-item .hi{color:var(--text-secondary)}
+.sb-drawer-item.danger,.sb-drawer-item.danger .hi{color:var(--danger)}
+.sb-drawer-state{background:var(--surface-muted);border:1px solid var(--border);color:var(--text-secondary)}
+.sb-brandfoot{border-top-color:var(--border)}
+.sb-brandfoot b{color:var(--text-primary)}
+
+/* 4 — Team Progress + stat cards: never overflow; labels truncate, equal heights. */
+.sb-progstat,.sb-progwin,.sb-stat2,.sb-thstat{min-width:0}
+.sb-progstat .l,.sb-progwin .wtop,.sb-stat2-l,.sb-stat2-sub{min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.sb-progstat .n,.sb-progwin .wn,.sb-stat2-n{font-variant-numeric:tabular-nums}
+.sb-statgrid,.sb-progstats,.sb-progwins{align-items:stretch}
+@media(max-width:400px){
+  .sb-progstat{padding:8px 9px} .sb-progstat .n{font-size:17px} .sb-progstat .l{font-size:10.5px}
+  .sb-progwin{padding:9px 10px} .sb-progwin .wn{font-size:18px}
+}
+
+/* 5 — Login: current design language (neutral surface, wordmark, indigo). */
+.sb-login{background:var(--background)}
+.sb-lwordmark{display:flex;flex-direction:column;align-items:center;line-height:1.1;
+  font-size:26px;font-weight:600;letter-spacing:-.02em;color:var(--text-primary)}
+.sb-lwordmark .ifc{font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--gold);font-weight:700;margin-bottom:5px}
+.sb-tagline{color:var(--text-secondary);font-weight:600;font-size:14px;letter-spacing:0;margin-top:12px}
+.sb-login p{color:var(--text-muted);font-size:14px;margin-top:6px}
+.sb-lcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);box-shadow:var(--shadow-lg)}
+.sb-lcardhd{color:var(--text-primary)}
+.sb-lprimary{box-shadow:none}
+
+/* 6 — Bottom sheets: springier entrance (native-iOS feel), backdrop already fades. */
+.sb-sheet,.sb-drawer,.sb-notifpanel{animation:sheetSpring var(--motion-slow) cubic-bezier(.32,1.32,.5,1)}
+@keyframes sheetSpring{from{transform:translateY(20px);opacity:.5}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){ .sb-sheet,.sb-drawer,.sb-notifpanel{animation:none} }
+
+/* 9 — Touch targets: keep key mobile controls ≥44px. */
+@media(max-width:899px){
+  .sb-fchip,.sb-segbtn{min-height:40px;display:inline-flex;align-items:center}
+  .sb-ev-link,.sb-shead .link{min-height:36px;display:inline-flex;align-items:center}
+}
+
+/* 5 — Plan Content modal: tighter vertical rhythm on phones so core fields are
+   reachable without so much scrolling (spacing only — no fields removed). */
+@media(max-width:899px){
+  .sb-sheet .bd{padding-top:12px}
+  .sb-sheet .bd .sb-field{margin-bottom:10px}
+  .sb-sheet .bd .sb-sub{margin-bottom:10px}
+  .sb-sheet .bd .sb-shead{margin:16px 0 8px}
+}
+
+/* =================================================================
+   NAV TRANSITIONS + DRAG SHEETS + OVERFLOW GUARD.
+   ================================================================= */
+
+/* 7 — Inter-page transition: a brief skeleton, then the page cross-fades in
+   (never a blank flash). */
+.sb-pageskel{padding-top:8px}
+.sb-skelgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:20px}
+@media(max-width:559px){ .sb-skelgrid{grid-template-columns:1fr} }
+.sb-skelgrid .sb-skel{border-radius:var(--r-card)}
+.sb-pageshow{animation:pageFade var(--motion-standard) var(--ease-enter)}
+@keyframes pageFade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.sb-pagehide{display:none}
+@media (prefers-reduced-motion:reduce){ .sb-pageshow{animation:none} }
+
+/* 8 — Bottom-sheet grab handle (mobile) + drag affordance. */
+.sb-grab{display:flex;justify-content:center;align-items:center;padding:9px 0 5px;
+  cursor:grab;touch-action:none;flex:none}
+.sb-grab span{width:38px;height:4px;border-radius:999px;background:var(--border-strong)}
+.sb-grab:active{cursor:grabbing}
+@media(min-width:900px){ .sb-grab{display:none} }
+
+/* Workflow (and every page): never scroll the page sideways. */
+.sb-content{overflow-x:hidden}
+
+/* Plan Content (and any sheet): flex fields must be allowed to shrink, and the
+   body never scrolls sideways — fixes horizontal overflow / left-clipping. */
+.sb-sheet .bd{overflow-x:hidden}
+.sb-btnrow{min-width:0}
+.sb-btnrow > *,.sb-field,.sb-inline > *{min-width:0}
+.sb-field input,.sb-field select,.sb-field textarea{max-width:100%}
+
+/* Required-field indicator on form labels. */
+.sb-req{color:var(--danger);font-weight:700;margin-left:2px}

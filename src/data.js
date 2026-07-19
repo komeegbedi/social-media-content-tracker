@@ -197,6 +197,12 @@ export const fmt = (s) => { if(!s) return "-"; const d=new Date(s+"T00:00:00");
   return d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); };
 export const daysTo = (s) => { if(!s) return null; const d=new Date(s+"T00:00:00");
   return Math.round((d-today())/86400000); };
+// Content titles always display with a capital first letter, no matter how the
+// user typed them. Preserves the rest (so acronyms like QA / IG survive).
+export const capTitle = (s) => {
+  const t = (s == null ? "" : String(s)).replace(/^\s+/, "");
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+};
 
 /* ---- auto-assign (mirrors the Apps Script rules) ---- */
 export function autoAssign(task, users) {
