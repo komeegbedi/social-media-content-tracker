@@ -138,7 +138,7 @@ a{color:var(--primary)}
   .sb-side{display:flex;flex-direction:column;width:var(--side);flex:none;height:100%;
     border-right:1px solid var(--line);overflow-y:auto;padding:22px 14px;background:var(--sidebar)}
   .sb-content{padding-bottom:24px}
-  .sb-content>*{max-width:1000px;padding-left:10px;padding-right:10px}
+  .sb-content>*{max-width:1040px;padding-left:10px;padding-right:10px}
 }
 
 .sb-sbrand{letter-spacing:-.015em;font-weight:600;font-size:19px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
@@ -228,12 +228,20 @@ a{color:var(--primary)}
 .dot-amber{color:var(--amber)} .dot-green{color:var(--green)}
 .dot-blue{color:var(--blue)} .dot-red{color:var(--red)} .dot-violet{color:var(--violet)}
 
-.sb-shead{display:flex;align-items:baseline;justify-content:space-between;margin:30px 2px 12px}
+.sb-shead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:30px 2px 12px}
 .sb-shead h2{font-size:19px;font-weight:600;letter-spacing:-.01em}
 @media(min-width:900px){ .sb-shead h2{font-size:21px} }
-.sb-shead .link{font-size:12.5px;color:var(--violet);font-weight:600;background:none;border:none;padding:0}
+.sb-shead .link{font-size:12.5px;color:var(--violet);font-weight:600;background:none;border:none;padding:0;flex:none}
 .sb-shead .link.subtle{color:var(--muted);font-weight:500;font-size:12px}
 .sb-shead-strong h2{font-size:19px;font-weight:700}
+/* Section heading with an optional count badge — title + badge stay grouped
+   (never concatenated) and the right-hand link stays aligned. Works at every
+   width; the badge is a real chip, not stray text next to the title. */
+.sb-shead-main{display:inline-flex;align-items:center;gap:8px;min-width:0}
+.sb-headcount{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+  min-width:24px;height:24px;padding:0 7px;border-radius:var(--r-pill);
+  background:var(--surface-muted);color:var(--text-secondary);
+  font-size:12px;font-weight:600;line-height:1}
 
 .sb-list{display:grid;grid-template-columns:1fr;gap:12px}
 @media(min-width:900px){ .sb-list{grid-template-columns:1fr 1fr} }
@@ -435,7 +443,7 @@ a{color:var(--primary)}
 /* Event cards (v1.2): dense Apple-Reminders layout — emoji, title, relative
    date, then a divider and a footer row (status · action link). Staggered in. */
 .sb-ev{display:flex;align-items:flex-start;gap:12px;background:var(--surface);border:1px solid var(--border);
-  border-radius:14px;padding:13px 14px;animation:pageIn var(--motion-standard) var(--ease-enter) both;animation-delay:var(--d,0ms)}
+  border-radius:var(--r-card);padding:13px 14px;animation:pageIn var(--motion-standard) var(--ease-enter) backwards;animation-delay:var(--d,0ms)}
 .sb-ev-ic{font-size:24px;flex:none;line-height:1;color:var(--text-muted);margin-top:1px}
 .sb-ev-body{flex:1;min-width:0}
 .sb-ev-name{font-weight:600;font-size:15px;line-height:1.3;
@@ -698,9 +706,13 @@ a{color:var(--primary)}
 .sb-lcardhd{letter-spacing:-.015em;font-size:19px;font-weight:600;color:var(--ink);margin-bottom:16px}
 .sb-lerr{background:var(--red-soft);color:var(--red);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
 .sb-lok{background:var(--green-soft);color:var(--green);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
-.sb-gbtn{width:100%;background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px;
-  font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--ink);cursor:pointer}
-.sb-gbtn:hover{border-color:var(--violet)}
+/* Google button: fixed white surface (brand), but with a defined border, dark
+   Google-grey text, and a soft shadow so it lifts off the white sign-in card
+   instead of blending in. Fixed colours keep it correct in light AND dark. */
+.sb-gbtn{width:100%;background:#fff;border:1px solid #dadce0;border-radius:12px;padding:13px;
+  font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:9px;
+  color:#3c4043;cursor:pointer;box-shadow:0 1px 2px rgba(60,64,67,.14),0 1px 3px rgba(60,64,67,.08)}
+.sb-gbtn:hover{background:#f8f9fa;border-color:#c9ccce;box-shadow:0 1px 3px rgba(60,64,67,.2),0 2px 6px rgba(60,64,67,.1)}
 .sb-gicon{width:18px;height:18px;display:inline-block}
 .sb-ldiv{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:11px;margin:16px 0}
 .sb-ldiv::before,.sb-ldiv::after{content:"";height:1px;background:var(--line);flex:1}
@@ -1190,12 +1202,26 @@ a{color:var(--primary)}
 
 /* Designed confirmation dialog */
 .sb-confirm{background:var(--surface-elevated);border-radius:var(--r-panel);padding:22px;width:100%;max-width:400px;
-  margin:auto;box-shadow:var(--shadow-lg);animation:rise var(--motion-standard) var(--ease-out)}
-@media(max-width:559px){ .sb-confirm{margin:auto 0 0;border-radius:var(--r-panel) var(--r-panel) 0 0;max-width:100%} }
+  margin:auto;box-shadow:var(--shadow-lg);animation:modalIn var(--motion-standard) var(--ease-enter)}
+@media(max-width:559px){ .sb-confirm{margin:auto 0 0;border-radius:var(--r-panel) var(--r-panel) 0 0;max-width:100%;
+  padding-bottom:calc(22px + env(safe-area-inset-bottom))} }
 .sb-confirm p{font-size:13.5px;color:var(--text-secondary);line-height:1.5;margin-top:8px}
 .sb-confirm .sb-btnrow .sb-btn{margin-top:0}
 .sb-btn.danger{background:var(--danger);color:#fff}
 .sb-btn.danger:hover{background:var(--danger);filter:brightness(.94)}
+/* Tone header: an icon chip paired with the title (never colour alone). */
+.sb-confirm-hd{display:flex;align-items:center;gap:11px}
+.sb-confirm-hd b{font-size:17px}
+.sb-confirm-ic{width:36px;height:36px;border-radius:10px;flex:none;display:grid;place-items:center}
+.sb-confirm-ic .hi{width:20px;height:20px}
+.sb-confirm-hd.tone-danger .sb-confirm-ic{background:var(--danger-muted);color:var(--danger)}
+.sb-confirm-hd.tone-warning .sb-confirm-ic{background:var(--warning-muted);color:var(--warning)}
+.sb-confirm-hd.tone-neutral .sb-confirm-ic{background:var(--primary-muted);color:var(--primary)}
+/* Consequences: what will be removed / what remains. */
+.sb-confirm-list{margin:10px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
+.sb-confirm-list li{font-size:12.5px;color:var(--text-secondary);line-height:1.45}
+.sb-confirm .sb-btn[aria-busy="true"]{opacity:.85;cursor:progress}
+.sb-btn.gold:hover{filter:brightness(.96)}
 
 /* =================================================================
    MOTION PASS (v1.2) — one shared system, transform/opacity only.
@@ -1273,3 +1299,435 @@ input,textarea,select{transition:border-color var(--motion-fast) var(--ease-stan
 .sb-group.archived{opacity:.72}
 .sb-status.st-archived{color:var(--text-muted)}
 .sb-status.st-archived .pip{background:var(--text-muted)}
+
+/* =================================================================
+   DESKTOP PARITY (v1.1.2) — make the fixed desktop shell feel like a
+   larger, more spacious version of the mobile experience: one gliding
+   sidebar indicator (same language as the mobile bottom nav), tighter
+   rhythm, integrated footer, centred beta banner, compact cards. Shares
+   the SAME motion tokens + palette as mobile; no animation library.
+   ================================================================= */
+@media(min-width:900px){
+  /* Sidebar surface: soft layered tint + a hairline border, not a hard block. */
+  .sb-side{padding:20px 14px;gap:2px;
+    border-right:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
+
+  /* Navigation: compact rhythm + one shared sliding active indicator. */
+  .sb-snav{position:relative;gap:4px}
+  .sb-snav-ind{position:absolute;left:0;right:0;top:0;z-index:0;pointer-events:none;
+    height:var(--ind-h,44px);border-radius:13px;background:var(--primary-muted);
+    opacity:var(--ind-o,0);transform:translateY(var(--ind-y,0));
+    transition:transform var(--motion-standard) var(--ease-standard),
+               height var(--motion-standard) var(--ease-standard),
+               opacity var(--motion-fast) var(--ease-standard)}
+  @media (prefers-reduced-motion:reduce){ .sb-snav-ind{transition:none} }
+  .sb-snav button{position:relative;z-index:1;min-height:44px;padding:10px 12px;
+    border-radius:13px;gap:12px;
+    transition:color var(--motion-fast) var(--ease-standard),
+               background-color var(--motion-fast) var(--ease-standard),
+               transform var(--motion-instant) var(--ease-standard)}
+  .sb-snav button .ico .hi{width:21px;height:21px}
+  .sb-snav button:hover{transform:translateX(2px)}
+  .sb-snav button:active{transform:translateX(1px) scale(.99)}
+  /* Active = the gliding lavender pill provides the fill; keep only colour+weight. */
+  .sb-snav button.on{background:transparent;color:var(--primary);font-weight:600}
+  .sb-snav button:not(.on):hover{background:var(--surface-muted);color:var(--text-primary)}
+  /* Section label: a comfortable gap above, not a big void. */
+  .sb-navgroup{padding:18px 12px 5px}
+
+  /* Footer: notification row + profile row + quiet link, aligned to the nav. */
+  /* Pin the personal area (Profile · Notifications · Report) to the BOTTOM. */
+  .sb-sfoot{margin-top:auto;padding-top:12px;gap:3px;
+    border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent)}
+  .sb-sfoot .sb-report{background:none;border:none;border-radius:13px;min-height:44px;
+    padding:9px 12px;gap:12px;color:var(--text-secondary);
+    transition:color var(--motion-fast) var(--ease-standard),
+               background-color var(--motion-fast) var(--ease-standard),
+               transform var(--motion-instant) var(--ease-standard)}
+  .sb-sfoot .sb-report:hover{background:var(--surface-muted);color:var(--text-primary);transform:translateX(2px)}
+  .sb-sfoot .sb-report:active{transform:translateX(1px) scale(.99)}
+  .sb-sfoot .sb-report .hi{width:21px;height:21px}
+  .sb-suserbtn{min-height:48px;padding:8px 10px;border-radius:13px;gap:11px}
+  .sb-suserbtn:hover{transform:translateX(2px)}
+  .sb-searchbtn .hi{width:20px;height:20px}
+
+  /* Beta banner: centred in the content column, aligned with the page below. */
+  .sb-beta{margin:18px auto 26px;padding:11px 16px}
+
+  /* Interactive cards: the same restrained 1px lift as mobile press language.
+     (Static info cards + the staggered event cards are intentionally excluded.) */
+  @media(hover:hover){
+    .sb-task-act:hover,.sb-attn:hover,.sb-listrow:hover,.sb-hcard:hover{transform:translateY(-1px)}
+  }
+}
+
+/* Beta-banner dismissal: fade + smooth height collapse, then unmount — no
+   blank gap left behind. Runs at every width (mobile keeps its compact style). */
+.sb-beta.closing{animation:betaOut 200ms var(--ease-exit) forwards;overflow:hidden;pointer-events:none}
+@keyframes betaOut{
+  from{max-height:56px}
+  to{opacity:0;max-height:0;margin-top:0;margin-bottom:0;padding-top:0;padding-bottom:0;transform:translateY(-4px)}
+}
+
+/* =================================================================
+   HOME DASHBOARD (desktop) — the phone stays a focused stack; wide
+   screens reflow the same widgets into a productivity dashboard and
+   reveal a few desktop-only ones. `.sb-dash`/`.sb-wd` are display:contents
+   on mobile so the phone layout is byte-for-byte the existing one.
+   ================================================================= */
+.sb-dash{display:contents}
+.sb-wd{display:contents}
+.wd-desktop{display:none}          /* new widgets: desktop-only */
+
+/* Widget surfaces used only inside desktop-only widgets (parents are
+   display:none on mobile, so these never affect the phone). */
+.sb-week{display:flex;flex-direction:column;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r-card);padding:8px 12px}
+.sb-week-day{display:flex;flex-direction:column;gap:1px;padding:7px 0;border-bottom:1px solid var(--border)}
+.sb-week-day:last-child{border-bottom:none}
+.sb-week-lbl{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--text-muted);margin-bottom:3px}
+.sb-week-row{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:6px 4px;border-radius:8px;
+  transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-week-row:hover{background:var(--surface-muted)}
+.sb-week-dot{width:6px;height:6px;border-radius:50%;background:var(--primary);flex:none}
+.sb-week-t{flex:1;min-width:0;font-size:13.5px;color:var(--text-primary);font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-week-meta{font-size:11.5px;color:var(--text-muted);flex:none}
+.sb-widcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:0 14px}
+.sb-actfeed.sb-widcard .sb-actrow:last-child{border-bottom:none}
+.sb-statgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.sb-qaGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.sb-qabtn{position:relative;display:flex;align-items:center;gap:10px;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r-card);padding:12px 13px;cursor:pointer;
+  font-size:13.5px;font-weight:600;color:var(--text-primary);text-align:left;
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-qabtn:hover{background:var(--surface-muted);border-color:var(--border-strong)}
+.sb-qabtn:active{transform:scale(.98)}
+.sb-qabtn .hi{width:19px;height:19px;color:var(--primary);flex:none}
+.sb-qabadge{margin-left:auto;background:var(--danger);color:#fff;font-size:10px;font-weight:700;
+  border-radius:999px;min-width:18px;height:18px;padding:0 5px;
+  display:inline-flex;align-items:center;justify-content:center}
+
+@media(min-width:900px){
+  /* Home breathes wider than the standard content column to fill the space. */
+  .sb-content>.sb-page.home{max-width:1240px;padding-bottom:60px}
+  /* Dashboard grid: full-width stats, then paired widgets of differing heights
+     so the board feels alive rather than stacked. Generous row gap between
+     sections; the pairs read as one connected workspace. */
+  /* Priority reads top-to-bottom, left-first: Stats → Your Focus (primary) →
+     Coming Up → Team Progress → Recent Activity → My Week. */
+  .sb-dash{display:grid;grid-template-columns:1fr 1fr;gap:44px 26px;margin-top:14px;
+    grid-template-areas:
+      "stats  stats"
+      "focus  events"
+      "team   activity"
+      "week   week";}
+  .sb-wd{display:flex;flex-direction:column;min-width:0}
+  .wd-desktop{display:flex}         /* now visible */
+  .wd-mobile{display:none}          /* recent-wins hidden — activity replaces it */
+  .wd-stats{grid-area:stats} .wd-events{grid-area:events} .wd-focus{grid-area:focus}
+  .wd-week{grid-area:week} .wd-activity{grid-area:activity} .wd-team{grid-area:team}
+  /* Widget heads: flush with the card edge below (perfect left-edge alignment),
+     tighter than the mobile 30px section gap (the grid gap spaces sections). */
+  .sb-wd .sb-shead{margin:0 0 12px;align-items:center}
+  .sb-wd .sb-shead h2{font-size:15px;font-weight:600}
+  /* Quick stats: four glanceable cards across. */
+  .sb-statgrid{grid-template-columns:repeat(4,1fr);margin-bottom:0}
+  /* Compact event cards on desktop — premium widget density, less whitespace. */
+  .sb-dash .sb-evlist{gap:8px}
+  .sb-dash .sb-ev{padding:11px 13px}
+  .sb-dash .sb-ev-ic{font-size:21px}
+  .sb-dash .sb-ev-foot{margin-top:7px;padding-top:7px}
+  /* Progress + wins fill their cell cleanly. */
+  .sb-wd .sb-wincards{margin-bottom:0}
+  /* Narrower desktop: stack the pairs so nothing gets cramped. */
+  @media(max-width:1099px){
+    .sb-statgrid{grid-template-columns:repeat(2,1fr)}
+  }
+}
+
+/* =================================================================
+   PREMIUM POLISH (v1.1.2) — hierarchy, richer stat cards, conversational
+   activity, urgency reads, lighter chrome, and restrained delight.
+   Refinement only; colours/typography/functionality unchanged.
+   ================================================================= */
+
+/* --- Stat cards: a number that answers "what next", with a soft tint,
+   an icon chip, and a supporting sub-metric. (Desktop-only widget.) --- */
+.sb-stat2{position:relative;display:flex;flex-direction:column;align-items:flex-start;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:14px 15px 13px;cursor:pointer;text-align:left;overflow:hidden;
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             box-shadow var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-stat2:hover{border-color:var(--border-strong);box-shadow:var(--shadow-sm);transform:translateY(-1px)}
+.sb-stat2:active{transform:translateY(0) scale(.99)}
+.sb-stat2-ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;
+  margin-bottom:9px;background:var(--surface-muted);color:var(--text-secondary)}
+.sb-stat2-ic .hi{width:18px;height:18px}
+.sb-stat2-n{font-size:26px;font-weight:700;line-height:1;letter-spacing:-.02em;
+  color:var(--text-primary);font-variant-numeric:tabular-nums}
+.sb-stat2-l{font-size:12.5px;font-weight:600;color:var(--text-secondary);margin-top:4px}
+.sb-stat2-sub{font-size:11.5px;font-weight:600;color:var(--text-muted);margin-top:2px}
+/* Soft per-tone personality — tints stay low; solid fallback via the base rule. */
+.sb-stat2.tone-violet{background:color-mix(in srgb,var(--primary) 5%,var(--surface))}
+.sb-stat2.tone-violet .sb-stat2-ic{background:var(--primary-muted);color:var(--primary)}
+.sb-stat2.tone-violet .sb-stat2-sub{color:var(--primary)}
+.sb-stat2.tone-amber{background:color-mix(in srgb,var(--warning) 6%,var(--surface))}
+.sb-stat2.tone-amber .sb-stat2-ic{background:var(--warning-muted);color:var(--warning)}
+.sb-stat2.tone-amber .sb-stat2-sub{color:var(--warning)}
+.sb-stat2.tone-blue{background:color-mix(in srgb,var(--info) 6%,var(--surface))}
+.sb-stat2.tone-blue .sb-stat2-ic{background:var(--info-muted);color:var(--info)}
+.sb-stat2.tone-blue .sb-stat2-sub{color:var(--info)}
+.sb-stat2.tone-green{background:color-mix(in srgb,var(--success) 6%,var(--surface))}
+.sb-stat2.tone-green .sb-stat2-ic{background:var(--success-muted);color:var(--success)}
+.sb-stat2.tone-green .sb-stat2-sub{color:var(--success)}
+
+/* --- Greeting: the hand waves once on load; the eyebrow steps back so the
+   main greeting stays the hero. --- */
+.sb-eyebrow{opacity:.7}
+.sb-wave{display:inline-block;transform-origin:72% 74%;animation:wave 1.8s ease .5s 1}
+@keyframes wave{0%,58%,100%{transform:rotate(0)}12%{transform:rotate(14deg)}
+  22%{transform:rotate(-8deg)}32%{transform:rotate(12deg)}42%{transform:rotate(-4deg)}50%{transform:rotate(8deg)}}
+@media(min-width:900px){
+  .sb-page.home .sb-h{margin-bottom:9px}
+  .sb-page.home .sb-greet{margin-bottom:4px;line-height:1.7}
+}
+
+/* --- Your focus: urgency should read instantly. A faint row tint by the
+   pre-computed reason class (graceful no-op where :has is unsupported). --- */
+.sb-attnlist .sb-attn:has(.sb-attn-bar.due-over){background:color-mix(in srgb,var(--danger) 4%,transparent)}
+.sb-attnlist .sb-attn:has(.sb-attn-bar.due-soon){background:color-mix(in srgb,var(--warning) 4%,transparent)}
+.sb-attn-bar{width:4px}
+
+/* --- Recent activity: a quiet, secondary feed. Action first, then content,
+   then who + when — scannable in one glance, short by design. --- */
+.sb-actfeed2{display:flex;flex-direction:column}
+.sb-actrow2{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:9px 4px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);border-radius:8px;
+  transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-actrow2:last-child{border-bottom:none}
+.sb-actrow2:hover{background:var(--surface-muted)}
+.sb-actrow2-dot{width:8px;height:8px;border-radius:50%;background:var(--primary);flex:none;margin-top:6px}
+.sb-actrow2-dot.type-approved{background:var(--success)}
+.sb-actrow2-dot.type-posted{background:var(--primary)}
+.sb-actrow2-dot.type-changes_requested{background:var(--danger)}
+.sb-actrow2-dot.type-assigned{background:var(--info)}
+.sb-actrow2-dot.type-in_review,.sb-actrow2-dot.type-qa{background:var(--warning)}
+.sb-actrow2-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+/* Name is the strongest element; action + content secondary; time the lightest. */
+.sb-actrow2-name{font-size:13.5px;font-weight:600;color:var(--text-primary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-actrow2-act{font-size:12.5px;color:var(--text-secondary);text-transform:capitalize;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-actrow2-act .ct{color:var(--text-primary);font-weight:500;text-transform:none}
+.sb-actrow2-meta{font-size:11px;color:var(--text-muted);margin-top:2px}
+
+/* --- My week: days act as clear visual separators. --- */
+.sb-week-day{padding:9px 0}
+.sb-week-lbl{color:var(--text-secondary)}
+
+/* --- Beta banner: a light, friendly notice — not a heavy block. --- */
+.sb-beta{background:var(--surface-muted);border-color:var(--border)}
+.sb-beta-txt{color:var(--text-secondary)}
+[data-theme="dark"] .sb-beta-txt{color:var(--text-secondary)}
+
+/* --- Your focus loading state: skeleton rows so the empty state never flashes
+   while tasks are still hydrating (distinct "loading" vs "zero items"). --- */
+.sb-focus-loading{padding:6px 0}
+.sb-focus-skel{display:flex;flex-direction:column;gap:7px;padding:13px 13px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
+.sb-focus-skel:last-child{border-bottom:none}
+.sb-focus-skel .sb-skel{height:13px;width:70%;border-radius:6px}
+.sb-focus-skel .sb-skel.sm{height:11px;width:45%}
+
+/* --- Thoughtful empty state: encouraging, centred, with a glyph. --- */
+.sb-empty.compact.sb-empty-glad{display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;padding:24px 16px}
+.sb-empty-emoji{font-size:30px;line-height:1;margin-bottom:5px}
+.sb-empty-glad b{font-size:14.5px;color:var(--text-primary);font-weight:600}
+.sb-empty-glad span{font-size:12.5px;color:var(--text-muted)}
+
+/* --- Premium hover: links/actions nudge their arrow; cards lift softly. --- */
+.sb-ev-link{transition:opacity var(--motion-fast) var(--ease-standard),
+  transform var(--motion-fast) var(--ease-standard)}
+@media(hover:hover){
+  .sb-ev-link:hover{transform:translateX(2px)}
+  .sb-shead .link{transition:color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard)}
+  .sb-shead .link:hover{transform:translateX(2px)}
+}
+
+/* =================================================================
+   DASHBOARD REFINEMENT (v1.1.2) — celebratory wins, actionable team
+   progress, agenda-style week, and coordinated entrance motion.
+   ================================================================= */
+
+/* --- Team progress: completion + the pipeline that needs moving. --- */
+.sb-progress .bar{position:relative}
+.sb-progress .bar .fill{transform-origin:left center;animation:barGrow .8s var(--ease-standard) both}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.sb-progstats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.sb-progstat{display:flex;flex-direction:column;align-items:flex-start;gap:1px;cursor:pointer;
+  background:var(--surface-muted);border:1px solid transparent;border-radius:var(--r-control);
+  padding:9px 11px;text-align:left;
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-progstat:hover{border-color:var(--border-strong);transform:translateY(-1px)}
+.sb-progstat .n{font-size:19px;font-weight:700;line-height:1;letter-spacing:-.01em;color:var(--text-primary)}
+.sb-progstat .l{font-size:11px;font-weight:600;color:var(--text-muted)}
+.sb-progstat.warn{background:var(--danger-muted)}
+.sb-progstat.warn .n{color:var(--danger)}
+.sb-progstat.warn .l{color:var(--danger)}
+.sb-proglink{align-self:flex-start;background:none;border:none;color:var(--primary);
+  font-size:13px;font-weight:600;cursor:pointer;padding:12px 2px 2px;
+  transition:transform var(--motion-fast) var(--ease-standard)}
+@media(hover:hover){ .sb-proglink:hover{transform:translateX(2px)} }
+
+/* --- Ministry wins, folded into Team progress: a light divided list under the
+   pipeline stats so "how is the team doing" reads as one unified story. --- */
+.sb-progwins{margin-top:16px;padding-top:16px;
+  border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent);
+  display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.sb-progwin{display:flex;flex-direction:column;gap:6px;
+  background:var(--surface-muted);border-radius:var(--r-control);padding:11px 12px}
+.sb-progwin .wtop{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--text-secondary)}
+.sb-progwin .e{font-size:14px;line-height:1;flex:none}
+.sb-progwin .wn{font-size:20px;font-weight:700;color:var(--text-primary);line-height:1;
+  letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+
+/* --- My week: a lightweight agenda; the status dot carries the colour. --- */
+.sb-week-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.sb-week-t{font-size:13.5px;font-weight:600;color:var(--text-primary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-week-sub{font-size:11.5px;color:var(--text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-week-dot{width:8px;height:8px;margin-top:5px;align-self:flex-start}
+.sb-week-dot.st-planned{background:var(--violet)} .sb-week-dot.st-progress{background:var(--blue)}
+.sb-week-dot.st-review{background:var(--gold)}   .sb-week-dot.st-changes{background:var(--red)}
+.sb-week-dot.st-approved{background:var(--green)} .sb-week-dot.st-ready{background:var(--amber)}
+
+/* --- Coordinated entrance: widgets fade up once, gently staggered. --- */
+@media(min-width:900px){
+  .sb-dash > .sb-wd{animation:pageIn var(--motion-standard) var(--ease-enter) both}
+  .sb-dash > .sb-wd:nth-child(1){animation-delay:0ms}
+  .sb-dash > .sb-wd:nth-child(2){animation-delay:50ms}
+  .sb-dash > .sb-wd:nth-child(3){animation-delay:90ms}
+  .sb-dash > .sb-wd:nth-child(4){animation-delay:130ms}
+  .sb-dash > .sb-wd:nth-child(5){animation-delay:170ms}
+  .sb-dash > .sb-wd:nth-child(6){animation-delay:210ms}
+  .sb-dash > .sb-wd:nth-child(7){animation-delay:250ms}
+}
+
+/* --- Sidebar polish: icon nudges with the row on hover; the active pill
+   carries a soft shadow + a springier glide (Linear/Arc-style). --- */
+@media(min-width:900px){
+  .sb-snav button .ico{transition:transform var(--motion-fast) var(--ease-standard)}
+  .sb-snav button:hover .ico{transform:translateX(1px)}
+  .sb-snav-ind{box-shadow:0 2px 8px color-mix(in srgb,var(--primary) 22%,transparent);
+    transition:transform var(--motion-standard) cubic-bezier(.34,1.3,.5,1),
+               height var(--motion-standard) var(--ease-standard),
+               opacity var(--motion-fast) var(--ease-standard)}
+  @media (prefers-reduced-motion:reduce){ .sb-snav-ind{transition:none} }
+}
+
+/* =================================================================
+   DASHBOARD CONSOLIDATION (v1.1.2) — fewer, larger, calmer sections.
+   My Week owns a full-width agenda row; surfaces trade heavy borders for
+   soft shadows + generous padding so the board feels focused, not busy.
+   ================================================================= */
+@media(min-width:900px){
+  /* My Week — full-width agenda: days flow into columns across the row so
+     the space reads as a week view, not one lonely list with dead space. */
+  .sb-week{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
+    gap:4px 26px;align-items:start;padding:16px 18px}
+  .sb-week-day{border-bottom:none;padding:6px 0}
+  .sb-week-lbl{margin-bottom:5px}
+
+  /* Calmer surfaces: lighter hairlines + a soft shadow instead of hard boxes,
+     with roomier padding. Applied to the dashboard's larger widgets. */
+  .sb-dash .sb-progress,.sb-dash .sb-week,.sb-dash .sb-widcard,.sb-dash .sb-attnlist{
+    border-color:color-mix(in srgb,var(--border) 55%,transparent);
+    box-shadow:0 1px 2px rgba(33,27,51,.04),0 6px 20px rgba(33,27,51,.05)}
+  [data-theme="dark"] .sb-dash .sb-progress,[data-theme="dark"] .sb-dash .sb-week,
+  [data-theme="dark"] .sb-dash .sb-widcard,[data-theme="dark"] .sb-dash .sb-attnlist{
+    box-shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28)}
+  .sb-dash .sb-progress{padding:18px 18px 15px}
+  /* Event cards: lighter outline, they sit on the calmer canvas. */
+  .sb-dash .sb-ev{border-color:color-mix(in srgb,var(--border) 55%,transparent)}
+}
+
+/* =================================================================
+   DASHBOARD HIERARCHY & PERSONALITY (v1.1.2) — each section earns its
+   own read: Focus (primary/urgent) → Coming Up (actionable) → Team
+   Progress (analytical, rewarding) → Activity (quiet) → My Week (agenda).
+   ================================================================= */
+@media(min-width:900px){
+  /* Your Focus is the primary widget — a slightly larger head; the count chip
+     picks up the primary accent to draw the eye. */
+  .sb-wd.wd-focus .sb-shead-primary h2{font-size:17px;font-weight:600}
+  .sb-wd.wd-focus .sb-headcount{background:var(--primary-muted);color:var(--primary);font-weight:700}
+
+  /* Coming Up: the event title is the hero; secondary text steps back; the CTA
+     reads as integrated (no attached divider line). Apple-Calendar-calm. */
+  .sb-dash .sb-ev-name{font-size:16px;font-weight:600;line-height:1.3;-webkit-line-clamp:1}
+  .sb-dash .sb-ev-sub{font-size:12px;color:var(--text-muted);margin-top:3px}
+  .sb-dash .sb-ev-foot{border-top:none;padding-top:6px;margin-top:8px}
+  .sb-dash .sb-ev-status{font-size:11.5px}
+
+  /* Team Progress: thicker bar + a bigger completion figure = rewarding. */
+  .sb-dash .sb-progress .row{margin-bottom:14px}
+  .sb-dash .sb-progress .row b{font-size:14px}
+  .sb-dash .sb-progress .pct{font-size:21px;font-weight:700;letter-spacing:-.01em}
+  .sb-dash .sb-progress .bar{height:10px}
+
+  /* My Week: not another white card — an agenda of day columns on the canvas. */
+  .sb-dash .sb-week{background:transparent;border:none;box-shadow:none;padding:0;
+    grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+  .sb-dash .sb-week-day{background:var(--surface);border-radius:var(--r-card);
+    border:1px solid color-mix(in srgb,var(--border) 55%,transparent);padding:12px 14px}
+  .sb-dash .sb-week-lbl{color:var(--primary);margin-bottom:7px}
+  .wd-week{margin-top:4px}
+}
+
+/* =================================================================
+   FINAL POLISH (v1.1.2) — Linear/Arc-grade card, chip, and hover
+   refinement. Softer borders, roomier padding, consistent radii.
+   ================================================================= */
+@media(min-width:900px){
+  /* #3 Stats: lighter border, roomier padding, softer icon chip, more air
+     between the number and its supporting line, premium lift on hover. */
+  .sb-stat2{padding:16px 16px 15px;border-color:color-mix(in srgb,var(--border) 50%,transparent)}
+  .sb-stat2-l{margin-top:6px}
+  .sb-stat2-sub{margin-top:3px}
+  .sb-stat2:hover{transform:translateY(-2px);box-shadow:0 2px 6px rgba(33,27,51,.05),0 10px 26px rgba(33,27,51,.07)}
+  [data-theme="dark"] .sb-stat2:hover{box-shadow:0 2px 8px rgba(0,0,0,.35),0 12px 30px rgba(0,0,0,.32)}
+
+  /* #4 Coming Up: smaller "Nothing planned", a touch more prominent CTA, and a
+     gentle hover elevation so the card invites interaction. */
+  .sb-dash .sb-ev-status{font-size:11px}
+  .sb-dash .sb-ev-link{font-size:12.5px;font-weight:600}
+  .sb-dash .sb-ev{transition:background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard)}
+  .sb-dash .sb-ev:hover{transform:translateY(-1px);
+    box-shadow:0 1px 2px rgba(33,27,51,.04),0 8px 22px rgba(33,27,51,.06)}
+  [data-theme="dark"] .sb-dash .sb-ev:hover{box-shadow:0 2px 8px rgba(0,0,0,.3),0 10px 26px rgba(0,0,0,.3)}
+
+  /* #5 Your Focus: taller rows, roomier chips, animated chevron, clearer divider. */
+  .sb-dash .sb-attnlist .sb-attn{padding:13px 13px}
+  .sb-dash .sb-attnlist .sb-attn{border-bottom-color:color-mix(in srgb,var(--border) 80%,transparent)}
+  .sb-attn-sub{gap:6px 9px}
+  .sb-attn-chev{transition:transform var(--motion-fast) var(--ease-standard)}
+  @media(hover:hover){ .sb-attn:hover .sb-attn-chev{transform:translateX(2px)} }
+
+  /* #8 My Week: Today & Tomorrow read as the most urgent buckets. */
+  .sb-dash .sb-week-day:first-child .sb-week-lbl,
+  .sb-dash .sb-week-day:nth-child(2) .sb-week-lbl{color:var(--primary);font-weight:800}
+}

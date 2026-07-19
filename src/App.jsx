@@ -1,6 +1,6 @@
 /* IFC Creatives Board — the digital home of the IFC Creative Team.
    (Internal note: powered by StudioBoard architecture.) */
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   onAuthStateChanged, signOut,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -40,6 +40,7 @@ import {
   EllipsisHorizontalIcon, ExclamationTriangleIcon, SunIcon, MoonIcon, FunnelIcon,
   BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, SparklesIcon, EyeIcon, EyeSlashIcon,
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
+  InformationCircleIcon,
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
 import { getTheme, setTheme } from "./theme";
@@ -71,11 +72,16 @@ const eventPrefill = (e) => ({
 /* A slim, dismissible beta notice — sets expectations and invites feedback.
    Dismissal is remembered so it doesn't nag returning testers. */
 function BetaBanner({ onReport }) {
-  const [open, setOpen] = useState(() => loadPref("sb-beta-dismissed", false) !== true);
-  if (!open) return null;
-  const dismiss = () => { setOpen(false); savePref("sb-beta-dismissed", true); };
+  // "open" → visible, "closing" → playing the fade+collapse, then unmount.
+  const [state, setState] = useState(() => loadPref("sb-beta-dismissed", false) === true ? "gone" : "open");
+  if (state === "gone") return null;
+  const dismiss = () => {
+    savePref("sb-beta-dismissed", true);
+    setState("closing");
+    setTimeout(() => setState("gone"), 200);   // matches the betaOut animation
+  };
   return (
-    <div className="sb-beta">
+    <div className={"sb-beta" + (state === "closing" ? " closing" : "")}>
       <span className="sb-beta-tag">Beta</span>
       <span className="sb-beta-txt">Help us improve the app</span>
       <button className="sb-beta-report" onClick={onReport}>Report</button>
@@ -200,6 +206,8 @@ function FeatureRequestModal({ onClose }) {
   const [done, setDone] = useState(false);
   const [err, setErr] = useState(false);
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
+  const isDirty = !done && (f.title.trim() || f.problem.trim() || f.beneficiary.trim() || f.link.trim());
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
   const send = async () => {
     if (busy || !f.title.trim()) return;
     setBusy(true); setErr(false);
@@ -208,10 +216,11 @@ function FeatureRequestModal({ onClose }) {
     ok ? setDone(true) : setErr(true);   // entered text is preserved on failure
   };
   return (
-    <div className="sb-scrim" onClick={onClose}>
+    <>
+    <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Submit feature request">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Submit feature request</b>
-          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
+          <button className="sb-x" onClick={requestClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
         <div className="bd">
           {done ? (
             <>
@@ -236,6 +245,8 @@ function FeatureRequestModal({ onClose }) {
         </div>
       </div>
     </div>
+    {leaveGuard}
+    </>
   );
 }
 
@@ -645,16 +656,23 @@ function useProfile(uid, retryKey) {
 // the subscription so we don't query before the user is allowed (Firestore
 // rules would reject it). A listener error leaves the last data in place and is
 // logged — it never throws or crashes the dashboard.
+// Returns [docs, loaded]. `loaded` distinguishes "the first snapshot has
+// arrived" (whether it had rows or not) from "still waiting" — so callers can
+// tell an empty result apart from an unloaded one and never render a "nothing
+// here" state during hydration. Docs are preserved across a re-subscribe
+// (path/canRead change) so switching filters doesn't flash empty.
 function useCollection(path, canRead) {
-  const [docs, setDocs] = useState([]);
+  const [state, setState] = useState({ docs: [], loaded: false });
   useEffect(() => {
-    if (!canRead) { setDocs([]); return; }
+    if (!canRead) { setState({ docs: [], loaded: true }); return; }
+    setState((s) => ({ docs: s.docs, loaded: false }));
     return onSnapshot(collection(db, path),
-      (snap) => setDocs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      (err) => logIssue({ kind: "error", action: `collection read failed: ${path}`,
-        message: err.message, code: err.code }));
+      (snap) => setState({ docs: snap.docs.map((d) => ({ id: d.id, ...d.data() })), loaded: true }),
+      (err) => { setState((s) => ({ docs: s.docs, loaded: true }));   // surface (log) the error; don't hang on loading
+        logIssue({ kind: "error", action: `collection read failed: ${path}`,
+          message: err.message, code: err.code }); });
   }, [path, canRead]);
-  return docs;
+  return [state.docs, state.loaded];
 }
 
 // Lock body scroll while an overlay is open, so a sheet/drawer is the only
@@ -665,6 +683,32 @@ function useLockBody() {
     _lockCount++; document.body.style.overflow = "hidden";
     return () => { _lockCount = Math.max(0, _lockCount - 1); if (_lockCount === 0) document.body.style.overflow = ""; };
   }, []);
+}
+
+/* Unsaved-changes guard for an editable modal/sheet.
+   - Installs a browser `beforeunload` warning ONLY while `isDirty` (never when
+     clean) — the one native confirmation we allow, for refresh / tab-close.
+   - Returns `requestClose`: use it for every in-app close affordance (scrim, ✕,
+     Escape, Cancel). When dirty it opens a branded "Leave without saving?"
+     confirm instead of closing; when clean it closes immediately.
+   - Render {leaveGuard} once inside the modal to mount that confirm dialog. */
+function useUnsavedGuard(isDirty, onClose) {
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => {
+    if (!isDirty) return;                       // no listener while the form is clean
+    const h = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [isDirty]);
+  const requestClose = () => { if (isDirty) setLeaving(true); else onClose(); };
+  const leaveGuard = leaving ? (
+    <ConfirmDialog tone="warning" icon="warning"
+      title="Leave without saving?"
+      body="You have unsaved changes. If you leave now, your changes will be lost."
+      cancelLabel="Keep editing" confirmLabel="Leave without saving"
+      onConfirm={onClose} onClose={() => setLeaving(false)} />
+  ) : null;
+  return { requestClose, leaveGuard };
 }
 
 // Live subscription to a single document. undefined=loading, null=absent, object=data.
@@ -948,12 +992,13 @@ function Pending({ profile }) {
 function Board({ profile, isAdmin }) {
   // `users` = the active team (used for assignment, capacity, owner pickers).
   // `allUsers` = everyone incl. pending — admins only, for the approval queue.
-  const users = useCollection("users", true).filter(u => u.status === "approved" || u.role === "admin");
-  const allUsers = useCollection("users", isAdmin);
-  const tasks = useCollection("tasks", true);
-  const issues = useCollection("issues", isAdmin); // admin-only (rules)
+  const [usersAll] = useCollection("users", true);
+  const users = usersAll.filter(u => u.status === "approved" || u.role === "admin");
+  const [allUsers] = useCollection("users", isAdmin);
+  const [tasks, tasksLoaded] = useCollection("tasks", true);
+  const [issues] = useCollection("issues", isAdmin); // admin-only (rules)
   const notifSettings = useDoc("settings/notifications", true); // reminder defaults
-  const eventSeries = useCollection("eventSeries", true); // admin-managed recurring events
+  const [eventSeries] = useCollection("eventSeries", true); // admin-managed recurring events
 
   const [tab, setTab] = useState("home");
   const [openId, setOpenId] = useState(null);
@@ -1039,6 +1084,27 @@ function Board({ profile, isAdmin }) {
     { id:"team", label:"Team", ico:()=>navIco(UserGroupIcon) },
     ...(isAdmin ? [{ id:"admin", label:"Admin", badge: pendingCount, ico:()=>navIco(Cog6ToothIcon) }] : []),
   ];
+
+  // Desktop sidebar: one shared active indicator that glides between items.
+  // We measure the active button's position (robust to the Management group
+  // gap + the 900–1139px icon-collapse) and drive a CSS-transitioned pill —
+  // same "sliding indicator" language as the mobile bottom nav, no JS animation
+  // library. Runs before paint so there's no first-mount slide.
+  const navRef = useRef(null);
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const place = () => {
+      const active = nav.querySelector("button.on");
+      if (!active) { nav.style.setProperty("--ind-o", "0"); return; }
+      nav.style.setProperty("--ind-y", active.offsetTop + "px");
+      nav.style.setProperty("--ind-h", active.offsetHeight + "px");
+      nav.style.setProperty("--ind-o", "1");
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [tab, isAdmin, pendingCount]);
 
   /* ---- task writes ---- */
   const saveTask = async (t) => {
@@ -1191,7 +1257,8 @@ function Board({ profile, isAdmin }) {
           <button className="sb-searchbtn" onClick={()=>setSearchOpen(true)} aria-label="Search">
             <span className="ico"><MagnifyingGlassIcon className="hi hi-sm" aria-hidden="true"/></span><span className="lbl">Search…</span><kbd className="sb-kbd">/</kbd>
           </button>
-          <nav className="sb-snav" aria-label="Main">
+          <nav className="sb-snav" aria-label="Main" ref={navRef}>
+            <span className="sb-snav-ind" aria-hidden="true" />
             {mainNav.map(n => (
               <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
                 <span className="ico">{n.ico(tab===n.id)}</span><span className="lbl">{n.label}</span>
@@ -1208,6 +1275,7 @@ function Board({ profile, isAdmin }) {
           </nav>
           {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")} aria-label="New content">
             <PlusIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">New content</span></button>}
+          {/* Personal area: Notifications, then Profile, then the quiet Report link. */}
           <div className="sb-sfoot">
             <button className="sb-report" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
               <span className="sb-bellwrap"><BellIcon className="hi hi-sm" aria-hidden="true"/>
@@ -1239,7 +1307,7 @@ function Board({ profile, isAdmin }) {
 
           <div className="sb-content">
             <BetaBanner onReport={()=>setShowReport(true)} />
-            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
+            {tab==="home"  && <Home tasks={tasks} tasksLoaded={tasksLoaded} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
             {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
             {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} />}
             {tab==="mine"  && <Mine tasks={tasks} me={me} openTask={setOpenId} />}
@@ -1346,16 +1414,19 @@ function Board({ profile, isAdmin }) {
 function ReportIssue({ onClose }) {
   const [note, setNote] = useState("");
   const [state, setState] = useState("idle"); // idle | sending | sent | error
+  const isDirty = !!note.trim() && state !== "sent";   // typed text not yet sent
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
   const send = async () => {
     setState("sending");
     const ok = await reportIssue({ note: note.trim(), action: "manual report" });
     setState(ok ? "sent" : "error");
   };
   return (
-    <div className="sb-scrim" onClick={onClose}>
+    <>
+    <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Report an issue</b>
-          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           {state==="sent" ? (
             <div className="sb-empty"><div className="big">✓</div>
@@ -1374,6 +1445,8 @@ function ReportIssue({ onClose }) {
         </div>
       </div>
     </div>
+    {leaveGuard}
+    </>
   );
 }
 
@@ -1829,10 +1902,32 @@ function WinCard({ n, label, tone }) {
   );
 }
 
+/* A number that counts up to its value once on mount — a small, contained bit
+   of delight for the dashboard stats. Skips the animation entirely under
+   prefers-reduced-motion (shows the final value immediately). */
+function AnimatedNumber({ value }) {
+  const reduce = typeof window !== "undefined" &&
+    window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const [n, setN] = useState(reduce ? value : 0);
+  useEffect(() => {
+    if (reduce) { setN(value); return; }
+    let raf, start; const dur = 520;
+    const tick = (ts) => {
+      if (!start) start = ts;
+      const p = Math.min(1, (ts - start) / dur);
+      setN(Math.round(value * (1 - Math.pow(1 - p, 3))));   // easeOutCubic
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, reduce]);
+  return <>{n}</>;
+}
+
 /* The HOME landing page — a ministry / celebration dashboard, not a task list.
    It answers: what have we accomplished, what's coming up, what should I
    celebrate, what should I be aware of? Operational work lives in My Day. */
-function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, openTask, eventSeries }) {
+function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, openTask, eventSeries }) {
   const pw = personalWins(tasks, me);
   const m = dashboardMetrics(tasks, users);
   const thisM = monthlyWins(tasks, 0);
@@ -1846,6 +1941,45 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, op
   const doneCount = tasks.filter(t=>t.status==="Posted").length;
   const totalCount = tasks.length;
   const donePct = totalCount ? Math.round((doneCount/totalCount)*100) : 0;
+
+  // ---- Desktop dashboard widgets (hidden on mobile; the phone stays focused) ----
+  const myActive = tasks.filter(t => t.status!=="Posted" &&
+    (t.owner===me.name || (t.support||[]).some(s=>s.name===me.name)));
+  const dueSoonN = myActive.filter(t=>{ const d=daysTo(t.postDate); return d!==null && d>=0 && d<=2; }).length;
+  const overdueN = myActive.filter(t=>{ const d=daysTo(t.postDate); return d!==null && d<0; }).length;
+  const dueTodayN = myActive.filter(t=>daysTo(t.postDate)===0).length;
+  const inReviewN = myActive.filter(t=> t.owner===me.name && t.status==="In Review").length;
+  const waitingN = myActive.filter(t=> t.owner===me.name &&
+    ["In Review","Approved","Ready to Post"].includes(t.status)).length;
+  // Each stat carries a supporting sub-metric so the row answers "what next",
+  // not just "how many". Tints stay soft; icons give each card its own read.
+  const stats = [
+    { label:"My tasks",          n:myActive.length, tone:"violet", icon:ClipboardDocumentListIcon,
+      sub: dueTodayN>0 ? `${dueTodayN} due today` : "on track", go:()=>goTab("mine") },
+    { label:"Due soon",          n:dueSoonN,        tone:"amber",  icon:ClockIcon,
+      sub: overdueN>0 ? `${overdueN} overdue` : "next 2 days", go:()=>goTab("myday") },
+    { label:"Waiting on others", n:waitingN,        tone:"blue",   icon:UserGroupIcon,
+      sub: inReviewN>0 ? `${inReviewN} in review` : "with the crew", go:()=>goTab("mine") },
+    { label:"Upcoming events",   n:events.length,   tone:"green",  icon:CalendarDaysIcon,
+      sub: prepCount>0 ? `${prepCount} need prep` : "all planned", go:()=>goTab("board") },
+  ];
+  // My week — my dated responsibilities as an urgency-ordered agenda: Today /
+  // Tomorrow / This week / Later reads faster than calendar weekday names.
+  const weekBucket = (d) => d===0 ? "Today" : d===1 ? "Tomorrow" : d<=6 ? "This week" : "Later";
+  const WEEK_ORDER = ["Today","Tomorrow","This week","Later"];
+  const weekGroups = [];
+  myActive.filter(t=>t.postDate).map(t=>({t,d:daysTo(t.postDate)}))
+    .filter(x=>x.d!==null && x.d>=0 && x.d<=13).sort((a,b)=>a.d-b.d)
+    .forEach(x=>{ const label=weekBucket(x.d); let g=weekGroups.find(g=>g.label===label);
+      if(!g){ g={label,items:[]}; weekGroups.push(g); } g.items.push(x.t); });
+  weekGroups.sort((a,b)=>WEEK_ORDER.indexOf(a.label)-WEEK_ORDER.indexOf(b.label));
+  // Recent activity — reuses the admin activity aggregator. Kept short (5) so
+  // it never dominates the lower dashboard; the rest lives behind "View all".
+  const activityAll = recentActivity(tasks, 30);
+  const activity = activityAll.slice(0, 5);
+  const agoShort = (ms) => { if(!ms) return ""; const mn=Math.round((Date.now()-ms)/60000);
+    if(mn<1) return "now"; if(mn<60) return mn+"m"; const h=Math.round(mn/60);
+    if(h<24) return h+"h"; return Math.round(h/24)+"d"; };
 
   const hi = new Date().getHours();
   const greet = hi<12?"Good morning":hi<17?"Good afternoon":"Good evening";
@@ -1864,79 +1998,173 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, op
     : "You're all caught up. Nothing needs prep right now.";
 
   return (
-    <div className="sb-page">
+    <div className="sb-page home">
       <div className="sb-eyebrow">{greet}</div>
-      <div className="sb-h">Welcome back, {me.name.split(" ")[0]} 👋</div>
+      <div className="sb-h">Welcome back, {me.name.split(" ")[0]} <span className="sb-wave" aria-hidden="true">👋</span></div>
       <div className="sb-sub sb-greet">
         <span>{s1}</span>
         <span>{s2}</span>
       </div>
 
-      {/* Coming up — what's on the ministry horizon */}
-      {events.length>0 && <>
-        <div className="sb-shead"><h2>Coming up</h2>
-          <button className="link subtle" onClick={()=>goTab("board")}>See all →</button></div>
-        <div className="sb-evlist">
-          {events.slice(0,3).map((e,i) => {
-            const n = occurrenceContentCount(e, tasks);
-            const rel = e.daysAway===0 ? "Today" : e.daysAway===1 ? "Tomorrow" : `In ${e.daysAway} days`;
-            const act = n===0
-              ? (isAdmin && onNewForEvent && { label:"Create", onClick:()=>onNewForEvent(eventPrefill(e)) })
-              : (onViewEvent && { label:"View", onClick:()=>onViewEvent(e) });
-            return (
-            <div className="sb-ev" key={e.eventOccurrenceId||i} style={{ "--d": `${i*55}ms` }}>
-              <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
-              <div className="sb-ev-body">
-                <div className="sb-ev-name">{e.name}</div>
-                <div className="sb-ev-sub"><b>{rel}</b> · {fmtEventDate(e.date)}</div>
-                <div className="sb-ev-foot">
-                  <span className={"sb-ev-status"+(n>0?" ok":"")}>{n>0 ? `${n} planned` : "Nothing planned"}</span>
-                  {act && <button className="sb-ev-link" onClick={act.onClick}>{act.label} →</button>}
+      {/* Below the welcome: a focused stack on mobile, a dashboard grid on
+          desktop. `.sb-dash`/`.sb-wd` are display:contents on phones, so the
+          mobile layout is byte-for-byte the existing one; on desktop they
+          become a grid and the desktop-only widgets (wd-desktop) appear. */}
+      <div className="sb-dash">
+
+        {/* Quick stats (desktop dashboard) — glanceable, each with a next-step sub */}
+        <section className="sb-wd wd-stats wd-desktop">
+          <div className="sb-statgrid">
+            {stats.map((s,i) => (
+              <button className={"sb-stat2 tone-"+s.tone} key={i} onClick={s.go}>
+                <span className="sb-stat2-ic"><s.icon className="hi" aria-hidden="true"/></span>
+                <span className="sb-stat2-n"><AnimatedNumber value={s.n}/></span>
+                <span className="sb-stat2-l">{s.label}</span>
+                <span className="sb-stat2-sub">{s.sub}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Coming up — what's on the ministry horizon */}
+        <section className="sb-wd wd-events">
+          {events.length>0 && <>
+            <div className="sb-shead"><h2>Coming up</h2>
+              <button className="link subtle" onClick={()=>goTab("board")}>See all →</button></div>
+            <div className="sb-evlist">
+              {events.slice(0,3).map((e,i) => {
+                const n = occurrenceContentCount(e, tasks);
+                const rel = e.daysAway===0 ? "Today" : e.daysAway===1 ? "Tomorrow" : `In ${e.daysAway} days`;
+                const act = n===0
+                  ? (isAdmin && onNewForEvent && { label:"Create", onClick:()=>onNewForEvent(eventPrefill(e)) })
+                  : (onViewEvent && { label:"View", onClick:()=>onViewEvent(e) });
+                return (
+                <div className="sb-ev" key={e.eventOccurrenceId||i} style={{ "--d": `${i*55}ms` }}>
+                  <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+                  <div className="sb-ev-body">
+                    <div className="sb-ev-name">{e.name}</div>
+                    <div className="sb-ev-sub"><b>{rel}</b> · {fmtEventDate(e.date)}</div>
+                    <div className="sb-ev-foot">
+                      <span className={"sb-ev-status"+(n>0?" ok":"")}>{n>0 ? `${n} planned` : "Nothing planned"}</span>
+                      {act && <button className="sb-ev-link" onClick={act.onClick}>{act.label} →</button>}
+                    </div>
+                  </div>
                 </div>
-              </div>
+                );
+              })}
             </div>
-            );
-          })}
-        </div>
-      </>}
+          </>}
+        </section>
 
-      {/* Your focus — only what needs YOU; the full list lives in My Day */}
-      <div className="sb-shead"><h2>Your focus</h2>
-        <button className="link subtle" onClick={()=>goTab("myday")}>My Day →</button></div>
-      {focus.length===0
-        ? <div className="sb-empty compact">Nothing needs you right now. Enjoy the calm.</div>
-        : <div className="sb-attnlist">{focus.map(t =>
-            <AttentionItem key={t.id} t={t} onClick={()=>openTask ? openTask(t.id) : goTab("myday")} />)}</div>}
+        {/* Your focus — the primary widget: what needs YOU right now. Sits
+            top-left, directly after the stats, so the eye lands here first.
+            Three distinct states: loading (skeleton) / has-items / empty —
+            the empty state never renders while tasks are still loading. */}
+        <section className="sb-wd wd-focus">
+          <div className="sb-shead sb-shead-primary">
+            <div className="sb-shead-main">
+              <h2>Your focus</h2>
+              {tasksLoaded && focus.length>0 &&
+                <span className="sb-headcount" aria-label={`${focus.length} focus item${focus.length!==1?"s":""}`}>{focus.length}</span>}
+            </div>
+            <button className="link subtle" onClick={()=>goTab("myday")}>My Day →</button>
+          </div>
+          {!tasksLoaded
+            ? <div className="sb-attnlist sb-focus-loading" aria-busy="true" aria-label="Loading your focus">
+                {[0,1,2].map(i => <div className="sb-focus-skel" key={i}><span className="sb-skel"/><span className="sb-skel sm"/></div>)}
+              </div>
+            : focus.length===0
+            ? <div className="sb-empty compact sb-empty-glad"><span className="sb-empty-emoji" aria-hidden="true">🎉</span>
+                <b>You're all caught up.</b><span>Nothing needs you right now — enjoy your {hi<12?"morning":hi<17?"afternoon":"evening"}.</span></div>
+            : <div className="sb-attnlist">{focus.map(t =>
+                <AttentionItem key={t.id} t={t} onClick={()=>openTask ? openTask(t.id) : goTab("myday")} />)}</div>}
+        </section>
 
-      {/* Team progress — one compact summary instead of metric walls */}
-      <div className="sb-shead"><h2>Team progress</h2></div>
-      <div className="sb-progress">
-        <div className="row">
-          <b>{doneCount} of {totalCount} content pieces completed</b>
-          <span className="pct">{donePct}%</span>
-        </div>
-        <div className="bar" role="progressbar" aria-valuenow={donePct} aria-valuemin={0} aria-valuemax={100}
-          aria-label="Team content completion"><span style={{width:`${donePct}%`}}/></div>
-        <div className="chips">
-          <button onClick={()=>goTab("board")}>{m.awaiting} awaiting review</button>
-          <button onClick={()=>goTab("board")}>{readyToPost} ready to post</button>
-          {m.overdue>0 && <button className="warn" onClick={()=>goTab("myday")}>{m.overdue} overdue</button>}
-        </div>
+        {/* My week (desktop) — a quick timeline of what's ahead */}
+        <section className="sb-wd wd-week wd-desktop">
+          <div className="sb-shead"><h2>My week</h2></div>
+          {weekGroups.length===0
+            ? <div className="sb-empty compact">Nothing scheduled in the next 7 days.</div>
+            : <div className="sb-week">
+                {weekGroups.map((g,gi) => (
+                  <div className="sb-week-day" key={gi}>
+                    <div className="sb-week-lbl">{g.label}</div>
+                    {g.items.map(t => (
+                      <button className="sb-week-row" key={t.id} onClick={()=>openTask ? openTask(t.id) : goTab("myday")}>
+                        <span className={"sb-week-dot "+statusClass(t.status)} aria-hidden="true"/>
+                        <span className="sb-week-body">
+                          <span className="sb-week-t">{nextStep(t.status)}</span>
+                          <span className="sb-week-sub">{t.title} · {t.type}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>}
+        </section>
+
+        {/* Recent activity (desktop) — a quiet, secondary feed: action first,
+            then content, then who + when. Short by design. */}
+        <section className="sb-wd wd-activity wd-desktop">
+          <div className="sb-shead"><h2>Recent activity</h2>
+            {isAdmin && activityAll.length>5 && <button className="link subtle" onClick={()=>goTab("admin")}>View all →</button>}</div>
+          {activity.length===0
+            ? <div className="sb-empty compact">Nothing yet — the team's activity will show up here.</div>
+            : <div className="sb-actfeed2">
+                {activity.map((a,i) => (
+                  <button className="sb-actrow2" key={i} onClick={()=>openTask && openTask(a.taskId)}>
+                    <span className={"sb-actrow2-dot type-"+a.type} aria-hidden="true"/>
+                    <span className="sb-actrow2-body">
+                      <span className="sb-actrow2-name">{a.who}</span>
+                      <span className="sb-actrow2-act">{a.verb} <span className="ct">{a.title}</span></span>
+                      <span className="sb-actrow2-meta">{agoShort(a.at)} ago</span>
+                    </span>
+                  </button>
+                ))}
+              </div>}
+        </section>
+
+        {/* Team progress — completion at a glance + the pipeline that needs moving */}
+        <section className="sb-wd wd-team">
+          <div className="sb-shead"><h2>Team progress</h2></div>
+          <div className="sb-progress">
+            <div className="row">
+              <b>{doneCount} of {totalCount} completed</b>
+              <span className="pct"><AnimatedNumber value={donePct}/>%</span>
+            </div>
+            <div className="bar" role="progressbar" aria-valuenow={donePct} aria-valuemin={0} aria-valuemax={100}
+              aria-label="Team content completion"><span className="fill" style={{width:`${donePct}%`}}/></div>
+            <div className="sb-progstats">
+              <button className="sb-progstat" onClick={()=>goTab("board")}>
+                <span className="n">{m.awaiting}</span><span className="l">Awaiting review</span></button>
+              <button className="sb-progstat" onClick={()=>goTab("board")}>
+                <span className="n">{readyToPost}</span><span className="l">Ready to post</span></button>
+              <button className={"sb-progstat"+(m.overdue>0?" warn":"")} onClick={()=>goTab("myday")}>
+                <span className="n">{m.overdue}</span><span className="l">Overdue</span></button>
+            </div>
+            {/* Ministry wins live here now — one unified progress story, not a
+                second disconnected section. */}
+            <div className="sb-progwins">
+              <div className="sb-progwin"><span className="wtop"><span className="e" aria-hidden="true">🏆</span>Posted</span>
+                <span className="wn"><AnimatedNumber value={thisM.posted}/></span></div>
+              <div className="sb-progwin"><span className="wtop"><span className="e" aria-hidden="true">🙌</span>Completed</span>
+                <span className="wn"><AnimatedNumber value={pw.completed}/></span></div>
+              <div className="sb-progwin"><span className="wtop"><span className="e" aria-hidden="true">✨</span>Contributions</span>
+                <span className="wn"><AnimatedNumber value={pw.contributions}/></span></div>
+            </div>
+            <button className="sb-proglink" onClick={()=>goTab("board")}>View workflow →</button>
+          </div>
+        </section>
+
+        {/* Recent wins (mobile keeps this; desktop shows Recent activity instead) */}
+        <section className="sb-wd wd-recent wd-mobile">
+          <div className="sb-shead"><h2>Recent wins</h2></div>
+          {recents.length===0
+            ? <div className="sb-empty">Nothing posted yet. Your first win is coming!</div>
+            : <div className="sb-recent">{recents.map((r,i)=>(<div className="sb-recent-row" key={i}><CheckCircleIcon className="hi hi-sm" aria-hidden="true" style={{color:"var(--success)",verticalAlign:"-4px",marginRight:6}}/>{r.text}</div>))}</div>}
+        </section>
+
       </div>
-
-      {/* Wins — this month + yours, kept encouraging and compact */}
-      <div className="sb-shead"><h2>Ministry wins</h2></div>
-      <div className="sb-wincards">
-        <WinCard n={thisM.posted} label="Posted this month" />
-        <WinCard n={pw.completed} label="You completed" />
-        <WinCard n={pw.contributions} label="Your contributions" />
-      </div>
-
-      {/* Recent wins */}
-      <div className="sb-shead"><h2>Recent wins</h2></div>
-      {recents.length===0
-        ? <div className="sb-empty">Nothing posted yet. Your first win is coming!</div>
-        : <div className="sb-recent">{recents.map((r,i)=>(<div className="sb-recent-row" key={i}><CheckCircleIcon className="hi hi-sm" aria-hidden="true" style={{color:"var(--success)",verticalAlign:"-4px",marginRight:6}}/>{r.text}</div>))}</div>}
     </div>
   );
 }
@@ -1973,23 +2201,54 @@ function KebabMenu({ items }) {
   );
 }
 
-/* Designed confirmation dialog (replaces browser confirm for destructive
-   actions): explains what happens, danger-coloured confirm only. */
-function ConfirmDialog({ title, body, confirmLabel = "Delete", cancelLabel = "Cancel", danger = true, onConfirm, onClose }) {
+/* Branded confirmation dialog — the app-wide replacement for window.confirm for
+   both destructive actions and unsaved-changes prompts. Never colour alone:
+   each tone pairs an icon with its treatment.
+   - tone: "danger" (permanent deletion) | "warning" (unsaved / reversible-ish)
+     | "neutral". `danger` bool kept for back-compat (true → danger tone).
+   - consequences: optional string[] rendered as an explained list.
+   - onConfirm may be async: while it runs, buttons disable, the confirm button
+     shows a loading label, duplicate clicks are blocked, the dialog stays open,
+     and a thrown error is surfaced inline (the caller's data is never lost).
+   Focus starts on the SAFE (cancel) action, so Enter can't trigger deletion
+   unless the user deliberately tabs to the destructive button. */
+function ConfirmDialog({ title, body, consequences, confirmLabel = "Delete", cancelLabel = "Cancel",
+                         tone, icon, danger = true, busyLabel, onConfirm, onClose }) {
   useLockBody();
+  const t = tone || (danger ? "danger" : "neutral");
+  const ic = icon || (t === "danger" ? "danger" : t === "warning" ? "warning" : "neutral");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const cancelRef = useRef(null);
+  useEffect(() => { cancelRef.current?.focus(); }, []);       // initial focus = safe action
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => { if (e.key === "Escape" && !busy) onClose(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, busy]);
+  const confirm = async () => {
+    if (busy) return;                                          // block duplicate submits
+    try { setErr(null); setBusy(true); await onConfirm(); onClose(); }
+    catch (e) { setBusy(false); setErr(e?.message || "Something went wrong. Please try again."); }
+  };
+  const Icon = ic === "danger" ? ExclamationTriangleIcon : ic === "warning" ? ExclamationTriangleIcon : InformationCircleIcon;
+  const confirmClass = t === "danger" ? "sb-btn danger" : t === "warning" ? "sb-btn gold" : "sb-btn";
   return (
-    <div className="sb-scrim" onClick={onClose}>
-      <div className="sb-confirm" onClick={e=>e.stopPropagation()} role="alertdialog" aria-label={title}>
-        <b className="sb-serif" style={{fontSize:17}}>{title}</b>
-        {body && <p>{body}</p>}
+    <div className="sb-scrim" onClick={() => !busy && onClose()}>
+      <div className="sb-confirm" onClick={e=>e.stopPropagation()} role="alertdialog"
+        aria-modal="true" aria-labelledby="sb-confirm-t" aria-describedby={body?"sb-confirm-b":undefined}>
+        <div className={"sb-confirm-hd tone-"+t}>
+          <span className="sb-confirm-ic" aria-hidden="true"><Icon className="hi" /></span>
+          <b id="sb-confirm-t" className="sb-serif">{title}</b>
+        </div>
+        {body && <p id="sb-confirm-b">{body}</p>}
+        {consequences && consequences.length>0 &&
+          <ul className="sb-confirm-list">{consequences.map((c,i)=><li key={i}>{c}</li>)}</ul>}
+        {err && <div className="sb-lerr" role="alert" style={{marginTop:12,marginBottom:0}}>{err}</div>}
         <div className="sb-btnrow" style={{marginTop:16}}>
-          <button className="sb-btn ghost" onClick={onClose}>{cancelLabel}</button>
-          <button className={"sb-btn"+(danger?" danger":"")} onClick={()=>{ onConfirm(); onClose(); }}>{confirmLabel}</button>
+          <button ref={cancelRef} className="sb-btn ghost" onClick={onClose} disabled={busy}>{cancelLabel}</button>
+          <button className={confirmClass} onClick={confirm} disabled={busy} aria-busy={busy}>
+            {busy ? (busyLabel || "Working…") : confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -2102,15 +2361,19 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
     interval:1, anchorDate:"", endDate:"", active:true, showOnHome:true });
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   const valid = f.name.trim() && f.anchorDate;
+  const initial = useRef(JSON.stringify(f));
+  const isDirty = JSON.stringify(f) !== initial.current;
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
   const preview = valid ? (() => {
     const sd = seriesFromDoc({ ...f, active:true });
     return sd ? nextOccurrences(sd.rule, new Date(), 3).map(fmtEventDate) : [];
   })() : [];
   return (
-    <div className="sb-scrim" onClick={onClose}>
+    <>
+    <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Recurring event">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{d?"Edit recurring event":"New recurring event"}</b>
-          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
+          <button className="sb-x" onClick={requestClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
         <div className="bd">
           <div className="sb-btnrow">
             <div className="sb-field" style={{flex:1}}><label>Event name</label>
@@ -2142,6 +2405,8 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
         </div>
       </div>
     </div>
+    {leaveGuard}
+    </>
   );
 }
 
@@ -2192,10 +2457,14 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEdi
       {sec==="events" && <AdminEvents series={eventSeries} />}
       {sec==="import" && <ImportPanel users={teamUsers} onImport={onImport} />}
       {sec==="issues" && <IssueLog issues={issues} onResolve={onResolveIssue} />}
-      {confirmDel && <ConfirmDialog
+      {confirmDel && <ConfirmDialog tone="danger"
         title="Delete this content?"
-        body={`"${confirmDel.title}" will be permanently removed. This can't be undone. Comments and activity on it are removed too.`}
-        confirmLabel="Delete content"
+        body={`“${confirmDel.title}” will be permanently deleted.`}
+        consequences={[
+          "Its comments, reminder schedules, and activity history are removed too.",
+          "This action cannot be undone.",
+        ]}
+        cancelLabel="Keep content" confirmLabel="Delete content" busyLabel="Deleting…"
         onConfirm={()=>onDeleteTask(confirmDel.id)} onClose={()=>setConfirmDel(null)} />}
     </div>
   );
@@ -2385,10 +2654,11 @@ function PendingRow({ u, tasks, onReview, onReject, onAssignSuggested }) {
         { label:"Review & approve", onClick:onReview },
         { label:"Reject", danger:true, onClick:()=>setConfirmReject(true) },
       ]} />
-      {confirmReject && <ConfirmDialog
+      {confirmReject && <ConfirmDialog tone="danger"
         title={`Reject ${u.name}?`}
-        body="Their pending account will be removed. They can register again if it was a mistake."
-        confirmLabel="Reject account"
+        body="Their pending account will be removed."
+        consequences={["They can register again later if this was a mistake."]}
+        cancelLabel="Keep pending" confirmLabel="Reject account" busyLabel="Rejecting…"
         onConfirm={()=>onReject(u.id)} onClose={()=>setConfirmReject(false)} />}
     </div>
   );
@@ -3345,11 +3615,18 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
   const valid = f.title.trim() && f.location && f.type && f.owner;
   const [remOpen, setRemOpen] = useState(false);
   const remDefaults = (defaultReminders && defaultReminders.length) ? defaultReminders : DEFAULT_REMINDERS;
+  // Dirty = the form differs from the snapshot taken on first render. Compared
+  // by value, so focus/blur/formatting don't trip it; a successful save closes
+  // the editor (unmount) before this could warn.
+  const initial = useRef(JSON.stringify(f));
+  const isDirty = JSON.stringify(f) !== initial.current;
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
   return (
-    <div className="sb-scrim" onClick={onClose}>
+    <>
+    <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{task?"Edit content":"Plan content"}</b>
-          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           <div className="sb-sub" style={{marginTop:0}}>Plan a piece of content. The team adds the deliverable links later, when it's ready for QA.</div>
           <div className="sb-field"><label>Content title</label>
@@ -3428,6 +3705,8 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
         </div>
       </div>
     </div>
+    {leaveGuard}
+    </>
   );
 }
 function AddCrew({ users, onAdd }) {
@@ -3473,6 +3752,9 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
   const toggleLoc = (l)=>set("location", f.location.includes(l)?f.location.filter(x=>x!==l):[...f.location,l]);
   const valid = f.name.trim() && f.skills.length && f.location.length;
   const SK = ["shoot","edit","coordinate","design","shadow"];
+  const initial = useRef(JSON.stringify(f));
+  const isDirty = JSON.stringify(f) !== initial.current;
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
 
   const payload = () => ({ id:user.id, ...f });
   const reset = async () => {
@@ -3481,10 +3763,11 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
   };
 
   return (
-    <div className="sb-scrim" onClick={onClose}>
+    <>
+    <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{isPending?"Approve "+user.name:"Edit "+user.name}</b>
-          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           {isPending && <div className="sb-banner">Set their skills and location, then approve to let them in.</div>}
 
@@ -3535,6 +3818,8 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
         </div>
       </div>
     </div>
+    {leaveGuard}
+    </>
   );
 }
 function Toggle({ label, v, on }) {
