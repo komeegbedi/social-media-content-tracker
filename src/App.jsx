@@ -1252,7 +1252,7 @@ function Board({ profile, isAdmin }) {
     <div className="sb-root">
       <div className="sb-shell">
         <aside className="sb-side">
-          <div className="sb-sbrand"><span className="sb-spark">✦</span>
+          <div className="sb-sbrand">
             <span className="sb-brandtext"><span className="ifc">IFC</span>Creatives Board</span></div>
           <button className="sb-searchbtn" onClick={()=>setSearchOpen(true)} aria-label="Search">
             <span className="ico"><MagnifyingGlassIcon className="hi hi-sm" aria-hidden="true"/></span><span className="lbl">Search…</span><kbd className="sb-kbd">/</kbd>
@@ -1294,7 +1294,7 @@ function Board({ profile, isAdmin }) {
 
         <div className="sb-main">
           <header className="sb-top">
-            <span className="brand"><span className="sb-spark" aria-hidden="true">✦</span><span className="brandwm">Creatives Board</span></span>
+            <span className="brand"><span className="brandwm"><span className="ifc-sm">IFC</span>Creatives Board</span></span>
             <div className="sb-topactions">
               <button className="sb-hbtn" onClick={()=>setSearchOpen(true)} aria-label="Search"><MagnifyingGlassIcon className="hi" aria-hidden="true"/></button>
               <button className="sb-hbtn sb-bellbtn" onClick={()=>setNotifOpen(true)}
@@ -1581,6 +1581,7 @@ function AttentionItem({ t, onClick }) {
   return (
     <button className="sb-attn" onClick={onClick}>
       <span className={"sb-attn-bar "+reasonCls}/>
+      <span className="sb-av sb-attn-av" aria-hidden="true">{t.owner && t.owner!=="Pending" ? initials(t.owner) : "?"}</span>
       <span className="sb-attn-main">
         <span className="sb-attn-title">{label}</span>
         <span className="sb-attn-sub">
@@ -2026,6 +2027,31 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
           </div>
         </section>
 
+        {/* Your focus — the primary widget: what needs YOU right now. On desktop
+            it's placed top-left by the grid; in the DOM it comes first so MOBILE
+            (which follows source order) leads with it, not with "Coming up".
+            Three distinct states: loading (skeleton) / has-items / empty —
+            the empty state never renders while tasks are still loading. */}
+        <section className="sb-wd wd-focus">
+          <div className="sb-shead sb-shead-primary">
+            <div className="sb-shead-main">
+              <h2>Your focus</h2>
+              {tasksLoaded && focus.length>0 &&
+                <span className="sb-headcount" aria-label={`${focus.length} focus item${focus.length!==1?"s":""}`}>{focus.length}</span>}
+            </div>
+            <button className="link subtle" onClick={()=>goTab("myday")}>My Day →</button>
+          </div>
+          {!tasksLoaded
+            ? <div className="sb-attnlist sb-focus-loading" aria-busy="true" aria-label="Loading your focus">
+                {[0,1,2].map(i => <div className="sb-focus-skel" key={i}><span className="sb-skel"/><span className="sb-skel sm"/></div>)}
+              </div>
+            : focus.length===0
+            ? <div className="sb-empty compact sb-empty-glad"><span className="sb-empty-emoji" aria-hidden="true">🎉</span>
+                <b>You're all caught up.</b><span>Nothing needs you right now — enjoy your {hi<12?"morning":hi<17?"afternoon":"evening"}.</span></div>
+            : <div className="sb-attnlist">{focus.map(t =>
+                <AttentionItem key={t.id} t={t} onClick={()=>openTask ? openTask(t.id) : goTab("myday")} />)}</div>}
+        </section>
+
         {/* Coming up — what's on the ministry horizon */}
         <section className="sb-wd wd-events">
           {events.length>0 && <>
@@ -2054,30 +2080,6 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
               })}
             </div>
           </>}
-        </section>
-
-        {/* Your focus — the primary widget: what needs YOU right now. Sits
-            top-left, directly after the stats, so the eye lands here first.
-            Three distinct states: loading (skeleton) / has-items / empty —
-            the empty state never renders while tasks are still loading. */}
-        <section className="sb-wd wd-focus">
-          <div className="sb-shead sb-shead-primary">
-            <div className="sb-shead-main">
-              <h2>Your focus</h2>
-              {tasksLoaded && focus.length>0 &&
-                <span className="sb-headcount" aria-label={`${focus.length} focus item${focus.length!==1?"s":""}`}>{focus.length}</span>}
-            </div>
-            <button className="link subtle" onClick={()=>goTab("myday")}>My Day →</button>
-          </div>
-          {!tasksLoaded
-            ? <div className="sb-attnlist sb-focus-loading" aria-busy="true" aria-label="Loading your focus">
-                {[0,1,2].map(i => <div className="sb-focus-skel" key={i}><span className="sb-skel"/><span className="sb-skel sm"/></div>)}
-              </div>
-            : focus.length===0
-            ? <div className="sb-empty compact sb-empty-glad"><span className="sb-empty-emoji" aria-hidden="true">🎉</span>
-                <b>You're all caught up.</b><span>Nothing needs you right now — enjoy your {hi<12?"morning":hi<17?"afternoon":"evening"}.</span></div>
-            : <div className="sb-attnlist">{focus.map(t =>
-                <AttentionItem key={t.id} t={t} onClick={()=>openTask ? openTask(t.id) : goTab("myday")} />)}</div>}
         </section>
 
         {/* My week (desktop) — a quick timeline of what's ahead */}
@@ -2113,7 +2115,8 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
             : <div className="sb-actfeed2">
                 {activity.map((a,i) => (
                   <button className="sb-actrow2" key={i} onClick={()=>openTask && openTask(a.taskId)}>
-                    <span className={"sb-actrow2-dot type-"+a.type} aria-hidden="true"/>
+                    <span className="sb-av sb-actrow2-av" aria-hidden="true">{initials(a.who)}
+                      <span className={"sb-actrow2-dot type-"+a.type}/></span>
                     <span className="sb-actrow2-body">
                       <span className="sb-actrow2-name">{a.who}</span>
                       <span className="sb-actrow2-act">{a.verb} <span className="ct">{a.title}</span></span>

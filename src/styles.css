@@ -1865,3 +1865,88 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .sb-attnlist .sb-attn{padding-top:11px;padding-bottom:11px}
 .sb-sheet .sb-shead{margin:18px 0 10px}
 .sb-sheet .sb-shead h2{font-size:16px;font-weight:600}
+
+/* =================================================================
+   DESIGN-REVIEW PASS — brand, rhythm, hierarchy, depth.
+   ================================================================= */
+
+/* --- Brand: typography-only wordmark (no glyph). Small IFC label + name. --- */
+.sb-sbrand{gap:0;padding:2px 8px 16px}
+.brandwm .ifc-sm{font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--gold);font-weight:700;margin-right:7px;vertical-align:2px}
+
+/* --- #2 Less whitespace above the fold: content starts higher. --- */
+@media(min-width:900px){
+  .sb-content{padding-top:12px}
+  .sb-page{padding-top:2px}
+}
+
+/* --- #3 Quieter greeting: the page title stops shouting so content is the
+   hero (lighter weight, smaller, tighter block). --- */
+@media(min-width:900px){
+  .sb-h{font-size:30px;font-weight:600;letter-spacing:-.02em}
+  .sb-page.home .sb-greet{margin-bottom:14px;line-height:1.6}
+}
+/* #15 Mobile: drop the "Good morning" eyebrow — go straight to the greeting. */
+@media(max-width:899px){ .sb-page.home .sb-eyebrow{display:none} }
+
+/* --- #4 Metric cards read as interactive (crisper hover, clear affordance). --- */
+.sb-stat2{cursor:pointer}
+.sb-stat2:hover{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 3%,var(--surface))}
+
+/* --- #5 Sidebar recedes (dark): barely lighter than the page, softer edge. --- */
+[data-theme="dark"]{--sidebar:#0A0A0C}
+[data-theme="dark"] .sb-side{border-right-color:rgba(255,255,255,.05)}
+
+/* --- #11 Card depth (dark): a 1px inner highlight + a whisper of shadow so
+   cards read as raised via contrast, not flatness. --- */
+[data-theme="dark"] .sb-stat2,
+[data-theme="dark"] .sb-dash .sb-progress,
+[data-theme="dark"] .sb-dash .sb-week-day,
+[data-theme="dark"] .sb-dash .sb-widcard,
+[data-theme="dark"] .sb-dash .sb-ev,
+[data-theme="dark"] .sb-task,
+[data-theme="dark"] .sb-attnlist{
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 1px 2px rgba(0,0,0,.35)}
+
+/* =================================================================
+   PERSONALITY PASS — avatars in focus + activity; mobile order.
+   ================================================================= */
+
+/* Focus rows: an owner avatar makes the list feel alive. */
+.sb-attn-av{flex:none;align-self:center;width:26px;height:26px;font-size:10px;border:none}
+/* Activity rows: avatar + a small type-coloured status dot (GitHub-style). */
+.sb-actrow2-av{position:relative;flex:none;width:28px;height:28px;font-size:10px;border:none;margin-top:1px}
+.sb-actrow2-av .sb-actrow2-dot{position:absolute;bottom:-1px;right:-1px;width:10px;height:10px;
+  border:2px solid var(--surface);margin:0}
+
+/* Mobile: shorter "Coming up" event cards (~less tall). */
+@media(max-width:899px){
+  .sb-ev{padding:11px 13px}
+  .sb-ev-foot{margin-top:7px;padding-top:7px}
+}
+
+/* =================================================================
+   ACTION-AFFORDANCE PASS — every card leads somewhere.
+   ================================================================= */
+
+/* Metric cards navigate on click; reveal a quiet arrow on hover so the action
+   is legible (Linear-style). The whole card is already a <button>. */
+.sb-stat2{position:relative}
+.sb-stat2::after{content:"→";position:absolute;top:14px;right:15px;
+  font-size:14px;line-height:1;color:var(--text-muted);opacity:0;transform:translateX(-3px);
+  transition:opacity var(--motion-fast) var(--ease-standard),
+             transform var(--motion-fast) var(--ease-standard),
+             color var(--motion-fast) var(--ease-standard)}
+.sb-stat2:hover::after{opacity:1;transform:translateX(0);color:var(--primary)}
+@media (prefers-reduced-motion:reduce){ .sb-stat2::after{transition:none} }
+/* Touch: no hover, so keep the arrow gently visible as the affordance. */
+@media(hover:none){ .sb-stat2::after{opacity:.5;transform:none} }
+
+/* Section-header links + event CTAs slide their arrow on hover (consistent
+   "leads to an action" motion across the dashboard). */
+@media(hover:hover){
+  .sb-shead .link,.sb-ev-link,.sb-proglink{transition:color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard)}
+  .sb-shead .link:hover,.sb-ev-link:hover,.sb-proglink:hover{color:var(--primary)}
+}
