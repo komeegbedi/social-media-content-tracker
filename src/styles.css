@@ -9,42 +9,42 @@
    surfaces migrate slice-by-slice.
    =================================================================== */
 :root{
-  /* -- color: neutrals -- */
-  --background:#F7F6FA;          /* canvas (design_changes.md) */
-  --background-muted:#F0EEF6;
-  --surface:#FFFFFF;
-  --surface-elevated:#FFFFFF;
-  --sidebar:#FFFFFF;
-  --surface-muted:#F0EEF6;
-  --text-primary:#211B32;
-  --text-secondary:#777187;
-  --text-muted:#8B849C;
-  --border:#E6E2EC;
-  --border-strong:#D6D1E0;
-  /* -- color: brand -- */
-  --primary:#6750C8;
-  --primary-hover:#5941BA;
-  --primary-pressed:#4C3AA4;
-  --primary-muted:#EEEAFE;
-  /* -- color: semantic -- */
-  --success:#258A5B;   --success-muted:#E3F4EC;
-  --warning:#C88513;   --warning-muted:#FBF0DA;
-  --danger:#D24F52;    --danger-muted:#FBE6E6;
-  --info:#3974B9;      --info-muted:#E6EEF8;
-  --focus-ring:#8D7FE0;
-  --overlay:rgba(33,27,51,.45);
+  /* -- color: neutrals (Linear-grade; colour only ever communicates meaning) -- */
+  --background:#F7F7F8;          /* page */
+  --background-muted:#F1F1F3;    /* secondary surface */
+  --surface:#FFFFFF;            /* cards */
+  --surface-elevated:#FFFFFF;   /* sheets, popovers */
+  --sidebar:#FAFAFB;
+  --surface-muted:#F1F1F3;
+  --text-primary:#18181B;
+  --text-secondary:#6B7280;
+  --text-muted:#9CA3AF;
+  --border:#E8E8EC;             /* clean hairline */
+  --border-strong:#DCDCE1;
+  /* -- color: brand (deep indigo; used sparingly, solid — never gradient) -- */
+  --primary:#5E6AD2;
+  --primary-hover:#525DBE;
+  --primary-pressed:#4A54AC;
+  --primary-muted:#EEEFFB;
+  /* -- color: semantic (muted; meaning only) -- */
+  --success:#16A34A;   --success-muted:#E7F6EC;
+  --warning:#F59E0B;   --warning-muted:#FEF3E2;
+  --danger:#EF4444;    --danger-muted:#FDECEC;
+  --info:#3B82F6;      --info-muted:#E9F0FE;
+  --focus-ring:#8E97E4;
+  --overlay:rgba(9,9,11,.40);
   /* -- typography scale -- */
   --text-page:28px; --text-section:21px; --text-card:16px;
   --text-body:14.5px; --text-support:13px; --text-label:12px; --text-meta:12px;
   /* -- spacing scale -- */
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px;
   --sp-6:24px; --sp-7:32px; --sp-8:40px; --sp-9:48px; --sp-10:64px;
-  /* -- radius scale -- */
-  --r-control:10px; --r-input:12px; --r-card:12px; --r-panel:16px;
-  --r-modal:22px; --r-pill:999px;
-  /* -- elevation (soft, low opacity; prefer borders + spacing) -- */
-  --shadow-sm:0 1px 2px rgba(33,27,51,.05),0 2px 8px rgba(33,27,51,.05);
-  --shadow-lg:0 2px 6px rgba(33,27,51,.07),0 12px 32px rgba(33,27,51,.10);
+  /* -- radius scale (Linear: 8 / 12 / 16; nothing larger but the floating nav) -- */
+  --r-control:8px; --r-input:8px; --r-card:12px; --r-panel:16px;
+  --r-modal:16px; --r-pill:999px;
+  /* -- elevation (almost invisible; cards read as elevated via contrast) -- */
+  --shadow-sm:0 1px 2px rgba(0,0,0,.04);
+  --shadow-lg:0 4px 12px rgba(0,0,0,.06);
   /* -- motion (v1.2 shared system) -- */
   --motion-instant:100ms; --motion-fast:160ms; --motion-standard:220ms; --motion-slow:280ms;
   --ease-standard:cubic-bezier(.22,1,.36,1); --ease-enter:cubic-bezier(.16,1,.3,1); --ease-exit:cubic-bezier(.4,0,1,1);
@@ -60,7 +60,9 @@
   --ink:var(--text-primary); --muted:var(--text-muted);
   --line:var(--border);
   --violet:var(--primary); --violet-soft:var(--primary-muted); --violet-deep:var(--primary-pressed);
-  --gold:var(--warning); --gold-soft:var(--warning-muted);
+  /* Gold is the LOGO accent — its own hue, used sparingly (logo, greeting,
+     celebrations, milestones). Distinct from the amber `warning` status. */
+  --gold:#C58B1B; --gold-soft:#F5EEDC;
   --green:var(--success); --green-soft:var(--success-muted);
   --amber:var(--warning); --amber-soft:var(--warning-muted);
   --red:var(--danger); --red-soft:var(--danger-muted);
@@ -76,27 +78,30 @@
    and hairline borders rather than heavy shadows. Accent brightens for
    contrast but stays soft; text has three clear steps. */
 [data-theme="dark"]{
-  --background:#0F0C16;          /* canvas */
-  --background-muted:#131019;
-  --sidebar:#14101D;             /* distinct sidebar level */
-  --surface:#191522;             /* cards, rows */
-  --surface-elevated:#211B2D;    /* sheets, drawers, popovers */
-  --surface-muted:#272035;       /* inputs, wells, chips */
-  --text-primary:#F5F2FA;
-  --text-secondary:#A9A2B7;
-  --text-muted:#817A90;
-  --border:#332A42;
-  --border-strong:#443A58;
-  --primary:#9A83EE; --primary-hover:#AD9AF3; --primary-pressed:#8770DC;
-  --primary-muted:#2B2345;
-  --success:#48B981; --success-muted:#132A1F;
-  --warning:#E0A43B; --warning-muted:#302412;
-  --danger:#EC7277;  --danger-muted:#331B1B;
-  --info:#7FA9E6;    --info-muted:#16222F;
-  --focus-ring:#AC9CFF;
-  --overlay:rgba(8,6,13,.62);
-  --shadow-sm:0 1px 2px rgba(0,0,0,.5),0 2px 10px rgba(0,0,0,.35);
-  --shadow-lg:0 4px 12px rgba(0,0,0,.5),0 16px 40px rgba(0,0,0,.55);
+  /* Linear's signature dark scale: near-black base, subtly layered surfaces,
+     blue-grey neutral text, hairline white-alpha borders. */
+  --background:#08090A;          /* app base */
+  --background-muted:#0E0F11;    /* surface layer */
+  --sidebar:#0B0C0D;             /* distinct sidebar level */
+  --surface:#141516;             /* cards, rows */
+  --surface-elevated:#1C1D1F;    /* sheets, drawers, popovers */
+  --surface-muted:#1C1D20;       /* inputs, wells, chips */
+  --text-primary:#F7F8F8;
+  --text-secondary:#8A8F98;
+  --text-muted:#62666D;
+  --border:rgba(255,255,255,.07);
+  --border-strong:rgba(255,255,255,.12);
+  --primary:#6E79E8; --primary-hover:#7C86EC; --primary-pressed:#5E6AD2;   /* Linear indigo, interactive on dark */
+  --primary-muted:#1E2030;
+  --success:#22C55E; --success-muted:#0F2418;
+  --warning:#F59E0B; --warning-muted:#2A2010;
+  --danger:#F87171;  --danger-muted:#2C1616;
+  --info:#5A96F7;    --info-muted:#111E2D;
+  --gold:#D9A63A; --gold-soft:#28210E;
+  --focus-ring:#7C86EC;
+  --overlay:rgba(0,0,0,.66);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.5);
+  --shadow-lg:0 8px 24px rgba(0,0,0,.5);
   color-scheme:dark;
 }
 /* The info banner hardcodes dark-brown text/border; fix it for dark backgrounds. */
@@ -137,8 +142,9 @@ a{color:var(--primary)}
 @media(min-width:900px){
   .sb-side{display:flex;flex-direction:column;width:var(--side);flex:none;height:100%;
     border-right:1px solid var(--line);overflow-y:auto;padding:22px 14px;background:var(--sidebar)}
-  .sb-content{padding-bottom:24px}
-  .sb-content>*{max-width:1040px;padding-left:10px;padding-right:10px}
+  /* Breathing room around the main body — clear of the sidebar and the top. */
+  .sb-content{padding:20px 32px 40px}
+  .sb-content>*{max-width:1040px;padding-left:0;padding-right:0}
 }
 
 .sb-sbrand{letter-spacing:-.015em;font-weight:600;font-size:19px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
@@ -147,6 +153,18 @@ a{color:var(--primary)}
 .sb-brandfoot{margin-top:14px;padding-top:11px;border-top:1px solid var(--line);
   display:flex;flex-direction:column;font-size:11px;color:var(--muted);line-height:1.5}
 .sb-brandfoot b{color:var(--ink);font-weight:600;font-size:12px}
+/* Linear-style sidebar "New content" — a subtle FILLED secondary with an accent
+   icon: reads clearly as a button (not a faint outline), still quiet. */
+.sb-newbtn{width:100%;display:inline-flex;align-items:center;justify-content:flex-start;gap:9px;
+  margin-top:16px;padding:8px 11px;min-height:38px;border-radius:var(--r-control);
+  background:var(--surface-muted);border:1px solid var(--border);color:var(--text-primary);
+  font-size:13.5px;font-weight:500;cursor:pointer;box-shadow:var(--shadow-sm);
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-newbtn:hover{border-color:var(--border-strong);background:color-mix(in srgb,var(--primary) 6%,var(--surface-muted))}
+.sb-newbtn:active{transform:scale(.99)}
+.sb-newbtn .hi{width:16px;height:16px;color:var(--primary);flex:none}
 .sb-snav{display:flex;flex-direction:column;gap:3px}
 .sb-snav button{display:flex;align-items:center;gap:11px;background:none;border:none;width:100%;
   padding:11px 12px;border-radius:11px;color:var(--muted);font-size:14px;font-weight:600;text-align:left}
@@ -209,7 +227,7 @@ a{color:var(--primary)}
   background:var(--card);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
 
 .sb-page{padding:20px 16px 8px}
-@media(min-width:900px){ .sb-page{padding:30px 14px 24px} }
+@media(min-width:900px){ .sb-page{padding:8px 0 24px} }  /* horizontal inset comes from .sb-content now */
 .sb-eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);opacity:.85}
 .sb-h{font-size:30px;font-weight:700;margin:5px 0 6px;line-height:1.1;letter-spacing:-.02em}
 @media(min-width:900px){ .sb-h{font-size:38px} }
@@ -310,7 +328,7 @@ a{color:var(--primary)}
 .st-changes{background:var(--red-soft);color:var(--red)}
 .st-approved{background:var(--green-soft);color:var(--green)}
 .st-ready{background:var(--amber-soft);color:var(--amber)}
-.st-posted{background:var(--violet);color:#fff}
+.st-posted{background:var(--surface-muted);color:var(--text-secondary)}
 .sb-status .pip{width:6px;height:6px;border-radius:50%;background:currentColor}
 
 /* Status-dominant header/card lines + system-driven "Next" text. */
@@ -1414,7 +1432,7 @@ input,textarea,select{transition:border-color var(--motion-fast) var(--ease-stan
 
 @media(min-width:900px){
   /* Home breathes wider than the standard content column to fill the space. */
-  .sb-content>.sb-page.home{max-width:1240px;padding-bottom:60px}
+  .sb-content>.sb-page.home{max-width:1320px;padding-bottom:60px}
   /* Dashboard grid: full-width stats, then paired widgets of differing heights
      so the board feels alive rather than stacked. Generous row gap between
      sections; the pairs read as one connected workspace. */
@@ -1474,19 +1492,16 @@ input,textarea,select{transition:border-color var(--motion-fast) var(--ease-stan
   color:var(--text-primary);font-variant-numeric:tabular-nums}
 .sb-stat2-l{font-size:12.5px;font-weight:600;color:var(--text-secondary);margin-top:4px}
 .sb-stat2-sub{font-size:11.5px;font-weight:600;color:var(--text-muted);margin-top:2px}
-/* Soft per-tone personality — tints stay low; solid fallback via the base rule. */
-.sb-stat2.tone-violet{background:color-mix(in srgb,var(--primary) 5%,var(--surface))}
+/* Neutral cards (calm, ~95% neutral) — colour lives only where it means
+   something: the icon chip and the supporting sub-metric. No decorative tint. */
 .sb-stat2.tone-violet .sb-stat2-ic{background:var(--primary-muted);color:var(--primary)}
-.sb-stat2.tone-violet .sb-stat2-sub{color:var(--primary)}
-.sb-stat2.tone-amber{background:color-mix(in srgb,var(--warning) 6%,var(--surface))}
+.sb-stat2.tone-violet .sb-stat2-sub{color:var(--text-muted)}
 .sb-stat2.tone-amber .sb-stat2-ic{background:var(--warning-muted);color:var(--warning)}
 .sb-stat2.tone-amber .sb-stat2-sub{color:var(--warning)}
-.sb-stat2.tone-blue{background:color-mix(in srgb,var(--info) 6%,var(--surface))}
 .sb-stat2.tone-blue .sb-stat2-ic{background:var(--info-muted);color:var(--info)}
-.sb-stat2.tone-blue .sb-stat2-sub{color:var(--info)}
-.sb-stat2.tone-green{background:color-mix(in srgb,var(--success) 6%,var(--surface))}
+.sb-stat2.tone-blue .sb-stat2-sub{color:var(--text-muted)}
 .sb-stat2.tone-green .sb-stat2-ic{background:var(--success-muted);color:var(--success)}
-.sb-stat2.tone-green .sb-stat2-sub{color:var(--success)}
+.sb-stat2.tone-green .sb-stat2-sub{color:var(--text-muted)}
 
 /* --- Greeting: the hand waves once on load; the eyebrow steps back so the
    main greeting stays the hero. --- */
@@ -1501,8 +1516,8 @@ input,textarea,select{transition:border-color var(--motion-fast) var(--ease-stan
 
 /* --- Your focus: urgency should read instantly. A faint row tint by the
    pre-computed reason class (graceful no-op where :has is unsupported). --- */
-.sb-attnlist .sb-attn:has(.sb-attn-bar.due-over){background:color-mix(in srgb,var(--danger) 4%,transparent)}
-.sb-attnlist .sb-attn:has(.sb-attn-bar.due-soon){background:color-mix(in srgb,var(--warning) 4%,transparent)}
+/* Rows stay neutral (Linear); the left accent bar alone carries the urgency. */
+.sb-attnlist .sb-attn{background:transparent}
 .sb-attn-bar{width:4px}
 
 /* --- Recent activity: a quiet, secondary feed. Action first, then content,
@@ -1731,3 +1746,122 @@ input,textarea,select{transition:border-color var(--motion-fast) var(--ease-stan
   .sb-dash .sb-week-day:first-child .sb-week-lbl,
   .sb-dash .sb-week-day:nth-child(2) .sb-week-lbl{color:var(--primary);font-weight:800}
 }
+
+/* =================================================================
+   LINEAR COMPONENT PASS — buttons + sidebar active state.
+   Token-driven variants matching the reference design system.
+   ================================================================= */
+
+/* --- Buttons --- */
+/* Primary: solid indigo, medium weight, a single subtle top-edge highlight
+   (the Linear button "sheen"), flat otherwise. */
+.sb-btn{font-weight:500;border-radius:var(--r-input);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10)}
+.sb-btn:hover{background:var(--primary-hover)}
+.sb-btn:active{background:var(--primary-pressed)}
+.sb-btn:disabled{box-shadow:none}
+/* Secondary (ghost): neutral surface + hairline border + neutral text —
+   NOT accent-tinted. This is Linear's default/secondary button. */
+.sb-btn.ghost{background:var(--surface);border:1px solid var(--border);
+  color:var(--text-primary);box-shadow:none}
+.sb-btn.ghost:hover{background:var(--surface-muted);border-color:var(--border-strong)}
+.sb-btn.ghost:active{background:var(--surface-muted)}
+/* Danger: coral, medium weight, same subtle top edge. */
+.sb-btn.danger{background:var(--danger);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+.sb-btn.danger:hover{background:var(--danger);filter:brightness(.95)}
+/* Compact: Linear's dense inline size (~32px). */
+.sb-btn.compact{min-height:32px;padding:6px 12px;font-size:13px;font-weight:500;box-shadow:none}
+/* Text/quiet buttons keep the tertiary treatment already defined (.sb-tertiary). */
+
+/* --- Sidebar active state (desktop) --- */
+/* A subtle tinted row with a gliding indigo left-accent bar, not a saturated
+   pill. Text brightens to primary; only the icon carries the accent. */
+@media(min-width:900px){
+  .sb-snav-ind{background:var(--surface-muted);border-radius:var(--r-control);
+    box-shadow:inset 2px 0 0 var(--primary)}
+  [data-theme="dark"] .sb-snav-ind{background:rgba(255,255,255,.05)}
+  .sb-snav button.on{color:var(--text-primary);font-weight:500;background:transparent}
+  .sb-snav button.on .ico{color:var(--primary)}
+}
+
+/* =================================================================
+   LINEAR COMPONENT PASS — chips/badges + inputs.
+   ================================================================= */
+
+/* --- Chips & badges: quiet, sentence-case, consistent geometry (no shouting
+   uppercase, lighter weight, muted tints). --- */
+.sb-status{font-weight:500;letter-spacing:0;padding:3px 9px}
+.sb-status .pip{width:6px;height:6px}
+.sb-chip,.sb-pri,.sb-rolechip,.sb-role{text-transform:none;letter-spacing:0;font-weight:600}
+.sb-chip{font-size:11px;padding:2px 8px;border-radius:6px}
+.sb-pri{font-size:11px;padding:2px 8px;border-radius:6px}
+/* Filter pills: compact, subtle border; ACTIVE = quiet tint, not a saturated fill. */
+.sb-fchip{border-radius:var(--r-control);padding:6px 11px;font-weight:500;
+  background:var(--surface);border:1px solid var(--border);color:var(--text-secondary)}
+.sb-fchip:hover{border-color:var(--border-strong);color:var(--text-primary)}
+.sb-fchip.on{background:var(--primary-muted);color:var(--primary);border-color:transparent}
+.sb-fchip.admin.on{background:var(--primary-muted);border-color:transparent}
+
+/* --- Inputs: subtle border, 8px radius, soft indigo focus ring (no hard
+   2px outline). Placeholder + disabled tuned to the reference. --- */
+.sb-field input,.sb-field select,.sb-field textarea{border-radius:var(--r-input);
+  background:var(--surface);border:1px solid var(--border);padding:10px 12px}
+[data-theme="dark"] .sb-field input,[data-theme="dark"] .sb-field select,[data-theme="dark"] .sb-field textarea{
+  background:var(--surface-muted)}
+.sb-field input:focus,.sb-field select:focus,.sb-field textarea:focus,
+.sb-urlrow input:focus,.sb-inline input:focus{outline:none;border-color:var(--primary);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 18%,transparent)}
+.sb-field input:disabled,.sb-field select:disabled,.sb-field textarea:disabled{
+  opacity:.6;cursor:not-allowed;background:var(--surface-muted)}
+input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
+/* URL / inline inputs share the same geometry + focus ring. */
+.sb-urlrow input,.sb-inline > input{border-radius:var(--r-input)}
+
+/* =================================================================
+   LINEAR COMPONENT PASS — button hierarchy + quiet beta notice.
+   ================================================================= */
+
+/* Secondary action with danger MEANING (colour as text, not a full fill) —
+   one primary per section; destructive-adjacent actions stay quiet. */
+.sb-btn.ghost.subtle-danger{color:var(--danger);border-color:var(--border);background:var(--surface)}
+.sb-btn.ghost.subtle-danger:hover{background:var(--danger-muted);border-color:transparent;color:var(--danger)}
+.sb-btn.ghost.subtle-danger:active{background:var(--danger-muted)}
+
+/* Beta notice: de-emphasised to a quiet inline strip — no boxed banner
+   competing with the page title. */
+.sb-beta{background:transparent;border:none;box-shadow:none;padding:4px 0;margin:2px 0 6px}
+.sb-beta-tag{background:var(--primary-muted);color:var(--primary);font-weight:600}
+.sb-beta-txt{color:var(--text-muted);font-size:12px}
+.sb-beta-report{background:none;border:none;color:var(--text-secondary);padding:4px 8px;font-weight:500}
+.sb-beta-report:hover{color:var(--text-primary);background:transparent}
+.sb-beta-x{color:var(--text-muted)}
+@media(min-width:900px){ .sb-beta{margin:0 0 8px} }
+
+/* =================================================================
+   LINEAR COMPONENT PASS — command palette, typography, density.
+   ================================================================= */
+
+/* --- Command palette (⌘K / "/") — Linear command-bar styling: blurred
+   scrim, elevated surface, hairline border, neutral hover, quiet labels. --- */
+.sb-modal{background:var(--overlay);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.sb-search{background:var(--surface-elevated);border:1px solid var(--border);
+  border-radius:var(--r-panel);box-shadow:var(--shadow-lg)}
+.sb-searchbar{border-bottom:1px solid var(--border);padding:13px 16px}
+.sb-searchbar input{color:var(--text-primary)}
+.sb-searchsec{text-transform:none;letter-spacing:0;font-weight:600;font-size:11px;
+  color:var(--text-muted);padding:11px 10px 4px}
+.sb-sresult{border-radius:var(--r-control)}
+.sb-sresult:hover{background:var(--surface-muted)}
+.sb-sresult .r-main{color:var(--text-primary)}
+.sb-sresult .r-sub{color:var(--text-muted)}
+.sb-kbd{background:var(--surface-muted);border:1px solid var(--border);color:var(--text-secondary)}
+
+/* --- Typography: quiet sentence-case group label + greeting eyebrow
+   (Linear uses calm, neutral small labels — no shouting uppercase/gold). --- */
+.sb-navgroup{text-transform:none;letter-spacing:.01em;font-weight:600;font-size:11.5px;color:var(--text-muted)}
+.sb-eyebrow{text-transform:none;letter-spacing:0;color:var(--text-muted);font-weight:500;opacity:1;font-size:13px}
+
+/* --- Density: tighter list rows + a calmer modal section rhythm. --- */
+.sb-attnlist .sb-attn{padding-top:11px;padding-bottom:11px}
+.sb-sheet .sb-shead{margin:18px 0 10px}
+.sb-sheet .sb-shead h2{font-size:16px;font-weight:600}

@@ -1273,8 +1273,8 @@ function Board({ profile, isAdmin }) {
               </button>
             ))}
           </nav>
-          {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")} aria-label="New content">
-            <PlusIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">New content</span></button>}
+          {isAdmin && <button className="sb-newbtn" onClick={()=>setEditTask("new")} aria-label="New content">
+            <PlusIcon className="hi" aria-hidden="true"/><span className="lbl">New content</span></button>}
           {/* Personal area: Notifications, then Profile, then the quiet Report link. */}
           <div className="sb-sfoot">
             <button className="sb-report" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
@@ -3257,7 +3257,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
               <b>QA review</b>
               <div className="sb-btnrow">
                 <button className="sb-btn green compact" onClick={onApprove}>Approve</button>
-                <button className="sb-btn danger compact" onClick={()=>setAskChanges(v=>!v)}>Request changes</button>
+                <button className="sb-btn ghost subtle-danger compact" onClick={()=>setAskChanges(v=>!v)}>Request changes</button>
               </div>
               {askChanges && <>
                 <textarea rows={2} value={changeNote} placeholder="What needs to change?"
