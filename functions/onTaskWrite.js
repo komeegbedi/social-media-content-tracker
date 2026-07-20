@@ -4,7 +4,7 @@ const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { logger } = require("firebase-functions/v2");
 const {
   db, FieldValue, Timestamp,
-  loadUsers, loadSettings, notifyUsers, crewRoleLabel, computeFireAt,
+  loadUsers, loadSettings, notifyUsers, crewRoleLabel, computeFireAt, formatContentTitle,
 } = require("./lib");
 const { resendApiKey } = require("./emailService");
 
@@ -63,6 +63,7 @@ exports.onTaskWrite = onDocumentWritten(
     }
 
     const { list: users, byName } = await loadUsers();
+    const dispTitle = formatContentTitle(after.title);   // Title Case for all notification text
     const admins = users.filter((u) => u.role === "admin");
     const qaUsers = users.filter((u) => u.qa === true || u.role === "admin");
     const captionUsers = users.filter((u) => u.captions === true);
@@ -71,7 +72,7 @@ exports.onTaskWrite = onDocumentWritten(
     if (after.owner && after.owner !== "Pending" && after.owner !== before?.owner) {
       const ou = byName[after.owner];
       if (ou) await notifyUsers([ou], { type: "assigned", taskId,
-        title: `You've been assigned to '${after.title}'`, body: "You're leading this piece.",
+        title: `You've been assigned to '${dispTitle}'`, body: "You're leading this piece.",
         keyBase: `assigned_owner_${taskId}` });
     }
     const beforeCrew = new Set((before?.support || []).map((s) => s.name));
@@ -79,7 +80,7 @@ exports.onTaskWrite = onDocumentWritten(
       if (beforeCrew.has(s.name)) continue;
       const cu = byName[s.name];
       if (cu) await notifyUsers([cu], { type: "assigned", taskId,
-        title: `You've been added to '${after.title}'`, body: `As ${crewRoleLabel(s)}.`,
+        title: `You've been added to '${dispTitle}'`, body: `As ${crewRoleLabel(s)}.`,
         keyBase: `assigned_crew_${taskId}_${statusKey(s.name)}` });
     }
 
@@ -93,24 +94,24 @@ exports.onTaskWrite = onDocumentWritten(
         const reviewers = qaUsers;
         const reviewerIds = new Set(reviewers.map((u) => u.uid));
         await notifyUsers(reviewers, { type: "qa", taskId, keyBase,
-          title: `'${after.title}' is awaiting review` });
+          title: `'${dispTitle}' is awaiting review` });
         const otherAdmins = admins.filter((u) => !reviewerIds.has(u.uid));
         if (otherAdmins.length) await notifyUsers(otherAdmins, { type: "qa", taskId, keyBase: `${keyBase}_admin`,
-          channels: ["in-app"], title: `'${after.title}' was submitted for review` });
+          channels: ["in-app"], title: `'${dispTitle}' was submitted for review` });
       } else if (after.status === "Changes Requested") {
         await notifyUsers(owner ? [owner] : [], { type: "changes", taskId, keyBase,
-          title: `Changes requested on '${after.title}'` });
+          title: `Changes requested on '${dispTitle}'` });
       } else if (after.status === "Approved") {
         // Owner: informational (in-app only). Caption/posting team: action —
         // approval is their cue to caption, so they get push.
         if (owner) await notifyUsers([owner], { type: "approved", taskId, keyBase, channels: ["in-app"],
-          title: `'${after.title}' has been approved` });
+          title: `'${dispTitle}' has been approved` });
         const captioners = captionUsers.filter((u) => !owner || u.uid !== owner.uid);
         if (captioners.length) await notifyUsers(captioners, { type: "ready", taskId, keyBase: `${keyBase}_caption`,
-          title: `'${after.title}' is approved — ready to caption` });
+          title: `'${dispTitle}' is approved — ready to caption` });
       } else if (after.status === "Ready to Post") {
         await notifyUsers(captionUsers, { type: "ready", taskId, keyBase,
-          title: `'${after.title}' is ready to publish` });
+          title: `'${dispTitle}' is ready to publish` });
       }
     }
 

@@ -53,6 +53,9 @@
   --ease-out:var(--ease-standard); --ease-inout:var(--ease-standard);
   /* -- icon sizes -- */
   --icon-xs:14px; --icon-sm:16px; --icon-md:18px; --icon-nav:19px; --icon-empty:40px;
+  /* -- z-index layering system (one source of truth; never hand-pick numbers) -- */
+  --z-base:0; --z-sticky:20; --z-navigation:40; --z-popover:50;
+  --z-drawer-backdrop:70; --z-drawer:80; --z-modal-backdrop:90; --z-modal:100; --z-toast:110;
   /* -- layout -- */
   --side:248px;
   /* -- legacy aliases (do not use in NEW rules) -- */
@@ -186,7 +189,7 @@ a{color:var(--primary)}
 /* Mobile header (v1.2): a light translucent glass surface that complements the
    floating bottom nav — not a solid purple block. Profile lives in the bottom
    nav, so only Search + Notifications appear here. */
-.sb-top{flex:0 0 auto;z-index:40;display:flex;align-items:center;justify-content:space-between;
+.sb-top{flex:0 0 auto;z-index:var(--z-sticky);display:flex;align-items:center;justify-content:space-between;
   min-height:54px;padding:calc(8px + env(safe-area-inset-top)) 16px 8px;
   background:var(--background); /* solid fallback for iOS < 16.2 (no color-mix) */
   background:color-mix(in srgb,var(--background) 88%,transparent);
@@ -211,9 +214,9 @@ a{color:var(--primary)}
 .sb-hbtn .hi{width:21px;height:21px}
 
 /* Account drawer (mobile) — bottom sheet from the header avatar */
-.sb-drawer{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+.sb-drawer{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:var(--r-modal) var(--r-modal) 0 0;
   padding:10px 12px calc(20px + env(safe-area-inset-bottom));animation:rise .2s ease}
-@media(min-width:900px){ .sb-drawer{border-radius:20px} }
+@media(min-width:900px){ .sb-drawer{border-radius:var(--r-modal)} }
 .sb-drawer-user{display:flex;align-items:center;gap:12px;padding:10px 10px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
 .sb-drawer-user .nm{font-size:15px;font-weight:600}
 .sb-drawer-user .rl{font-size:12px;color:var(--muted);word-break:break-all}
@@ -288,7 +291,7 @@ a{color:var(--primary)}
 .sb-kebab-btn{width:40px;height:40px;border:none;background:transparent;border-radius:var(--r-control);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;color:var(--text-muted);
   color:var(--muted);font-size:18px;line-height:1;display:grid;place-items:center;padding:0}
 .sb-kebab-btn:hover{background:var(--line);color:var(--ink)}
-.sb-kebab-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:20;min-width:148px;
+.sb-kebab-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:var(--z-popover);min-width:148px;
   background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);
   padding:6px;display:flex;flex-direction:column}
 .sb-kebab-item{text-align:left;border:none;background:transparent;cursor:pointer;border-radius:8px;
@@ -316,6 +319,10 @@ a{color:var(--primary)}
 
 /* Cluster of tags on the right of a card title row. */
 .sb-rowtags{display:flex;gap:6px;flex:none;align-items:center}
+/* Admin quick-action kebab on a task card — compact, visible, tucked top-right. */
+.sb-cardkebab{display:inline-flex;align-self:flex-start;margin:-4px -6px 0 -2px}
+.sb-cardkebab .sb-kebab-btn{width:30px;height:30px;color:var(--text-secondary)}
+.sb-cardkebab .sb-kebab-btn:hover{background:var(--surface-muted);color:var(--text-primary)}
 
 .sb-status{font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:5px}
 .sb-status.big{font-size:13px;padding:5px 12px;font-weight:700}
@@ -380,7 +387,7 @@ a{color:var(--primary)}
 /* Floating "liquid glass" bottom nav (v1.2): a rounded capsule that hovers
    above the home indicator, five equal columns, with one shared indicator
    that glides behind the active tab. */
-.sb-nav{position:fixed;left:16px;right:16px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:50;
+.sb-nav{position:fixed;left:16px;right:16px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:var(--z-navigation);
   display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
   min-height:66px;padding:6px;border-radius:26px;
   border:1px solid rgba(255,255,255,.5);
@@ -428,7 +435,7 @@ a{color:var(--primary)}
 .sb-navbtn .pill{position:absolute;top:1px;right:calc(50% - 24px);background:var(--danger);color:#fff;font-size:9px;
   font-weight:700;border-radius:999px;padding:0 5px;line-height:15px;min-width:15px;text-align:center;z-index:2}
 
-.sb-fab{position:fixed;bottom:calc(94px + env(safe-area-inset-bottom));right:18px;z-index:41;width:58px;height:58px;
+.sb-fab{position:fixed;bottom:calc(94px + env(safe-area-inset-bottom));right:18px;z-index:var(--z-navigation);width:58px;height:58px;
   border-radius:18px;background:var(--primary);color:#fff;border:none;box-shadow:var(--shadow-lg);
   display:flex;align-items:center;justify-content:center;
   transition:background var(--motion-micro) var(--ease-out),transform var(--motion-micro) var(--ease-out)}
@@ -563,18 +570,83 @@ a{color:var(--primary)}
 .sb-overload{font-size:10.5px;color:var(--red);font-weight:700;margin-left:6px}
 .sb-idle{font-size:10.5px;color:var(--amber);font-weight:700;margin-left:6px}
 
-.sb-scrim{position:fixed;inset:0;height:100vh;height:100dvh;background:var(--overlay);z-index:50;
+.sb-scrim{position:fixed;inset:0;height:100vh;height:100dvh;background:var(--overlay);z-index:var(--z-modal);
   display:flex;align-items:flex-end;justify-content:center}
 /* Cap the sheet to the *visible* viewport (dvh), minus the top safe-area, so a
    bottom-anchored sheet's top can never hide under the iPhone Safari/Chrome URL
    bar. `vh` is the fallback for browsers without dvh. */
-.sb-sheet{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+/* #7 — sticky editor footer: optional (wrapping) validation message above a
+   full-width Save button; respects the iPhone home-indicator safe area. */
+.sb-sheetfoot{flex:0 0 auto;display:flex;flex-direction:column;gap:10px;
+  padding:14px 16px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--border);
+  background:var(--surface-elevated)}
+.sb-footmsg{font-size:var(--text-support);color:var(--danger);font-weight:500;line-height:1.45}
+.sb-footbtn{width:100%;margin-top:0}
+/* #6 — responsive two-column form row: side by side when wide, stacked when
+   narrow, never overlapping (min-width:0 lets date/select inputs shrink). */
+.sb-formrow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sb-formrow > .sb-field{min-width:0;margin-bottom:13px}
+.sb-formrow > .sb-field input,.sb-formrow > .sb-field select{width:100%;min-width:0}
+@media(max-width:439px){ .sb-formrow{grid-template-columns:1fr;gap:0} }
+/* #3 — custom "Other" crew label input (outside a .sb-field) matches inputs. */
+.sb-addcrew-label{width:100%;margin-top:8px;border:1px solid var(--border);border-radius:var(--r-input);
+  padding:11px 12px;font-size:16px;font-family:inherit;background:var(--surface);color:var(--text-primary)}
+.sb-addcrew-label:focus{outline:2px solid var(--focus-ring);border-color:transparent}
+/* #4 — "Unavailable" workload chip + #3 optional-field hint */
+.sb-unavail{background:var(--surface-muted)!important;color:var(--text-muted)!important;font-weight:600}
+.sb-optional{color:var(--text-muted);font-weight:400;font-size:var(--text-label)}
+
+/* Reusable URL input (UrlInput) — Open/Copy embedded on the input's right edge.
+   Minimal, borderless actions that read as part of the field; hover tint +
+   slight scale; subtle inline validation. */
+.sb-urlfield{width:100%}
+.sb-urlwrap{position:relative;display:block}
+.sb-urlwrap.has-actions .sb-urlctrl{padding-right:78px}
+.sb-urlactions{position:absolute;top:0;right:6px;height:100%;display:flex;align-items:center;gap:2px;
+  pointer-events:none}
+.sb-urlactions > *{pointer-events:auto}
+.sb-urlbtn{width:36px;height:36px;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:var(--r-control);border:none;background:transparent;color:var(--text-muted);cursor:pointer;
+  text-decoration:none;-webkit-tap-highlight-color:transparent;
+  transition:background var(--motion-fast) var(--ease-standard),color var(--motion-fast) var(--ease-standard),transform var(--motion-fast) var(--ease-standard)}
+.sb-urlbtn:hover{background:var(--surface-muted);color:var(--text-primary);transform:scale(1.08)}
+.sb-urlbtn:active{transform:scale(.94)}
+.sb-urlbtn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+.sb-urlbtn:disabled{opacity:.4;cursor:not-allowed;transform:none;background:transparent;color:var(--text-muted)}
+.sb-urlbtn.copied{color:var(--success)}
+.sb-urlhint{margin-top:5px;font-size:12px;font-weight:500;display:flex;align-items:center;gap:4px}
+.sb-urlhint.ok{color:var(--text-secondary)}      /* subtle — not a loud green */
+.sb-urlhint.copied{color:var(--success)}
+/* Reference row in the task-detail metadata card.
+   Desktop: single line — label · truncated URL · Open · Copy.
+   Mobile (<520px): two levels — label on its own line, then URL + actions. */
+.sb-refrow{display:flex;align-items:center;gap:12px;min-width:0;
+  padding:7px 0;border-bottom:1px solid var(--line)}
+.sb-refrow-k{flex:none;font-size:12.5px;color:var(--muted);font-weight:600}
+.sb-refrow-main{flex:1;min-width:0;display:flex;align-items:center;gap:8px}
+.sb-refrow-url{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  text-align:left;font-size:13px;color:var(--primary);text-decoration:none}
+.sb-refrow-url:hover{text-decoration:underline}
+.sb-refrow-actions{flex:none;display:inline-flex;align-items:center;gap:8px}
+/* Copy button expands to "✓ Copied" briefly after a successful copy. */
+.sb-refcopy.copied{width:auto;padding:0 10px;gap:5px;color:var(--success);transform:none}
+.sb-refcopy-txt{font-size:12px;font-weight:600}
+@media(max-width:520px){
+  .sb-refrow{flex-direction:column;align-items:stretch;gap:6px}
+  .sb-refrow-main{width:100%}
+}
+/* Mobile: ≥44px touch targets, still inside the field, no wrap. */
+@media(max-width:560px){
+  .sb-urlbtn{width:44px;height:44px}
+  .sb-urlwrap.has-actions .sb-urlctrl{padding-right:98px}
+}
+.sb-sheet{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:var(--r-modal) var(--r-modal) 0 0;
   max-height:calc(100vh - 48px);
   max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
   display:flex;flex-direction:column;overflow:hidden;-webkit-overflow-scrolling:touch;
   animation:rise .22s ease;overscroll-behavior:contain}
 @media(min-width:900px){ .sb-scrim{align-items:center;padding:20px}
-  .sb-sheet{border-radius:20px;max-height:86dvh} }
+  .sb-sheet{border-radius:var(--r-modal);max-height:86dvh} }
 @keyframes rise{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
 /* Sticky header pins the type badge + ✕ to the top of the panel, always
    visible and tappable; extra top padding clears the notch/home indicator. */
@@ -589,17 +661,25 @@ a{color:var(--primary)}
 @media(max-width:899px){ .sb-x{width:44px;height:44px} }
 
 /* --- Notification Center --- */
-.sb-notifpanel{background:var(--surface-elevated);width:100%;max-width:440px;border-radius:22px 22px 0 0;
+.sb-notifpanel{background:var(--surface-elevated);width:100%;max-width:440px;border-radius:var(--r-modal) var(--r-modal) 0 0;
   max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
   display:flex;flex-direction:column;overflow:hidden;animation:rise .22s ease}
-@media(min-width:900px){ .sb-notifpanel{border-radius:20px;max-height:80dvh} }
+@media(min-width:900px){ .sb-notifpanel{border-radius:var(--r-modal);max-height:80dvh} }
 .sb-notifhd{position:sticky;top:0;background:var(--surface-elevated);padding:16px 16px 10px;
   border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}
 @media(max-width:899px){ .sb-notifhd{padding-top:calc(18px + env(safe-area-inset-top))} }
 .sb-notifhd-actions{display:flex;align-items:center;gap:8px}
 .sb-iconbtn{background:var(--surface-muted);border:1px solid var(--border);width:40px;height:40px;border-radius:50%;
   display:inline-flex;align-items:center;justify-content:center;
-  font-size:15px;color:var(--ink);cursor:pointer}
+  font-size:15px;color:var(--ink);cursor:pointer;text-decoration:none}
+.sb-iconbtn:hover{background:var(--surface);border-color:var(--border-strong)}
+/* Copy / Open beside a link input — clean, borderless, muted; softly tinted on
+   hover. Lighter than the filled circle so a row of two doesn't feel heavy. */
+.sb-inline .sb-iconbtn{flex:none;align-self:center;width:36px;height:36px;
+  background:transparent;border:1px solid transparent;color:var(--text-muted);
+  transition:background var(--motion-fast) var(--ease-standard),color var(--motion-fast) var(--ease-standard),border-color var(--motion-fast) var(--ease-standard)}
+.sb-inline .sb-iconbtn:hover{background:var(--primary-muted);border-color:transparent;color:var(--primary)}
+.sb-inline .sb-iconbtn:active{transform:scale(.92)}
 .sb-notiflist{overflow-y:auto;-webkit-overflow-scrolling:touch;padding:6px 0 calc(14px + env(safe-area-inset-bottom))}
 .sb-notif{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;
   background:none;border:none;cursor:pointer;padding:12px 16px;border-bottom:1px solid var(--line)}
@@ -625,12 +705,39 @@ a{color:var(--primary)}
 .sb-push b{color:var(--ink);display:block;margin-bottom:5px;font-size:13px}
 .sb-push ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
 /* Foreground push toast */
+/* Centered toast/banner entrance — animates translate(-50%, …) so the
+   horizontal centering is preserved throughout (no sideways shudder). */
+@keyframes centeredRise{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
+@keyframes centeredFall{from{opacity:1;transform:translate(-50%,0)}to{opacity:0;transform:translate(-50%,8px)}}
 .sb-toast{position:fixed;left:50%;transform:translateX(-50%);
-  bottom:calc(78px + env(safe-area-inset-bottom));z-index:70;
+  bottom:calc(78px + env(safe-area-inset-bottom));z-index:var(--z-toast);
   background:var(--ink);color:var(--paper);border:none;border-radius:999px;
   padding:11px 18px;font-size:13px;font-weight:600;max-width:88vw;cursor:pointer;
-  box-shadow:0 8px 24px rgba(0,0,0,.28);animation:rise .2s ease}
+  box-shadow:0 8px 24px rgba(0,0,0,.28);animation:centeredRise var(--motion-standard) var(--ease-enter)}
 @media(min-width:900px){ .sb-toast{bottom:24px} }
+/* Save/create feedback banner (task created · changes saved · error). */
+.sb-savebanner{position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(78px + env(safe-area-inset-bottom));z-index:var(--z-toast);
+  display:flex;align-items:center;gap:9px;width:max-content;max-width:92vw;
+  padding:11px 12px 11px 15px;border-radius:var(--r-pill);font-size:13px;font-weight:600;
+  box-shadow:var(--shadow-lg);animation:centeredRise var(--motion-standard) var(--ease-enter);will-change:transform,opacity}
+.sb-savebanner.leaving{animation:centeredFall var(--motion-fast) var(--ease-exit) forwards}
+/* Colour morphs smoothly as a banner goes pending → ok/err. */
+.sb-savebanner{transition:background-color var(--motion-standard) var(--ease-standard),color var(--motion-standard) var(--ease-standard),border-color var(--motion-standard) var(--ease-standard)}
+.sb-savebanner.pending{background:var(--surface-elevated);color:var(--text-primary);border:1px solid var(--border-strong)}
+.sb-savebanner.ok{background:var(--success-muted);color:var(--success);border:1px solid color-mix(in srgb,var(--success) 30%,transparent)}
+.sb-savebanner.err{background:var(--danger-muted);color:var(--danger);border:1px solid color-mix(in srgb,var(--danger) 30%,transparent)}
+.sb-banner-msg{min-width:0}
+/* Tiny inline spinner for the "in progress" state. */
+.sb-banner-spin{width:15px;height:15px;flex:none;border-radius:50%;
+  border:2px solid var(--border-strong);border-top-color:var(--primary);animation:spin .7s linear infinite}
+/* "View" / action affordance inside a banner. */
+.sb-banner-action{flex:none;background:transparent;border:none;color:inherit;cursor:pointer;
+  font-weight:700;font-size:13px;text-decoration:underline;text-underline-offset:2px;padding:2px 2px 2px 4px}
+.sb-banner-action:hover{opacity:.75}
+.sb-savebanner .sb-x{color:inherit;opacity:.7;flex:none}
+.sb-savebanner .sb-x:hover{opacity:1}
+@media(min-width:900px){ .sb-savebanner{bottom:24px} }
 /* Reminder schedule editor */
 .sb-remlist{display:flex;flex-direction:column;gap:9px;margin-top:8px}
 .sb-rem{border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:var(--card)}
@@ -708,19 +815,13 @@ a{color:var(--primary)}
 
 .sb-login{height:100vh;height:100dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;
   padding:24px 20px calc(24px + env(safe-area-inset-bottom));padding-top:calc(24px + env(safe-area-inset-top));
-  background:radial-gradient(120% 120% at 50% 0%, var(--violet) 0%, var(--violet-deep) 70%)}
+  background:var(--background)}
 .sb-loginbox{width:100%;max-width:440px;margin:auto}
-/* Branding block — prominent, centered, brand-coloured */
+/* Branding block — centered wordmark (see .sb-lwordmark for the mark itself) */
 .sb-lbrand{text-align:center;margin-bottom:22px}
-.sb-login .logo{width:72px;height:72px;border-radius:20px;background:var(--gold);color:#3a2a06;
-  display:inline-flex;align-items:center;justify-content:center;letter-spacing:-.015em;font-weight:700;
-  font-size:40px;margin:0 auto 18px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
-.sb-login h1{color:#fff;font-size:34px;font-weight:600;line-height:1.05}
-.sb-tagline{color:var(--gold);font-weight:700;font-size:16px;letter-spacing:.02em;margin-top:10px}
-.sb-login p{color:rgba(255,255,255,.78);font-size:14.5px;margin:8px 0 0}
-@media(min-width:560px){ .sb-login h1{font-size:40px} .sb-login .logo{width:78px;height:78px;font-size:44px} }
 
-.sb-lcard{background:var(--card);border-radius:20px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.32)}
+.sb-lcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:24px 22px;box-shadow:var(--shadow-lg)}
 .sb-lcardhd{letter-spacing:-.015em;font-size:19px;font-weight:600;color:var(--ink);margin-bottom:16px}
 .sb-lerr{background:var(--red-soft);color:var(--red);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
 .sb-lok{background:var(--green-soft);color:var(--green);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
@@ -737,9 +838,8 @@ a{color:var(--primary)}
 /* Taller, roomier inputs */
 .sb-lcard .sb-field{margin-bottom:14px}
 .sb-lcard .sb-field input{padding:13px 14px;font-size:15px;border-radius:12px}
-/* Vivid primary sign-in button */
-.sb-lprimary{margin-top:6px;padding:14px;font-size:15.5px;font-weight:700;
-  box-shadow:0 8px 22px rgba(76,58,140,.38)}
+/* Primary sign-in button — design-system primary, no coloured glow */
+.sb-lprimary{margin-top:6px;padding:14px;font-size:15.5px;font-weight:700}
 .sb-lprimary:disabled{opacity:.7}
 /* Prominent create-account / switch CTA, directly beneath sign-in */
 .sb-lswitch{margin-top:18px;padding-top:16px;border-top:1px solid var(--line);
@@ -747,14 +847,25 @@ a{color:var(--primary)}
 .sb-lswitch span{font-size:13.5px;color:var(--muted);font-weight:600}
 .sb-lswitch .sb-btn{width:100%;margin-top:0}
 
-.sb-pending{height:100vh;height:100dvh;overflow-y:auto;display:flex;padding:26px;
-  background:linear-gradient(160deg,var(--violet-deep),var(--violet));text-align:center}
-.sb-pending .box{max-width:380px;color:#fff;margin:auto}
-.sb-pending .ic{font-size:44px;margin-bottom:12px}
-.sb-pending h1{font-size:26px;font-weight:600}
-.sb-pending p{color:rgba(255,255,255,.8);font-size:14px;margin:10px 0 22px;line-height:1.55}
-.sb-pending button{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);color:#fff;
-  padding:11px 18px;border-radius:12px;font-weight:600;font-size:14px}
+/* Status pages (Waiting-for-approval, render-crash boundary). Same visual
+   language as the login: neutral app background + a single elevated surface
+   card, design-token type/spacing/radius/shadow, full light+dark support.
+   No legacy purple-gradient splash. */
+.sb-pending{min-height:100vh;min-height:100dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  display:flex;padding:26px;background:var(--background);text-align:center}
+.sb-pending .box{max-width:440px;width:100%;margin:auto}
+.sb-pending .sb-lwordmark{margin-bottom:22px}
+.sb-pending .sb-statuscard{background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-card);box-shadow:var(--shadow-lg);padding:28px 24px;text-align:center}
+.sb-pending .ic{width:56px;height:56px;margin:0 auto 16px;border-radius:var(--r-panel);
+  display:flex;align-items:center;justify-content:center;background:var(--primary-muted);color:var(--primary);font-size:28px}
+.sb-pending .ic .hi{width:28px;height:28px}
+.sb-pending .ic.warn{background:var(--warning-muted);color:var(--warning)}
+.sb-pending h1{font-size:var(--text-section);font-weight:600;color:var(--text-primary);letter-spacing:-.015em}
+.sb-pending p{color:var(--text-secondary);font-size:var(--text-body);margin:10px 0 0;line-height:1.55}
+.sb-pending .sb-statuscard .sb-field{margin:18px 0 0;text-align:left}
+.sb-pending .sb-statuscard .sb-btnrow{margin-top:18px}
+.sb-pending .sb-statusnote{color:var(--success);font-weight:600;font-size:var(--text-support);margin-top:16px}
 
 /* Connectivity banner (offline / back-online) */
 .sb-netbar{position:fixed;top:0;left:0;right:0;z-index:90;text-align:center;font-weight:600;font-size:12.5px;
@@ -832,10 +943,10 @@ a{color:var(--primary)}
   padding:1px 7px;font-size:11px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
 
 /* ===== Global search overlay ===== */
-.sb-modal{position:fixed;inset:0;z-index:60;background:rgba(33,27,51,.45);
+.sb-modal{position:fixed;inset:0;z-index:var(--z-modal);background:var(--overlay);
   display:flex;align-items:flex-start;justify-content:center;padding:10vh 16px 16px}
-.sb-search{background:var(--paper);width:100%;max-width:600px;border-radius:18px;
-  box-shadow:var(--shadow);overflow:hidden;animation:rise .18s ease;max-height:78vh;display:flex;flex-direction:column}
+.sb-search{background:var(--surface-elevated);width:100%;max-width:600px;border-radius:var(--r-modal);
+  box-shadow:var(--shadow-lg);overflow:hidden;animation:rise .18s ease;max-height:78vh;display:flex;flex-direction:column}
 .sb-searchbar{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
 .sb-searchbar .ico{font-size:16px;flex:none}
 .sb-searchbar input{flex:1;border:none;background:none;font-size:16px;color:var(--ink);outline:none;min-width:0}
@@ -1276,6 +1387,9 @@ a{color:var(--primary)}
 /* Overlays: backdrop fade + token-eased entrances. */
 .sb-scrim{animation:scrimIn var(--motion-fast) var(--ease-standard)}
 @keyframes scrimIn{from{opacity:0}to{opacity:1}}
+/* Graceful exit for the notification drawer before it navigates away. */
+.sb-scrim-right.closing{animation:scrimOut var(--motion-fast) var(--ease-exit) forwards;pointer-events:none}
+@keyframes scrimOut{from{opacity:1}to{opacity:0}}
 .sb-sheet{animation:sheetUp var(--motion-slow) var(--ease-enter)}
 @keyframes sheetUp{from{transform:translateY(24px);opacity:.4}to{transform:none;opacity:1}}
 .sb-drawer{animation:sheetUp var(--motion-slow) var(--ease-enter)}
@@ -2064,7 +2178,7 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
   overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .sb-nfilters-scroll::-webkit-scrollbar{display:none}
 @media(max-width:899px){ .sb-nfilters{overflow-x:visible;overflow-y:visible} }
-.sb-nmore-menu{z-index:40;transform-origin:top right;
+.sb-nmore-menu{z-index:var(--z-popover);transform-origin:top right;
   animation:menuPop var(--motion-fast) var(--ease-enter)}
 @keyframes menuPop{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:none}}
 
@@ -2092,17 +2206,13 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
   .sb-progwin{padding:9px 10px} .sb-progwin .wn{font-size:18px}
 }
 
-/* 5 — Login: current design language (neutral surface, wordmark, indigo). */
-.sb-login{background:var(--background)}
+/* 5 — Login / status pages: shared wordmark branding (neutral surface, indigo). */
 .sb-lwordmark{display:flex;flex-direction:column;align-items:center;line-height:1.1;
   font-size:26px;font-weight:600;letter-spacing:-.02em;color:var(--text-primary)}
 .sb-lwordmark .ifc{font-size:11px;letter-spacing:.16em;text-transform:uppercase;
   color:var(--gold);font-weight:700;margin-bottom:5px}
 .sb-tagline{color:var(--text-secondary);font-weight:600;font-size:14px;letter-spacing:0;margin-top:12px}
 .sb-login p{color:var(--text-muted);font-size:14px;margin-top:6px}
-.sb-lcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);box-shadow:var(--shadow-lg)}
-.sb-lcardhd{color:var(--text-primary)}
-.sb-lprimary{box-shadow:none}
 
 /* 6 — Bottom sheets: springier entrance (native-iOS feel), backdrop already fades. */
 .sb-sheet,.sb-drawer,.sb-notifpanel{animation:sheetSpring var(--motion-slow) cubic-bezier(.32,1.32,.5,1)}
@@ -2158,3 +2268,83 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 
 /* Required-field indicator on form labels. */
 .sb-req{color:var(--danger);font-weight:700;margin-left:2px}
+
+/* Workflow toolbar: group the controls (Filters · View · Sort) together on the
+   left instead of shoving Sort to the far edge — aligned, not floating. */
+.sb-filterbar{flex-wrap:wrap;row-gap:8px}
+.sb-filterbar .sb-sortlbl{margin-left:0}
+@media(min-width:900px){ .sb-filterbar .sb-sortlbl{margin-left:auto} }
+
+/* Notification filters: a right-edge fade makes the horizontal scroll obvious
+   (and the last chip fades out intentionally instead of looking cut off). */
+.sb-nfilters-scroll{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent);
+  mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent)}
+
+/* Ministry-win chips (Team Progress): let the label wrap instead of clipping —
+   "Completed" / "Contributions" no longer get cut off on narrow phones. */
+.sb-progwin .wtop{display:block;white-space:normal;overflow:visible;text-overflow:clip;
+  line-height:1.25;min-width:0}
+.sb-progwin .wtop .e{display:inline-block;vertical-align:-1px;margin-right:5px}
+
+/* Win chips: inline emoji+label on desktop (fits); on phones stack them so a
+   long label ("Contributions") sits on its own full-width line — no orphaned
+   emoji, all three chips consistent. */
+.sb-progwin .wtop{display:flex;align-items:center;gap:6px;white-space:normal;line-height:1.2;min-width:0}
+.sb-progwin .wtop .e{flex:none;margin:0}
+@media(max-width:899px){
+  .sb-progwin .wtop{flex-direction:column;align-items:flex-start;gap:3px}
+}
+
+/* Win chips: number on TOP (to match the "Awaiting review / Ready to post /
+   Overdue" tiles above), then emoji, then label. */
+.sb-progwin{gap:4px}
+.sb-progwin .wn{order:-1;margin-bottom:2px}
+
+/* Team progress: supporting statistics (not KPI boxes). A calm pipeline list,
+   a divider, then a right-aligned wins list. Very Linear/Notion. */
+.sb-statlist{display:flex;flex-direction:column;margin-top:14px}
+.sb-statrow{display:flex;align-items:baseline;gap:9px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:7px 4px;border-radius:8px;
+  transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-statrow:hover{background:var(--surface-muted)}
+.sb-statrow .v{font-size:15px;font-weight:700;color:var(--text-primary);
+  font-variant-numeric:tabular-nums;min-width:16px}
+.sb-statrow .k{font-size:13.5px;color:var(--text-secondary)}
+.sb-statrow.warn .v,.sb-statrow.warn .k{color:var(--danger)}
+/* Wins list: emoji + label … number (right). */
+.sb-statlist-wins{margin-top:12px;padding-top:12px;
+  border-top:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
+.sb-winrow{display:flex;align-items:center;gap:9px;padding:7px 4px}
+.sb-winrow .e{font-size:15px;line-height:1;flex:none}
+.sb-winrow .k{flex:1;min-width:0;font-size:13.5px;color:var(--text-secondary)}
+.sb-winrow .v{font-size:15px;font-weight:700;color:var(--text-primary);
+  font-variant-numeric:tabular-nums;flex:none}
+
+/* =================================================================
+   KPI CARDS — reusable dashboard metric cards. 2×2 on phones/tablet,
+   a single row on desktop. Cards only "light up" when value > 0.
+   ================================================================= */
+.sb-kpigrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0 6px}
+@media(min-width:900px){ .sb-kpigrid{grid-template-columns:repeat(4,1fr)} }
+.sb-kpi{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  padding:18px 12px;min-height:88px;border-radius:var(--r-card);text-align:center;min-width:0;
+  border:1px solid var(--border);background:var(--surface);cursor:pointer;width:100%;
+  transition:background-color var(--motion-standard) var(--ease-standard),
+             border-color var(--motion-standard) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-kpi:hover{border-color:var(--border-strong)}
+.sb-kpi:active{transform:scale(.99)}
+.sb-kpi-n{font-size:30px;font-weight:700;line-height:1;letter-spacing:-.02em;
+  color:var(--text-muted);font-variant-numeric:tabular-nums;
+  transition:color var(--motion-standard) var(--ease-standard)}
+.sb-kpi-l{font-size:12.5px;font-weight:500;color:var(--text-secondary)}
+/* Smart coloring: only tint the card + colour the number when value > 0.
+   (Base surface stays as the solid fallback if color-mix is unsupported.) */
+.sb-kpi.tone-blue.on{background:color-mix(in srgb,var(--info) 7%,var(--surface));border-color:color-mix(in srgb,var(--info) 24%,var(--border))}
+.sb-kpi.tone-blue.on .sb-kpi-n{color:var(--info)}
+.sb-kpi.tone-amber.on{background:color-mix(in srgb,var(--warning) 8%,var(--surface));border-color:color-mix(in srgb,var(--warning) 26%,var(--border))}
+.sb-kpi.tone-amber.on .sb-kpi-n{color:var(--warning)}
+.sb-kpi.tone-red.on{background:color-mix(in srgb,var(--danger) 7%,var(--surface));border-color:color-mix(in srgb,var(--danger) 24%,var(--border))}
+.sb-kpi.tone-red.on .sb-kpi-n{color:var(--danger)}
+.sb-kpi.tone-green.on{background:color-mix(in srgb,var(--success) 7%,var(--surface));border-color:color-mix(in srgb,var(--success) 24%,var(--border))}
+.sb-kpi.tone-green.on .sb-kpi-n{color:var(--success)}

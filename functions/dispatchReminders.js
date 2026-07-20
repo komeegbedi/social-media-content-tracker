@@ -12,7 +12,7 @@ const { logger } = require("firebase-functions/v2");
 const {
   db, FieldValue, Timestamp, TZ,
   loadUsers, loadSettings, notifyUsers, writeNotification, prefsAllow, emailAllow, isActive,
-  resolveTaskRecipients, relativeDue, localHour, localToday,
+  resolveTaskRecipients, relativeDue, localHour, localToday, formatContentTitle,
 } = require("./lib");
 const { resendApiKey, sendDigestEmail } = require("./emailService");
 const quota = require("./emailQuota");
@@ -102,10 +102,11 @@ async function runDispatch() {
       const recipients = resolveTaskRecipients(inst.recipients, task, users, byName)
         .map((uid) => byUid[uid]).filter(Boolean);
       const dueText = relativeDue(task.postDate);
+      const dispTitle = formatContentTitle(task.title);   // Title Case for reminder text + email digest
       // In-app + push per task (email stripped — batched below).
       await notifyUsers(recipients, {
         type: "reminder", taskId: inst.taskId,
-        title: `'${task.title}' ${dueText}`,
+        title: `'${dispTitle}' ${dueText}`,
         keyBase: `reminder_${snap.id}`,
         channels: (inst.channels || []).filter((c) => c !== "email"),
       });
@@ -114,7 +115,7 @@ async function runDispatch() {
         for (const u of recipients) {
           if (!isActive(u) || !emailAllow(u) || !prefsAllow(u, "reminder")) continue;
           const e = digest.get(u.uid) || { user: u, items: [] };
-          if (!e.items.some((i) => i.title === task.title)) e.items.push({ title: task.title, dueText });
+          if (!e.items.some((i) => i.title === dispTitle)) e.items.push({ title: dispTitle, dueText });
           digest.set(u.uid, e);
         }
       }

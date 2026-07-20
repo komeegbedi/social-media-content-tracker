@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, connectAuthEmulator } from "firebase/auth";
-import { initializeFirestore, connectFirestoreEmulator } from "firebase/firestore";
+import { initializeFirestore, connectFirestoreEmulator,
+  persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
 import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
 
@@ -25,11 +26,21 @@ if (appCheckKey && typeof window !== "undefined" && import.meta.env.VITE_USE_EMU
 }
 
 export const auth = getAuth(app);
-// Auto-detect long-polling instead of the default streaming transport. On
-// Safari / iOS and flaky mobile networks the streaming channel can get stuck in
-// a half-open state after a connection drop; long-polling recovers more
-// reliably.
-export const db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+// Firestore transport + cache:
+// - Auto-detect long-polling instead of the default streaming transport. On
+//   Safari / iOS and flaky mobile networks the streaming channel can get stuck
+//   in a half-open state after a connection drop; long-polling recovers more
+//   reliably.
+// - Persistent (IndexedDB) local cache in production: after the first visit,
+//   data renders INSTANTLY from disk while the server syncs in the background,
+//   and it works offline. Disabled against the emulator so re-seeding during
+//   dev never shows stale cached data. Falls back gracefully (e.g. private
+//   browsing / multiple older tabs) without breaking the app.
+const _useEmulator = import.meta.env.VITE_USE_EMULATOR === "true";
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+  ...(_useEmulator ? {} : { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }),
+});
 export const googleProvider = new GoogleAuthProvider();
 // Callable Cloud Functions (e.g. the admin email test) — same region as deploy.
 export const functions = getFunctions(app, "northamerica-northeast1");

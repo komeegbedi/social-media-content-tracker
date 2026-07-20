@@ -3,7 +3,7 @@
    Routed through notifyUsers so mentions fan out to in-app + push + email
    consistently with every other notification type. */
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
-const { db, loadUsers, notifyUsers } = require("./lib");
+const { db, loadUsers, notifyUsers, formatContentTitle } = require("./lib");
 const { resendApiKey } = require("./emailService");
 
 const truncate = (s, n = 120) => (s && s.length > n ? s.slice(0, n) + "…" : (s || ""));
@@ -17,7 +17,7 @@ exports.onCommentCreate = onDocumentCreated(
 
     const { taskId, commentId } = event.params;
     const taskSnap = await db.doc(`tasks/${taskId}`).get();
-    const title = taskSnap.exists ? taskSnap.data().title : "a task";
+    const title = taskSnap.exists ? formatContentTitle(taskSnap.data().title) : "a task";
     const { byUid } = await loadUsers();
     const recipients = mentions.map((uid) => byUid[uid]).filter(Boolean);
 

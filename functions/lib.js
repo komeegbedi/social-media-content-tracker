@@ -117,11 +117,12 @@ const NOTIFY_POLICY = {
 };
 const policyFor = (type) => NOTIFY_POLICY[type] || { channels: ["in-app", "push"], priority: "standard" };
 
-async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, keyBase, required = false, channels = null, whenText = "", priority = "" }) {
+async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, keyBase, required = false, channels = null, whenText = "", priority = "", route = "" }) {
   const pol = policyFor(type);
   const chans = channels || pol.channels;              // explicit override wins
   const pri = priority || pol.priority;
-  const url = taskId ? `/?task=${taskId}` : "/";
+  // Deep-link target for push/email: explicit route wins, else the task, else home.
+  const url = route || (taskId ? `/?task=${taskId}` : "/");
   const pushChannel = chans.includes("push");
   const emailChannel = chans.includes("email");
   const seen = new Set();
@@ -182,8 +183,40 @@ function relativeDue(postDateISO) {
 const localHour = () => DateTime.now().setZone(TZ).hour;
 const localToday = () => DateTime.now().setZone(TZ).toISODate();
 
+/* Content-title Title Case — mirror of src/data.js formatContentTitle(). Used
+   when generating notification/push/email text so titles read correctly there
+   too. Keep in sync with the frontend copy. */
+const TITLE_SMALL = new Set(["a","an","and","as","at","but","by","en","for","if",
+  "in","nor","of","on","or","per","the","to","v","vs","via","with"]);
+const TITLE_SPECIAL = { qa:"QA", csv:"CSV", ifc:"IFC", pwa:"PWA",
+  instagram:"Instagram", youtube:"YouTube", ig:"IG", tiktok:"TikTok" };
+function titleCaseToken(word, forceCap) {
+  if (!word) return word;
+  const lower = word.toLowerCase();
+  const m = lower.match(/^([^a-z0-9]*)([a-z0-9](?:.*[a-z0-9])?)([^a-z0-9]*)$/);
+  if (!m) return word;
+  const [, pre, core, post] = m;
+  if (TITLE_SPECIAL[core]) return pre + TITLE_SPECIAL[core] + post;
+  if (!forceCap && TITLE_SMALL.has(core)) return pre + core + post;
+  return pre + core.charAt(0).toUpperCase() + core.slice(1) + post;
+}
+function titleCaseWord(word, isFirst, isLast) {
+  if (word.indexOf("-") === -1) return titleCaseToken(word, isFirst || isLast);
+  const parts = word.split("-");
+  return parts.map((p, i) => titleCaseToken(p, i === 0 || i === parts.length - 1)).join("-");
+}
+function formatContentTitle(title) {
+  const s = (title == null ? "" : String(title)).trim();
+  if (!s) return "";
+  const toks = s.split(/(\s+)/);
+  const wordPos = [];
+  toks.forEach((t, i) => { if (/\S/.test(t)) wordPos.push(i); });
+  const first = wordPos[0], last = wordPos[wordPos.length - 1];
+  return toks.map((t, i) => /\S/.test(t) ? titleCaseWord(t, i === first, i === last) : t).join("");
+}
+
 module.exports = {
   db, FieldValue, Timestamp, TZ, DEFAULT_REMINDERS,
   loadUsers, loadSettings, prefsAllow, pushAllow, emailAllow, isActive, sendPush, writeNotification, notifyUsers,
-  resolveTaskRecipients, crewRoleLabel, computeFireAt, relativeDue, localHour, localToday,
+  resolveTaskRecipients, crewRoleLabel, computeFireAt, relativeDue, localHour, localToday, formatContentTitle,
 };
