@@ -225,11 +225,41 @@ async function sendDigestEmail({ user, items, notificationId }) {
   return _deliver({ notificationId, to, type: "reminder", priority: "standard", subject, html, text, meta });
 }
 
-/* Admin-only test send. Returns { messageId }. */
-async function sendTest(to) {
-  if (!validEmail(to)) throw new Error("invalid-recipient");
+// Normalise an email for sending: trim, and lowercase the (case-insensitive)
+// domain part. Rejects display-name-only values via validEmail.
+function normalizeEmail(raw) {
+  const s = String(raw || "").trim();
+  const at = s.lastIndexOf("@");
+  return at < 0 ? s : `${s.slice(0, at)}@${s.slice(at + 1).toLowerCase()}`;
+}
+
+// Classify a Resend error into a stable, non-sensitive code the callable maps to
+// a user-facing message. The raw provider message is logged, never returned.
+function classifyResend(error) {
+  const code = Number(error && (error.statusCode || error.status)) || 0;
+  const msg = String((error && (error.message || error.name)) || "").toLowerCase();
+  if (code === 429) return "rate-limit";
+  if (code >= 500) return "temporary";
+  if (/not verified|domain|forbidden|unauthor/.test(msg) || code === 403) return "unverified-sender";
+  if (/invalid.*(to|recipient|email|address)|validation/.test(msg) || code === 422) return "invalid-email";
+  if (code >= 400) return "provider-rejected";
+  return "provider-rejected";
+}
+// A classified, non-sensitive error the caller can map. `.emailCode` is safe;
+// `.message` (may contain provider detail) must only be logged, never returned.
+function classifiedError(emailCode, message) {
+  const e = new Error(message || emailCode);
+  e.emailCode = emailCode;
+  return e;
+}
+
+/* Admin-only test send. Returns { messageId }. Throws an error carrying a safe
+   `.emailCode` — the caller maps it to a user message; details stay in logs. */
+async function sendTest(rawTo) {
+  const to = normalizeEmail(rawTo);
+  if (!validEmail(to)) throw classifiedError("invalid-email", "invalid recipient");
   const key = getKey();
-  if (!key) throw new Error("no-secret");
+  if (!key) throw classifiedError("no-config", "RESEND_API_KEY not available to the function");
   const notificationId = `test_${Date.now()}`;
   const { subject, html, text } = buildEmail({
     type: "test", title: "Your email notifications are working",
@@ -238,17 +268,31 @@ async function sendTest(to) {
   });
   const payload = { from: SENDER, to, subject, html, text };
   if (REPLY_TO) payload.reply_to = REPLY_TO;
-  const resend = new Resend(key);
-  const { data, error } = await resend.emails.send(payload, { idempotencyKey: notificationId });
-  if (error) throw Object.assign(new Error(error.message || "Resend error"), { statusCode: error.statusCode });
+
+  let response;
+  try { response = await new Resend(key).emails.send(payload, { idempotencyKey: notificationId }); }
+  catch (e) {
+    // Network / timeout talking to Resend — temporary.
+    logger.error("test email: transport error", { message: String((e && e.message) || e).slice(0, 300) });
+    throw classifiedError("temporary", "email provider transport error");
+  }
+  const { data, error } = response;
+  if (error) {
+    // Full provider detail stays in the logs; only a safe code leaves the server.
+    logger.error("test email: provider rejected", {
+      statusCode: error.statusCode, name: error.name,
+      message: String(error.message || "").slice(0, 300),
+    });
+    throw classifiedError(classifyResend(error), error.message || "provider rejected");
+  }
   const messageId = (data && data.id) || "";
   await getFirestore().collection("emailDeliveries").doc(notificationId).set({
     notificationId, notificationType: "test", recipientEmail: to, provider: "resend",
     providerMessageId: messageId, idempotencyKey: notificationId, status: "sent",
     attemptCount: 1, createdAt: FieldValue.serverTimestamp(), sentAt: FieldValue.serverTimestamp(),
   });
-  logger.info("test email sent", { messageId });
-  return { messageId };
+  logger.info("test email sent", { messageId, to });
+  return { messageId, to };
 }
 
-module.exports = { resendApiKey, SENDER, sendNotificationEmail, sendDigestEmail, sendTest, validEmail };
+module.exports = { resendApiKey, SENDER, sendNotificationEmail, sendDigestEmail, sendTest, validEmail, normalizeEmail, classifyResend };

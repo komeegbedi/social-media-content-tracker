@@ -454,7 +454,8 @@ a{color:var(--primary)}
   .sb-reactbtn{padding:7px 12px;font-size:15px}
 }
 
-.sb-cap{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 14px;box-shadow:var(--shadow)}
+.sb-cap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:14px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:9px;min-width:0}
 /* Wins & metrics cards. */
 .sb-wincards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:4px}
 @media(min-width:680px){ .sb-wincards{grid-template-columns:repeat(4,1fr)} }
@@ -555,20 +556,39 @@ a{color:var(--primary)}
 .sb-recent{display:flex;flex-direction:column;gap:6px}
 .sb-recent-row{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:10px 13px;font-size:13.5px}
 
-.sb-caplist{display:grid;grid-template-columns:1fr;gap:9px}
+.sb-caplist{display:grid;grid-template-columns:1fr;gap:10px}
 @media(min-width:900px){ .sb-caplist{grid-template-columns:1fr 1fr} }
-.sb-cap .top{display:flex;align-items:center;justify-content:space-between}
-.sb-cap .name{font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px}
-.sb-cap .pct{font-size:12px;color:var(--muted);font-weight:600}
-.sb-capbar{height:7px;border-radius:4px;background:var(--line);margin-top:10px;overflow:hidden;display:flex}
-.sb-capbar i{height:100%;display:block}
+/* Row 1 — avatar + name (name gets up to two lines, then ellipsis) + optional dept. */
+.sb-cap-hd{display:flex;align-items:flex-start;gap:10px;min-width:0}
+.sb-cap-av{width:34px;height:34px;font-size:12px;font-weight:700;flex:none}
+.sb-cap-id{min-width:0;display:flex;flex-direction:column;gap:2px;padding-top:1px}
+.sb-cap-name{font-weight:600;font-size:14.5px;line-height:1.25;color:var(--text-primary);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.sb-cap-dept{font-size:12px;color:var(--text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Row 2 — workload badge pill (subtle tinted background; fades in on change). */
+.sb-wlbadge{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;
+  padding:3px 9px;border-radius:var(--r-pill);font-size:11.5px;font-weight:600;white-space:nowrap;
+  animation:revealIn var(--motion-fast) var(--ease-enter)}
+.sb-wl-dot{width:7px;height:7px;border-radius:50%;flex:none;background:currentColor}
+.sb-wlbadge.tone-green{background:var(--success-muted);color:var(--success)}
+.sb-wlbadge.tone-blue{background:var(--info-muted);color:var(--info)}
+.sb-wlbadge.tone-amber{background:var(--warning-muted);color:var(--warning)}
+.sb-wlbadge.tone-red{background:var(--danger-muted);color:var(--danger)}
+.sb-wlbadge.tone-neutral{background:var(--surface-muted);color:var(--text-secondary)}
+/* Row 3 — metrics, one aligned line, secondary type. */
+.sb-cap-metrics{font-size:12.5px;color:var(--text-secondary);font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Row 4 — full-width department-coloured bar, pinned to the card bottom so bars
+   line up across a row; width animates when load changes (height never does). */
+.sb-capbar{height:7px;border-radius:var(--r-pill);background:var(--surface-muted);
+  margin-top:auto;overflow:hidden;display:flex}
+.sb-capbar i{height:100%;display:block;transition:width var(--motion-slow) var(--ease-standard)}
 .seg-shoot{background:var(--violet)} .seg-edit{background:var(--blue)}
 .seg-coordinate{background:var(--gold)} .seg-design{background:var(--green)} .seg-shadow{background:var(--amber)}
 .sb-caplegend{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:9px;font-size:10.5px;color:var(--muted)}
 .sb-caplegend span{display:flex;align-items:center;gap:4px}
 .sb-caplegend i{width:8px;height:8px;border-radius:2px;display:inline-block}
-.sb-overload{font-size:10.5px;color:var(--red);font-weight:700;margin-left:6px}
-.sb-idle{font-size:10.5px;color:var(--amber);font-weight:700;margin-left:6px}
 
 .sb-scrim{position:fixed;inset:0;height:100vh;height:100dvh;background:var(--overlay);z-index:var(--z-modal);
   display:flex;align-items:flex-end;justify-content:center}
@@ -595,6 +615,21 @@ a{color:var(--primary)}
 /* #4 — "Unavailable" workload chip + #3 optional-field hint */
 .sb-unavail{background:var(--surface-muted)!important;color:var(--text-muted)!important;font-weight:600}
 .sb-optional{color:var(--text-muted);font-weight:400;font-size:var(--text-label)}
+
+/* Appearance radio list (Match system / Light / Dark). */
+.sb-optlist{display:flex;flex-direction:column;gap:6px}
+.sb-optrow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+  padding:12px 12px;border:1px solid var(--border);border-radius:var(--r-card);
+  background:var(--surface);color:var(--text-primary);cursor:pointer;
+  transition:background var(--motion-fast) var(--ease-standard),border-color var(--motion-fast) var(--ease-standard)}
+.sb-optrow:hover{background:var(--surface-muted)}
+.sb-optrow.on{border-color:var(--primary);background:var(--primary-muted)}
+.sb-optrow-ic{flex:none;display:inline-flex;color:var(--text-secondary)}
+.sb-optrow.on .sb-optrow-ic{color:var(--primary)}
+.sb-optrow-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.sb-optrow-l{font-size:14.5px;font-weight:600}
+.sb-optrow-h{font-size:12px;color:var(--text-muted)}
+.sb-optrow-chk{flex:none;color:var(--primary)}
 
 /* Reusable URL input (UrlInput) — Open/Copy embedded on the input's right edge.
    Minimal, borderless actions that read as part of the field; hover tint +
@@ -1255,9 +1290,6 @@ a{color:var(--primary)}
 /* Beta banner: compact status strip, no competition with headings */
 .sb-beta{padding:7px 12px;font-size:12px;border-radius:var(--r-control);margin-bottom:8px}
 .sb-beta b{font-weight:600}
-/* Team load share text quieter */
-.sb-cap .pct .share{color:var(--text-muted);font-weight:500}
-.sb-overload{text-transform:none;letter-spacing:0}
 /* Designed CSV drop zone */
 .sb-dropzone{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;
   border:1.5px dashed var(--border-strong);border-radius:var(--r-card);padding:26px 16px;cursor:pointer;

@@ -30,7 +30,7 @@ import {
   DEPARTMENTS, roleChips, userActiveTasks, PEOPLE_FILTERS, applyPeopleFilter, groupPeople,
   crewRoleLabel, pendingCrewLabel, CREW_ROLES, occurrenceContentCount, occurrenceTasks,
   DEFAULT_REMINDERS, REMINDER_CHANNELS, REMINDER_RECIPIENTS, MAX_REMINDERS, isValidEmail,
-  isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, isShootType,
+  isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, isShootType, workloadBadge,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
@@ -43,9 +43,10 @@ import {
   BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, SparklesIcon, EyeIcon, EyeSlashIcon,
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
   InformationCircleIcon, ClipboardIcon, ArrowTopRightOnSquareIcon, CheckIcon, ClipboardDocumentIcon,
+  ComputerDesktopIcon,
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
-import { getTheme, setTheme } from "./theme";
+import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
 
 /* Tiny localStorage helpers for remembering small UI preferences (e.g. which
    status groups a user has collapsed). Best-effort — never throw. */
@@ -143,23 +144,62 @@ function BetaBanner({ onReport }) {
   );
 }
 
-/* Light/dark toggle. Default follows the OS; a manual choice is remembered. */
-function ThemeToggle({ compact }) {
-  const [theme, setT] = useState(getTheme());
-  const toggle = () => { const next = theme === "dark" ? "light" : "dark"; setTheme(next); setT(next); };
-  return compact
-    ? <button className="sb-report-top" onClick={toggle} aria-label="Toggle dark mode">
-        {theme==="dark"?<SunIcon className="hi" aria-hidden="true"/>:<MoonIcon className="hi" aria-hidden="true"/>}</button>
-    : <button className="sb-report" onClick={toggle} aria-label="Toggle dark mode">
-        {theme==="dark"?<SunIcon className="hi-sm hi" aria-hidden="true"/>:<MoonIcon className="hi-sm hi" aria-hidden="true"/>}
-        <span className="lbl">{theme==="dark"?"Light mode":"Dark mode"}</span></button>;
+/* Appearance preference: Match system / Light / Dark. */
+const APPEARANCE_OPTIONS = [
+  { key:"system", label:"Match system", help:"Automatically follow this device", Icon: ComputerDesktopIcon },
+  { key:"light",  label:"Light",        help:"Always use light appearance",      Icon: SunIcon },
+  { key:"dark",   label:"Dark",         help:"Always use dark appearance",       Icon: MoonIcon },
+];
+const appearanceOption = (p) => APPEARANCE_OPTIONS.find(o=>o.key===p) || APPEARANCE_OPTIONS[0];
+
+/* Bottom sheet (mobile) / centred dialog (desktop) with a radio list. */
+function AppearanceSheet({ current, onChoose, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <Portal>
+    <div className="sb-scrim" onMouseDown={onClose}>
+      <div className="sb-sheet" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Appearance">
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Appearance</b>
+          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+        <div className="bd">
+          <div className="sb-optlist" role="radiogroup" aria-label="Appearance">
+            {APPEARANCE_OPTIONS.map(o => {
+              const active = current === o.key;
+              return (
+                <button key={o.key} role="radio" aria-checked={active}
+                  className={"sb-optrow"+(active?" on":"")} onClick={()=>onChoose(o.key)}>
+                  <span className="sb-optrow-ic"><o.Icon className="hi" aria-hidden="true"/></span>
+                  <span className="sb-optrow-txt">
+                    <span className="sb-optrow-l">{o.label}</span>
+                    <span className="sb-optrow-h">{o.help}</span>
+                  </span>
+                  {active && <CheckIcon className="hi sb-optrow-chk" aria-hidden="true"/>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+    </Portal>
+  );
 }
 
 /* Mobile account drawer — opened from the header avatar. Pulls the profile,
    theme, report and sign-out off every screen and into one slide-up sheet. */
 function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onNotifications, onNotifPrefs, onWhatsNew, onFeatureRequest, onReport, onGoTab }) {
-  const [theme, setT] = useState(getTheme());
-  const toggleTheme = () => { const next = theme==="dark"?"light":"dark"; setTheme(next); setT(next); };
+  const [pref, setPref] = useState(getThemePref());
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  useEffect(() => subscribeTheme(() => setPref(getThemePref())), []);
+  const chooseAppearance = (p) => {
+    setThemePref(p); setPref(p); setAppearanceOpen(false);
+    if (me?.id) updateDoc(doc(db, "users", me.id), { appearance: p }).catch(() => {}); // follows across devices
+  };
+  const PrefIcon = appearanceOption(pref).Icon;
   const drag = useSheetDrag(onClose);
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -195,10 +235,9 @@ function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onN
         {onFeatureRequest && <button className="sb-drawer-item" onClick={()=>{ onFeatureRequest(); onClose(); }}>
           <span className="i"><LightBulbIcon className="hi" aria-hidden="true"/></span>Submit feature request
         </button>}
-        <button className="sb-drawer-item" onClick={toggleTheme}>
-          <span className="i">{theme==="dark"?<SunIcon className="hi" aria-hidden="true"/>:<MoonIcon className="hi" aria-hidden="true"/>}</span>
-          {theme==="dark"?"Light mode":"Dark mode"}
-          <span className="sb-drawer-state">{theme==="dark"?"On":"Off"}</span>
+        <button className="sb-drawer-item" onClick={()=>setAppearanceOpen(true)}>
+          <span className="i"><PrefIcon className="hi" aria-hidden="true"/></span>Appearance
+          <span className="sb-drawer-state">{appearanceOption(pref).label}</span>
         </button>
         <button className="sb-drawer-item" onClick={onNotifications}>
           <span className="i"><BellIcon className="hi" aria-hidden="true"/></span>Notifications
@@ -213,6 +252,7 @@ function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onN
         <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
       </div>
     </div>
+    {appearanceOpen && <AppearanceSheet current={pref} onChoose={chooseAppearance} onClose={()=>setAppearanceOpen(false)} />}
     </Portal>
   );
 }
@@ -577,29 +617,46 @@ function EmailUsage() {
 }
 
 /* Admin-only: verify the Resend email pipeline by sending a test message. */
+// Translate a callable error into a safe, specific message. The backend already
+// returns clean, user-facing messages for known cases; only a truly unknown
+// server fault ("internal", or a network/blocked call) falls back to generic.
+function friendlyEmailError(e) {
+  const code = (e?.code || "").replace(/^functions\//, "");
+  const msg = e?.message || "";
+  if (code && code !== "internal" && msg && msg.toLowerCase() !== "internal") return msg;
+  return "We couldn't send the test email. The error has been logged. Please try again or check the function logs.";
+}
 function AdminEmailTest() {
   const [to, setTo] = useState("");
-  const [status, setStatus] = useState(null);
+  const [err, setErr] = useState("");           // inline field-validation error
+  const [result, setResult] = useState(null);   // { ok, msg }
   const [busy, setBusy] = useState(false);
   const send = async () => {
-    if (!isValidEmail(to)) { setStatus({ ok:false, msg:"Enter a valid recipient email address before sending the test." }); return; }
-    setBusy(true); setStatus(null);
+    if (busy) return;                            // prevent duplicate submissions
+    const addr = to.trim();
+    if (!isValidEmail(addr)) { setErr("Enter a valid email address, e.g. name@example.com."); setResult(null); return; }
+    setErr(""); setResult(null); setBusy(true);
     try {
-      const res = await httpsCallable(functions, "sendTestEmail")({ to: to.trim() });
-      setStatus({ ok: true, msg: `Sent ✓${res.data?.messageId ? ` (id ${res.data.messageId})` : ""}` });
+      const res = await httpsCallable(functions, "sendTestEmail")({ to: addr });
+      setResult({ ok: true, msg: `Test email sent to ${res.data?.to || addr}.` });
     } catch (e) {
-      setStatus({ ok: false, msg: e?.message || "Send failed" });
+      // Keep the entered address so the admin can retry; never auto-close the panel.
+      setResult({ ok: false, msg: friendlyEmailError(e) });
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
   return (
     <>
       <div className="sb-mlabel">Admin · test email</div>
       <div className="sb-field">
-        <input type="email" value={to} onChange={(e)=>setTo(e.target.value)} placeholder="recipient@example.com" />
+        <input type="email" inputMode="email" value={to} aria-invalid={!!err}
+          onChange={(e)=>{ setTo(e.target.value); if(err) setErr(""); }}
+          onKeyDown={(e)=>{ if(e.key==="Enter") send(); }} placeholder="recipient@example.com" />
+        {err && <div className="sb-fielderr" role="alert">{err}</div>}
       </div>
       <button className="sb-btn ghost" disabled={busy || !to.trim()} onClick={send}>{busy ? "Sending…" : "Send test email"}</button>
-      {status && <div className="sb-sub" style={{marginTop:8, color: status.ok ? "var(--green)" : "var(--red)"}}>{status.msg}</div>}
+      {result && <div className="sb-sub" role="status" style={{marginTop:8, color: result.ok ? "var(--success)" : "var(--danger)"}}>{result.msg}</div>}
     </>
   );
 }
@@ -1294,6 +1351,14 @@ function Board({ profile, isAdmin }) {
   // already granted permission) prevents "push stops arriving even though the UI
   // says it's on." No prompt — enabling push is still an explicit opt-in.
   useEffect(() => { if (me?.id) refreshPushToken(me.id); }, [me?.id]);
+
+  // Apply the appearance preference saved on the profile (so it follows the user
+  // across devices). localStorage already handled the pre-auth / flash-free boot;
+  // this only re-applies when Firestore disagrees. Never writes back here.
+  useEffect(() => {
+    const p = me?.appearance;
+    if ((p === "system" || p === "light" || p === "dark") && p !== getThemePref()) setThemePref(p);
+  }, [me?.appearance]);
 
   // Navigation model (v1.1.2): outline icon at rest, solid when active.
   // Mobile bottom nav = the 4 main destinations + Profile (Team/Admin live in
@@ -2137,7 +2202,6 @@ function Team({ tasks, users }) {
   const max = Math.max(1, ...Object.values(cap).map(c=>c.total));
   const rows = users.map(u=>({u,c:cap[u.name]||{shoot:0,edit:0,coordinate:0,design:0,shadow:0,total:0}}))
     .sort((a,b)=>b.c.total-a.c.total);
-  const avg = total/(users.length||1);
   const legend = [["seg-shoot","Shooting"],["seg-edit","Editing"],["seg-coordinate","Getting People"],["seg-design","Design"],["seg-shadow","Shadowing"]];
 
   return (
@@ -2150,19 +2214,21 @@ function Team({ tasks, users }) {
       <div className="sb-caplist">
         {rows.map(({u,c}) => {
           const pct = ((c.total/total)*100).toFixed(0);
-          const over = c.total>0 && c.total>=avg*1.8 && c.total>=3;
-          const idle = c.total===0;
+          const badge = workloadBadge(u, c.total);
+          const dept = userDepartments(u).join(" · ");
           return (
             <div className="sb-cap" key={u.id}>
-              <div className="top">
-                <span className="name">
-                  <span className="sb-av">{initials(u.name)}</span>{u.name}
-                  {over && <span className="sb-overload">High workload</span>}
-                  {idle && <span className="sb-idle">free</span>}
-                </span>
-                <span className="pct">{c.total} active task{c.total!==1?"s":""}<span className="share"> · {pct}% of team load</span></span>
+              <div className="sb-cap-hd">
+                <span className="sb-av sb-cap-av" aria-hidden="true">{initials(u.name)}</span>
+                <div className="sb-cap-id">
+                  <span className="sb-cap-name" title={u.name}>{u.name}</span>
+                  {dept && <span className="sb-cap-dept" title={dept}>{dept}</span>}
+                </div>
               </div>
-              <div className="sb-capbar">
+              <span key={badge.key} className={"sb-wlbadge tone-"+badge.tone}>
+                <i className="sb-wl-dot" aria-hidden="true"/>{badge.label}</span>
+              <div className="sb-cap-metrics">{c.total} active task{c.total!==1?"s":""} • {pct}% of team load</div>
+              <div className="sb-capbar" role="img" aria-label={`${c.total} active task${c.total!==1?"s":""}`}>
                 {["shoot","edit","coordinate","design","shadow"].map(r =>
                   c[r]>0 && <i key={r} className={"seg-"+r} style={{width:`${(c[r]/max)*100}%`}}/>)}
               </div>

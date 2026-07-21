@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isValidUrl, userDepartments, isAvailable,
-  soloCrewRole, soloCrewFor, soloCrewVerb, autoAssign,
+  soloCrewRole, soloCrewFor, soloCrewVerb, autoAssign, workloadBadge,
 } from "./data.js";
 
 test("isValidUrl accepts http(s) URLs, rejects plain text", () => {
@@ -44,6 +44,23 @@ test("solo-owner crew role maps by type", () => {
   assert.deepEqual(soloCrewFor("Reel", "Kome"), { name: "Kome", role: "contentlead" });
   assert.match(soloCrewVerb("Poster"), /graphic/);
   assert.match(soloCrewVerb("Reel"), /reel/);
+});
+
+test("workloadBadge buckets by availability + active count", () => {
+  const u = { available: true };
+  assert.equal(workloadBadge(u, 0).label, "Available");
+  assert.equal(workloadBadge(u, 1).label, "Light");
+  assert.equal(workloadBadge(u, 2).label, "Light");
+  assert.equal(workloadBadge(u, 3).label, "Moderate");
+  assert.equal(workloadBadge(u, 5).label, "Moderate");
+  assert.equal(workloadBadge(u, 6).label, "High");
+  assert.equal(workloadBadge(u, 99).label, "High");
+  // Unavailable always wins, regardless of count.
+  assert.equal(workloadBadge({ available: false }, 0).label, "Unavailable");
+  assert.equal(workloadBadge({ available: false }, 8).label, "Unavailable");
+  // tones are stable for styling
+  assert.equal(workloadBadge(u, 0).tone, "green");
+  assert.equal(workloadBadge(u, 6).tone, "red");
 });
 
 test("autoAssign never picks an unavailable person", () => {

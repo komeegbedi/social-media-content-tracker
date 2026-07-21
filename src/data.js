@@ -798,6 +798,17 @@ export function roleChips(user) {
   return chips;
 }
 
+// Workload badge for the Team Load cards (presentation only — thresholds are
+// UI buckets, not a change to how load itself is computed). Unavailable always
+// wins; otherwise it's driven by the active-task count.
+export function workloadBadge(user, activeCount) {
+  if (!isAvailable(user)) return { key: "unavail", label: "Unavailable", tone: "neutral" };
+  if (activeCount === 0) return { key: "available", label: "Available", tone: "green" };
+  if (activeCount <= 2) return { key: "light", label: "Light", tone: "blue" };
+  if (activeCount <= 5) return { key: "moderate", label: "Moderate", tone: "amber" };
+  return { key: "high", label: "High", tone: "red" };
+}
+
 // How many active (non-Posted) tasks a person owns or is crew on.
 export function userActiveTasks(user, tasks) {
   return (tasks || []).filter((t) => t.status !== "Posted" &&

@@ -1,54 +1,93 @@
 /* ===================================================================
-   Light / dark theme.
-   - Default follows the OS (prefers-color-scheme).
-   - A manual choice is remembered in localStorage and wins over the OS.
-   - applyTheme() sets data-theme on <html>; the CSS variables in styles.css
-     do the rest. Call initTheme() before first render to avoid a flash.
+   Appearance preference — "system" | "light" | "dark".
+
+   - The PREFERENCE (what the user chose) is persisted, not just the
+     resolved theme. "system" follows the OS live via matchMedia.
+   - localStorage holds the preference for a fast, flash-free boot and as a
+     pre-auth fallback; App.jsx mirrors it to the user's Firestore profile so
+     it follows them across devices.
+   - applyResolved() sets data-theme on <html>; the CSS variables in
+     styles.css do the rest. Call initTheme() before first render.
    =================================================================== */
-const KEY = "sb-theme";
-const prefersDark = () =>
-  typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches;
+const KEY = "sb-appearance";
+const PREFS = ["system", "light", "dark"];
 
-export const getStored = () => { try { return localStorage.getItem(KEY); } catch { return null; } };
+const mql = () =>
+  (typeof window !== "undefined" && window.matchMedia)
+    ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+const osDark = () => { const m = mql(); return m ? m.matches : false; };
 
-// The effective theme: an explicit stored choice, else the OS preference.
-export function getTheme() {
-  const s = getStored();
-  if (s === "light" || s === "dark") return s;
-  return prefersDark() ? "dark" : "light";
+// The stored preference (defaults to "system"). Legacy "sb-theme" values
+// ("light"/"dark") are honoured once so existing users don't get reset.
+export function getThemePref() {
+  try {
+    const v = localStorage.getItem(KEY);
+    if (PREFS.includes(v)) return v;
+    const legacy = localStorage.getItem("sb-theme");
+    if (legacy === "light" || legacy === "dark") return legacy;
+  } catch { /* private mode */ }
+  return "system";
 }
 
-function applyTheme(theme) {
+// Resolve a preference to a concrete theme.
+export const resolvePref = (pref) => (pref === "light" || pref === "dark") ? pref : (osDark() ? "dark" : "light");
+// The theme currently applied to <html>.
+export const resolvedTheme = () => resolvePref(getThemePref());
+
+function applyResolved(theme) {
   if (typeof document !== "undefined") document.documentElement.setAttribute("data-theme", theme);
 }
 
-// A brief colour cross-fade on theme change: add a class to <html> that enables
-// colour transitions for ~250ms, then remove it — no permanent transitions and
-// no full-page flash. Skipped when the user prefers reduced motion.
-let _themeAnimTimer;
-function themeCrossfade() {
+// A brief colour cross-fade on change (skipped under reduced-motion).
+let _animTimer;
+function crossfade() {
   if (typeof document === "undefined") return;
   if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const el = document.documentElement;
   el.classList.add("theme-anim");
-  clearTimeout(_themeAnimTimer);
-  _themeAnimTimer = setTimeout(() => el.classList.remove("theme-anim"), 260);
+  clearTimeout(_animTimer);
+  _animTimer = setTimeout(() => el.classList.remove("theme-anim"), 260);
 }
 
-// theme: "light" | "dark" | "system" (system clears the stored override).
-export function setTheme(theme) {
-  try { theme === "system" ? localStorage.removeItem(KEY) : localStorage.setItem(KEY, theme); } catch { /* ignore */ }
-  themeCrossfade();
-  applyTheme(getTheme());
-  return getTheme();
-}
+// Subscribers notified when the RESOLVED theme changes (manual set OR an OS
+// change while in "system" mode) so React can re-render icons/labels.
+const _subs = new Set();
+export function subscribeTheme(cb) { _subs.add(cb); return () => _subs.delete(cb); }
+function notify() { const t = resolvedTheme(); _subs.forEach((cb) => { try { cb(t); } catch { /* ignore */ } }); }
 
-export function initTheme() {
-  applyTheme(getTheme());
-  // Track OS changes while the user hasn't set an explicit preference.
-  if (typeof window !== "undefined") {
-    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-      if (!getStored()) applyTheme(getTheme());
-    });
+// The OS listener is attached ONLY while the preference is "system", and
+// removed when the user picks Light/Dark (or on teardown).
+let _osHandler = null;
+function bindOsListener(active) {
+  const m = mql();
+  if (!m) return;
+  if (active && !_osHandler) {
+    _osHandler = () => { applyResolved(resolvedTheme()); notify(); };
+    m.addEventListener("change", _osHandler);
+  } else if (!active && _osHandler) {
+    m.removeEventListener("change", _osHandler);
+    _osHandler = null;
   }
 }
+
+// Set (and persist locally) the appearance preference. Returns the resolved theme.
+export function setThemePref(pref) {
+  if (!PREFS.includes(pref)) pref = "system";
+  try { localStorage.setItem(KEY, pref); localStorage.removeItem("sb-theme"); } catch { /* ignore */ }
+  crossfade();
+  bindOsListener(pref === "system");
+  applyResolved(resolvePref(pref));
+  notify();
+  return resolvedTheme();
+}
+
+// Apply the stored preference before first paint (no flash) and wire the OS
+// listener if we're in "system" mode.
+export function initTheme() {
+  const pref = getThemePref();
+  applyResolved(resolvePref(pref));
+  bindOsListener(pref === "system");
+}
+
+// Remove the OS listener + subscribers (component unmount / teardown).
+export function teardownTheme() { bindOsListener(false); _subs.clear(); }
