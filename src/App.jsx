@@ -50,7 +50,7 @@ import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging"
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
 import { useBlocker } from "react-router-dom";
 import { useNav, useScrollRestoration } from "./navHooks.js";
-import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM } from "./nav.js";
+import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM, notificationDestination } from "./nav.js";
 
 /* Tiny localStorage helpers for remembering small UI preferences (e.g. which
    status groups a user has collapsed). Best-effort — never throw. */
@@ -381,7 +381,7 @@ function notifGroups(items) {
   return Object.entries(g).filter(([,v])=>v.length);
 }
 
-function NotifCenter({ notif, isAdmin, onClose, onOpenTask, onViewEvent, onGoPeople, onGoTab, onSettings }) {
+function NotifCenter({ notif, isAdmin, onClose, onNavigate, onSettings }) {
   const { items, unread, hasMore, loadMore, markRead, markAllRead } = notif;
   // Animate the drawer out before closing / navigating, so the hand-off to the
   // destination isn't a hard cut. `finish(action)` fades, then runs the action.
@@ -414,18 +414,15 @@ function NotifCenter({ notif, isAdmin, onClose, onOpenTask, onViewEvent, onGoPeo
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, closing]);
-  // Every notification must open something (#8). Prefer its task, then its
-  // event, then a type-based destination, and finally Home — never a dead end.
-  // The drawer fades out first, then the destination opens (smooth hand-off).
+  // Every notification deep-links to the exact thing it refers to — the content,
+  // the right section of it, an event, or the filtered follow-up list — never a
+  // generic dashboard. The destination is derived from the notification's
+  // structured fields (notificationDestination), not its text. The drawer fades
+  // out first, then the destination opens (a smooth hand-off).
   const open = (n) => {
     if (!n.read) markRead(n.id);
-    const go =
-      n.taskId ? () => onOpenTask(n.taskId)
-      : (n.eventOccurrenceId && onViewEvent) ? () => onViewEvent({ eventOccurrenceId: n.eventOccurrenceId, name: n.eventName || "Event", annual: false })
-      : (n.type === "leadership" && isAdmin && onGoPeople) ? () => onGoPeople()
-      : onGoTab ? () => onGoTab("home")
-      : onClose;
-    finish(go);
+    const dest = notificationDestination(n);
+    finish(() => onNavigate(dest));
   };
   return (
     <Portal>
@@ -1356,7 +1353,6 @@ function Board({ profile, isAdmin }) {
   const viewEvent = (occ) => R.setEventFilter(occ.eventOccurrenceId, occ);
   const setBoardEvent = (v) => { if (!v) R.clearEventFilter(); };
   const setAdminSecReq = (req) => R.setAdminSection(req?.sec || null);
-  const goPeople = () => R.navigate({ pathname: "/admin", search: withParams("", { [PARAM.section]: "people" }) });
   const setSearchOpen = (v) => v ? R.openPanel("search") : R.closeOverlay();
   const setShowDrawer = (v) => v ? R.openPanel("profile") : R.closeOverlay();
   const setNotifOpen = (v) => v ? R.openPanel("notifications") : R.closeOverlay();
@@ -1740,7 +1736,7 @@ function Board({ profile, isAdmin }) {
             <div className={navLoading ? "sb-pagehide" : "sb-pageshow"}>
             {tab==="home"  && <Home tasks={tasks} tasksLoaded={tasksLoaded} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
             {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
-            {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} />}
+            {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} urlFilter={nav.filter} />}
             {tab==="mine"  && <Mine tasks={tasks} me={me} openTask={setOpenId} />}
             {tab==="team"  && <Team tasks={tasks} users={users} />}
             {tab==="admin" && isAdmin && (
@@ -1792,10 +1788,7 @@ function Board({ profile, isAdmin }) {
       {notifOpen && (
         <NotifCenter notif={notif} isAdmin={isAdmin}
           onClose={()=>setNotifOpen(false)}
-          onOpenTask={setOpenId}
-          onViewEvent={viewEvent}
-          onGoPeople={goPeople}
-          onGoTab={setTab}
+          onNavigate={(dest)=>R.navigate(dest)}
           onSettings={()=>setNotifSettingsOpen(true)} />
       )}
 
@@ -1834,6 +1827,7 @@ function Board({ profile, isAdmin }) {
       {openTask && (
         <TaskDetail key={openTask.id} task={openTask} me={me} isAdmin={isAdmin}
           isQA={isAdmin || !!me.qa}
+          focus={nav.focus} highlightComment={nav.comment}
           onClose={()=>setOpenId(null)}
           onStatus={(s)=>setStatus(openTask, s)}
           onAction={(action, extra)=>runWorkflow(openTask, action, extra)}
@@ -1848,6 +1842,12 @@ function Board({ profile, isAdmin }) {
           onArchive={isAdmin ? async ()=>{ await archiveTask(openTask); setOpenId(null); } : undefined}
           onDelete={isAdmin ? async ()=>{ await deleteTask(openTask.id); setOpenId(null); } : undefined}
           onEdit={()=>setEditTask(openTask)} />
+      )}
+      {/* Deep-linked to content that no longer exists (deleted, or not visible
+          to this user). Show a friendly dead-end with a way back — never a blank
+          sheet. Only once tasks have loaded, so we don't flash it mid-fetch. */}
+      {nav.screen==="content" && !openTask && tasksLoaded && (
+        <MissingContent onBack={()=>R.goBack()} />
       )}
       {editTask && (
         // editTask is "new" or a task id (from ?compose/?edit) — resolve the id
@@ -2140,8 +2140,11 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
 /* ===================================================================
    BOARD LIST
    =================================================================== */
-function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilter }) {
-  const [filter, setFilter] = useState("all");
+function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilter, urlFilter }) {
+  // A summary notification deep-links here with ?filter=attention; adopt that
+  // filter on arrival (and whenever it changes), otherwise default to All.
+  const [filter, setFilter] = useState(urlFilter || "all");
+  useEffect(() => { if (urlFilter) setFilter(urlFilter); }, [urlFilter]);
   // Board (grouped cards) vs List (dense rows); the choice is remembered.
   const [view, setView] = useState(() => loadPref("sb-board-view", "board"));
   const pickView = (v) => { setView(v); savePref("sb-board-view", v); };
@@ -3894,7 +3897,33 @@ function UrlInput({ value, onChange, onBlur, placeholder = "https://…", disabl
     </div>
   );
 }
-function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onApprove, onLinks, onRequestChanges, onBlocked, onComment, onReact, onEdit, onDuplicate, onArchive, onDelete, onSaved }) {
+/* Friendly dead-end for a notification/deep-link whose content is gone
+   (deleted, archived out of view, or not permitted). Never a blank page. */
+function MissingContent({ onBack }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onBack(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onBack]);
+  return (
+    <Portal>
+      <div className="sb-scrim" onMouseDown={onBack}>
+        <div className="sb-sheet sb-sheet-sm" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Content unavailable">
+          <div className="bd" style={{textAlign:"center",padding:"32px 22px"}}>
+            <div className="sb-empty"><div className="big"><ExclamationTriangleIcon className="hi hi-empty" aria-hidden="true"/></div></div>
+            <h2 className="sb-serif" style={{fontSize:18,marginBottom:6}}>This content is no longer available</h2>
+            <p className="sb-sub" style={{maxWidth:"34ch",margin:"0 auto 18px"}}>
+              It may have been deleted or archived, or you may not have access to it.
+            </p>
+            <button className="sb-btn" style={{maxWidth:220,margin:"0 auto"}} onClick={onBack}>Go back</button>
+          </div>
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
+function TaskDetail({ task, me, isAdmin, isQA, focus, highlightComment, onClose, onStatus, onAction, onApprove, onLinks, onRequestChanges, onBlocked, onComment, onReact, onEdit, onDuplicate, onArchive, onDelete, onSaved }) {
   const [confirmDel, setConfirmDel] = useState(false);   // admin delete confirmation
   const [draft, setDraft] = useState("");
   // Local drafts; persisted on blur. Component is keyed by task id, so these
@@ -3907,6 +3936,23 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
   const [askChanges, setAskChanges] = useState(false);
   const [warn, setWarn] = useState("");
   const [copiedKey, setCopiedKey] = useState(""); // #7 — copy feedback for the read-only reference link
+  // Deep-link focus: a notification can open this content straight to its QA
+  // review panel or its Discussion. Scroll that section into view and flash it
+  // once, so the user lands on exactly what the notification was about.
+  const reviewRef = useRef(null);
+  const discussRef = useRef(null);
+  const [flashSection, setFlashSection] = useState(null);
+  useEffect(() => {
+    if (!focus) return;
+    const el = focus === "review" ? reviewRef.current : (focus === "comments" ? discussRef.current : null);
+    if (!el) return;
+    const t = setTimeout(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      setFlashSection(focus);
+      setTimeout(() => setFlashSection(null), 1600);
+    }, 220);   // let the sheet finish its open animation first
+    return () => clearTimeout(t);
+  }, [focus]);
   // #12 — auto-saves surface a global "✓ Saved just now" banner (always visible,
   // whichever field was edited), via the parent.
   const flashSaved = () => onSaved && onSaved();
@@ -4023,7 +4069,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
 
           {/* QA panel — Approve / Request changes, only for QA while In Review. */}
           {isQA && task.status==="In Review" && (
-            <div className="sb-qa">
+            <div className={"sb-qa"+(flashSection==="review"?" sb-flash":"")} ref={reviewRef}>
               <b>QA review</b>
               <div className="sb-btnrow">
                 <button className="sb-btn green compact" onClick={onApprove}>Approve</button>
@@ -4152,7 +4198,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
             })}
           </div>
 
-          <div className="sb-shead" style={{marginTop:18}}><h2>Discussion</h2></div>
+          <div className={"sb-shead"+(flashSection==="comments"?" sb-flash":"")} ref={discussRef} style={{marginTop:18}}><h2>Discussion</h2></div>
           <div className="sb-sub" style={{marginTop:-6}}>Keep it here, not in WhatsApp.</div>
           {(task.comments||[]).map((c,i)=>(
             <div className="sb-cmt" key={i}>

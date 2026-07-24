@@ -78,11 +78,30 @@ async function sendPush(uid, { title, body, url }) {
   await Promise.all(dead.map((t) => col.doc(t).delete()));
 }
 
+/* Canonical deep-link for push/email, mirroring src/nav.js notificationDestination
+   so an external tap lands exactly where an in-app tap would. Kept in sync by
+   hand (server is CommonJS, client is ESM); the client mapper is the reference. */
+function deepLinkUrl({ type, taskId, eventOccurrenceId, commentId, route }) {
+  if (route) return route;
+  if (taskId) {
+    const focus = type === "qa" ? "review"
+      : (type === "mention" || type === "changes") ? "comments" : "";
+    const q = [];
+    if (focus) q.push(`focus=${focus}`);
+    if (focus === "comments" && commentId) q.push(`comment=${encodeURIComponent(commentId)}`);
+    return `/content/${encodeURIComponent(taskId)}${q.length ? `?${q.join("&")}` : ""}`;
+  }
+  if (eventOccurrenceId) return `/workflow?event=${encodeURIComponent(eventOccurrenceId)}`;
+  if (type === "leadership") return "/workflow?filter=attention";
+  if (type === "weeklyTaskCheck") return "/my-day";
+  return "/";
+}
+
 /* ---- idempotent notification write ---- */
-async function writeNotification({ id, uid, type, title, body = "", taskId = "", eventOccurrenceId = "" }) {
+async function writeNotification({ id, uid, type, title, body = "", taskId = "", eventOccurrenceId = "", commentId = "" }) {
   try {
     await db.collection("notifications").doc(id).create({
-      uid, type, title, body, taskId, eventOccurrenceId,
+      uid, type, title, body, taskId, eventOccurrenceId, commentId,
       read: false, channels: ["in-app"], dedupeKey: id,
       createdAt: FieldValue.serverTimestamp(),
     });
@@ -117,12 +136,13 @@ const NOTIFY_POLICY = {
 };
 const policyFor = (type) => NOTIFY_POLICY[type] || { channels: ["in-app", "push"], priority: "standard" };
 
-async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, keyBase, required = false, channels = null, whenText = "", priority = "", route = "" }) {
+async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, commentId = "", keyBase, required = false, channels = null, whenText = "", priority = "", route = "" }) {
   const pol = policyFor(type);
   const chans = channels || pol.channels;              // explicit override wins
   const pri = priority || pol.priority;
-  // Deep-link target for push/email: explicit route wins, else the task, else home.
-  const url = route || (taskId ? `/?task=${taskId}` : "/");
+  // Push/email land on the SAME place as the in-app tap (canonical routes,
+  // mirroring src/nav.js notificationDestination).
+  const url = deepLinkUrl({ type, taskId, eventOccurrenceId, commentId, route });
   const pushChannel = chans.includes("push");
   const emailChannel = chans.includes("email");
   const seen = new Set();
@@ -130,7 +150,7 @@ async function notifyUsers(recipients, { type, title, body, taskId, eventOccurre
     if (seen.has(u.uid)) return; seen.add(u.uid);
     if (!required && !prefsAllow(u, type)) return;
     const notificationId = `${keyBase}_${u.uid}`;
-    const created = await writeNotification({ id: notificationId, uid: u.uid, type, title, body, taskId, eventOccurrenceId });
+    const created = await writeNotification({ id: notificationId, uid: u.uid, type, title, body, taskId, eventOccurrenceId, commentId });
     if (!created) return; // idempotent: someone already delivered this one
     // Fan out to external channels (only on the first write; each respects prefs).
     if (pushChannel && pushAllow(u)) await sendPush(u.uid, { title, body, url });

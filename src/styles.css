@@ -1724,6 +1724,20 @@ a{color:var(--primary)}
 .sb-list,.sb-listrows,.tl-adv,.sb-remsum{animation:revealIn var(--motion-standard) var(--ease-enter)}
 @keyframes revealIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 
+/* A notification/deep-link that targets a section (QA review, Discussion)
+   scrolls it into view and flashes it once, so the user's eye lands on the
+   exact thing the notification referred to. */
+.sb-flash{animation:sbFlash 1.6s var(--ease-standard)}
+@keyframes sbFlash{
+  0%,100%{background:transparent;border-radius:var(--r-card)}
+  12%,55%{background:var(--primary-muted);border-radius:var(--r-card)}
+}
+@media(prefers-reduced-motion:reduce){ .sb-flash{animation:none} }
+
+/* Compact centered sheet (e.g. the "content unavailable" dead-end). */
+.sb-sheet-sm{max-width:420px;border-radius:var(--r-modal)}
+@media(max-width:899px){ .sb-sheet-sm{max-width:none} }
+
 /* Form validation: gentle error appearance, stable field positions. */
 .sb-fielderr,.sb-lerr,.tl-err{animation:revealIn var(--motion-fast) var(--ease-enter)}
 input,textarea,select{transition:border-color var(--motion-fast) var(--ease-standard),

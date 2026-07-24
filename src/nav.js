@@ -38,8 +38,13 @@ export const PARAM = {
   panel: "panel",       // ?panel=profile|notifications|search
   event: "event",       // /workflow?event=<occurrenceId>
   section: "section",   // /admin?section=people
+  filter: "filter",     // /workflow?filter=attention
+  focus: "focus",       // /content/:id?focus=comments|review  (deep-link a section)
+  comment: "comment",   // /content/:id?focus=comments&comment=<id>  (highlight target)
 };
 export const PANELS = ["profile", "notifications", "search"];
+// Sections of the content detail a notification can jump straight to.
+export const FOCI = ["comments", "review", "links"];
 
 /* ---- parsing ------------------------------------------------------------- */
 
@@ -58,7 +63,7 @@ export function parseLocation(pathname, search) {
   const p = params(search);
   const base = {
     screen: "notfound", contentId: null, memberId: null,
-    section: null, event: null,
+    section: null, event: null, filter: null, focus: null, comment: null,
     overlay: parseOverlay(p),
     redirect: null,
   };
@@ -70,13 +75,23 @@ export function parseLocation(pathname, search) {
   if (PATH_SCREEN[path]) {
     const screen = PATH_SCREEN[path];
     const out = { ...base, screen };
-    if (screen === "board") out.event = p.get(PARAM.event) || null;
+    if (screen === "board") {
+      out.event = p.get(PARAM.event) || null;
+      out.filter = p.get(PARAM.filter) || null;   // e.g. ?filter=attention from a summary
+    }
     if (screen === "admin") out.section = p.get(PARAM.section) || null;
     return out;
   }
-  // /content/:id
+  // /content/:id — optional section focus + comment highlight (from a notification).
   const content = path.match(/^\/content\/([^/]+)$/);
-  if (content) return { ...base, screen: "content", contentId: decodeURIComponent(content[1]) };
+  if (content) {
+    const focus = p.get(PARAM.focus);
+    return {
+      ...base, screen: "content", contentId: decodeURIComponent(content[1]),
+      focus: FOCI.includes(focus) ? focus : null,
+      comment: p.get(PARAM.comment) || null,
+    };
+  }
 
   // Reserved: /team/:memberId — no screen yet, fall back to /team.
   const member = path.match(/^\/team\/([^/]+)$/);
@@ -142,7 +157,7 @@ export function withParams(search, changes) {
     else p.set(k, v);
   }
   // Stable key order for deterministic output.
-  const order = [PARAM.compose, PARAM.edit, PARAM.panel, PARAM.event, PARAM.section];
+  const order = [PARAM.compose, PARAM.edit, PARAM.panel, PARAM.event, PARAM.section, PARAM.filter, PARAM.focus, PARAM.comment];
   const out = new URLSearchParams();
   for (const k of order) if (p.has(k)) out.set(k, p.get(k));
   const s = out.toString();
@@ -159,6 +174,50 @@ export const openPanel = (search, name) =>
   withParams(search, { [PARAM.panel]: PANELS.includes(name) ? name : null, [PARAM.compose]: null, [PARAM.edit]: null });
 export const closeOverlays = (search) =>
   withParams(search, { [PARAM.compose]: null, [PARAM.edit]: null, [PARAM.panel]: null });
+
+/* ---- notification deep-linking ------------------------------------------
+
+   A notification is only an entry point: tapping it must land the user on the
+   exact thing it refers to, ready to act — never a generic dashboard. This
+   maps a notification's STRUCTURED fields (type + ids) to a concrete location.
+   It never parses the notification's display text.
+
+   The notification doc carries: { type, taskId?, eventOccurrenceId?, commentId? }.
+   Destinations by type:
+     assigned/reminder/overdue/ready/approved → the content itself
+     qa (review request)   → the content, scrolled to the QA review panel
+     changes/mention       → the content, scrolled to Discussion (+ comment id)
+     leadership (summary)  → Workflow filtered to everything needing follow-up
+     weeklyTaskCheck       → My Day (what's due for Sunday)
+     account_approved      → Home (the welcome — this one IS about Home) */
+export function notificationDestination(n) {
+  if (!n) return { pathname: "/", search: "" };
+  const type = n.type;
+
+  if (n.taskId) {
+    const focus =
+      type === "qa" ? "review"
+      : (type === "mention" || type === "changes") ? "comments"
+      : null;
+    const search = withParams("", {
+      [PARAM.focus]: focus,
+      [PARAM.comment]: focus === "comments" ? (n.commentId || null) : null,
+    });
+    return { pathname: `/content/${encodeURIComponent(n.taskId)}`, search };
+  }
+
+  if (n.eventOccurrenceId)
+    return { pathname: "/workflow", search: withParams("", { [PARAM.event]: n.eventOccurrenceId }) };
+
+  // Summary / follow-up digest → the exact items behind it, not a dashboard.
+  if (type === "leadership")
+    return { pathname: "/workflow", search: withParams("", { [PARAM.filter]: "attention" }) };
+
+  if (type === "weeklyTaskCheck") return { pathname: "/my-day", search: "" };
+  if (type === "account_approved") return { pathname: "/", search: "" };
+
+  return { pathname: "/", search: "" };   // last-resort only for unknown types
+}
 
 /* ---- safe back fallbacks (for direct entry with no in-app history) -------- */
 

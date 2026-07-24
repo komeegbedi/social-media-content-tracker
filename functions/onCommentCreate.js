@@ -22,7 +22,7 @@ exports.onCommentCreate = onDocumentCreated(
     const recipients = mentions.map((uid) => byUid[uid]).filter(Boolean);
 
     await notifyUsers(recipients, {
-      type: "mention", taskId, keyBase: `mention_${commentId}`,
+      type: "mention", taskId, commentId, keyBase: `mention_${commentId}`,
       title: `${c.who || "Someone"} mentioned you on '${title}'`,
       body: c.txt ? `"${truncate(c.txt)}"` : "",
     });
