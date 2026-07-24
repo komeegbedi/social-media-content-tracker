@@ -954,6 +954,87 @@ Preserve all workflows, role permissions, Firestore behaviour, notification logi
 
 ---
 
+# 23b. Unsaved Changes and Destructive Action Confirmation Modals
+
+_(Not yet implemented — a documented requirement for the next pass.)_
+
+Add a consistent, application-wide confirmation system for destructive actions and unsaved changes.
+
+Do not use `window.alert()`, `window.confirm()`, `document.alert`, browser-style JavaScript confirmation boxes, or toast messages as the only confirmation for destructive actions. Use a proper branded modal rendered inside the application (build on the existing `ConfirmDialog`).
+
+## Unsaved changes protection
+
+Track whether a user has modified a form or editable screen without saving. Protect all relevant areas: creating content, editing content, editing task assignments, editing reminders, creating/editing recurring events, editing notification preferences, editing profile details, editing team members, admin settings, feature-request forms, issue-report forms, and any other form where entered information could be lost.
+
+When unsaved changes exist and the user attempts to navigate away, use the sidebar or mobile nav, close a modal/drawer/bottom sheet, press Back, select another task, switch Admin tabs, close the create/edit flow, or sign out — show a confirmation modal:
+
+```text
+Leave without saving?
+You have unsaved changes. If you leave now, your changes will be lost.
+[ Keep editing ]   [ Leave without saving ]
+```
+
+Use explicit labels (never generic Yes/No). The safe action (`Keep editing`) receives primary focus; the destructive action (`Leave without saving`) uses a danger/warning treatment.
+
+## Dirty-state behaviour
+
+Build one reusable system, not per-form logic. It should: store original values; compare with current; mark dirty only after an actual change; ignore focus/blur/validation/formatting events; clear on successful save; clear on intentional reset; preserve dirty state when a save fails; avoid warnings when nothing changed or immediately after a successful save; and support forms inside modals, drawers, sheets, and full pages. Suggested API: `useUnsavedChanges({ isDirty, onDiscard })` or a central navigation guard.
+
+## Navigation interception
+
+Intercept all in-app navigation while dirty. On `Leave without saving`: discard form state, close the modal, complete the originally requested navigation/close. On `Keep editing`: close the modal, stay, restore focus to the control that initiated navigation. Never navigate before confirmation — store the pending destination/action so it can continue after confirming.
+
+## Browser refresh, tab close, external navigation
+
+For in-app navigation, always use the IFC Creatives Board modal. For browser-level actions (refresh, tab close, leaving the site), use a `beforeunload` safeguard **only while unsaved changes exist** (never when clean). The browser's own standard warning text is the only acceptable native confirmation, since browsers restrict custom UI there.
+
+## Destructive-action modals
+
+Confirm before: delete task/content, delete event occurrence, delete recurring series, remove a reminder, remove a team member, deactivate an account, remove an assignment, delete a notification, delete a feature request, hard-to-reverse archiving, reset custom reminders, discard a draft, remove an uploaded file. Each destructive modal must explain what is affected, what will be removed, what remains, whether it can be undone, and whether linked records are preserved. Examples:
+
+```text
+Delete this task?
+“Sunday sermon clip” will be permanently deleted. Comments, reminder schedules,
+and task activity associated with it will also be removed. This cannot be undone.
+[ Keep task ]   [ Delete task ]
+```
+```text
+Delete recurring event?
+This removes the recurring-event series and all future generated occurrences.
+Existing content tasks linked to previous occurrences will not be deleted.
+[ Keep event ]   [ Delete recurring event ]
+```
+
+## Confirmation hierarchy (tones)
+
+- **Unsaved changes** — warning icon, neutral/amber emphasis; primary: Keep editing; destructive secondary: Leave without saving.
+- **Permanent deletion** — danger icon, red destructive action; primary safe: Keep item.
+- **Reversible actions** (archive/deactivate) — explain how to reverse. e.g. _"Deactivate team member? Morgan will no longer be able to sign in or receive new assignments. Their task history remains. [ Cancel ] [ Deactivate member ]"_.
+
+## Reusable component
+
+Standardize a `ConfirmationDialog` supporting: `warning`/`danger`/`neutral` tones, title, description, optional affected-item name, optional consequences list, confirm/cancel labels, loading + disabled states, async confirm, accessible icon, focus management, reduced-motion.
+
+## Accessibility
+
+`role="dialog"`/`"alertdialog"` as appropriate; accessible title + description; focus trap; initial focus on the safest action; focus restoration on close; keyboard navigation; Escape cancels non-critical dialogs; background inert + scroll-locked; ≥44px mobile targets; never colour alone. For destructive confirms, Enter must not trigger deletion unless the destructive button intentionally has focus.
+
+## Async actions
+
+While processing: disable buttons where appropriate, show a loading state in the confirm button ("Deleting task…"), prevent duplicate submissions, keep the dialog open until success, show a clear inline error on failure, and never lose form data after a failed request.
+
+## Mobile presentation
+
+A centred accessible dialog or a bottom-sheet confirmation, fully visible above safe-area insets and the virtual keyboard. Never a small desktop dialog overflowing a mobile screen.
+
+## Testing
+
+Cover: navigation with clean vs dirty form; keeping edits; leaving without saving; closing a dirty modal; switching tabs while dirty; signing out while dirty; successful save clears dirty; failed save preserves dirty; delete confirmation; cancel deletion; failed deletion; duplicate-click prevention; focus trap + restoration; Escape behaviour; mobile presentation; reduced-motion; and `beforeunload` registered **only** while dirty.
+
+Not complete until every editable area has unsaved-change protection and every destructive action uses the shared confirmation experience.
+
+---
+
 # 24. Completion Criteria
 
 The refinement is complete when:

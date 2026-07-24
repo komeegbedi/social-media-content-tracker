@@ -14,14 +14,17 @@ exports.onUserWrite = onDocumentWritten(
     const after = event.data.after.exists ? event.data.after.data() : null;
     if (!after) return;
 
-    // New pending registration → alert every admin.
+    // New pending registration → alert every admin (in-app + push + email). #9
+    // Push/email deep-link straight to Admin → People → Pending Approvals.
     if (!before && after.status === "pending") {
       const { list } = await loadUsers();
       const admins = list.filter((u) => u.role === "admin" && u.uid !== uid);
       await notifyUsers(admins, {
-        type: "leadership", required: true, priority: "critical", channels: ["in-app", "email"], keyBase: `pending_${uid}`,
-        title: `${after.name || "A new member"} is awaiting approval`,
-        body: "Review them in Admin → People.",
+        type: "leadership", required: true, priority: "critical",
+        channels: ["in-app", "push", "email"], keyBase: `pending_${uid}`,
+        title: "New team member awaiting approval",
+        body: `${after.name || "Someone"} is waiting for account approval.`,
+        route: "/?tab=admin&sec=people",
       });
       return;
     }

@@ -1,18 +1,19 @@
 /* IFC Creatives Board — the digital home of the IFC Creative Team.
    (Internal note: powered by StudioBoard architecture.) */
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useContext, createContext } from "react";
+import { createPortal } from "react-dom";
 import {
   onAuthStateChanged, signOut,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
   signInWithPopup, updateProfile, sendPasswordResetEmail,
 } from "firebase/auth";
 import {
-  collection, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot, serverTimestamp,
+  collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot, serverTimestamp,
 } from "firebase/firestore";
 import { auth, db, googleProvider, functions } from "./firebase";
 import { httpsCallable } from "firebase/functions";
 import {
-  STAGES, statusClass, roleLabel, initials, emailFor,
+  STAGES, statusClass, roleLabel, initials, emailFor, formatContentTitle,
   fmt, daysTo, autoAssign, computeCapacity,
   parseCSV, rowToTask, sheetCsvUrl,
   PRIORITIES, priorityClass, attentionItems, matchUser, reconcileNames, matchTier,
@@ -29,10 +30,11 @@ import {
   DEPARTMENTS, roleChips, userActiveTasks, PEOPLE_FILTERS, applyPeopleFilter, groupPeople,
   crewRoleLabel, pendingCrewLabel, CREW_ROLES, occurrenceContentCount, occurrenceTasks,
   DEFAULT_REMINDERS, REMINDER_CHANNELS, REMINDER_RECIPIENTS, MAX_REMINDERS, isValidEmail,
+  isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, isShootType, workloadBadge,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
-import { pushState, enablePush, listenForeground } from "./push";
+import { pushState, enablePush, listenForeground, refreshPushToken } from "./push";
 import { RELEASES, LATEST_RELEASE } from "./releases";
 import {
   HomeIcon, ClockIcon, ViewColumnsIcon, ClipboardDocumentListIcon, UserGroupIcon,
@@ -40,9 +42,11 @@ import {
   EllipsisHorizontalIcon, ExclamationTriangleIcon, SunIcon, MoonIcon, FunnelIcon,
   BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, SparklesIcon, EyeIcon, EyeSlashIcon,
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
+  InformationCircleIcon, ClipboardIcon, ArrowTopRightOnSquareIcon, CheckIcon, ClipboardDocumentIcon,
+  ComputerDesktopIcon,
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
-import { getTheme, setTheme } from "./theme";
+import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
 
 /* Tiny localStorage helpers for remembering small UI preferences (e.g. which
    status groups a user has collapsed). Best-effort — never throw. */
@@ -70,12 +74,68 @@ const eventPrefill = (e) => ({
 
 /* A slim, dismissible beta notice — sets expectations and invites feedback.
    Dismissal is remembered so it doesn't nag returning testers. */
+/* Admin actions available on any task, anywhere (card kebabs + detail sheet)
+   without threading handlers through every list. Provided once near the app
+   root; null for non-admins (kebabs simply don't render). */
+const TaskAdminContext = createContext(null);
+
+/* Render overlay content directly into document.body so it escapes every parent
+   stacking context (transformed/animated pages, filtered/opacity ancestors) and
+   always layers above the app chrome — bottom nav, FAB, header. This is the real
+   fix for "modal appears under the floating nav": a big z-index alone can't win
+   against a parent that traps the child in its own stacking context. */
+/* Overlay host. Every dialog / bottom-sheet / drawer renders through this so it
+   escapes any transformed/animated ancestor's stacking context and layers above
+   the floating nav via the z-index tokens. While ANY overlay is mounted we also:
+   - lock background scroll (iOS-safe: fix the body at the current offset so the
+     page can't scroll behind the sheet, restoring the exact position on close), and
+   - mark the app root `inert`, so the nav + FAB + page behind the backdrop are
+     neither clickable nor focusable (tab order skips them) until the overlay closes.
+   A reference count keeps nested/stacked overlays correct. */
+let _overlayCount = 0;
+let _savedScrollY = 0;
+function lockBackground() {
+  if (_overlayCount++ > 0) return;
+  _savedScrollY = window.scrollY || window.pageYOffset || 0;
+  const b = document.body;
+  b.style.position = "fixed";
+  b.style.top = `-${_savedScrollY}px`;
+  b.style.left = "0";
+  b.style.right = "0";
+  b.style.width = "100%";
+  document.getElementById("root")?.setAttribute("inert", "");
+}
+function unlockBackground() {
+  if (--_overlayCount > 0) return;
+  _overlayCount = 0;
+  const b = document.body;
+  b.style.position = "";
+  b.style.top = "";
+  b.style.left = "";
+  b.style.right = "";
+  b.style.width = "";
+  document.getElementById("root")?.removeAttribute("inert");
+  window.scrollTo(0, _savedScrollY);
+}
+function Portal({ children }) {
+  useLayoutEffect(() => {
+    lockBackground();
+    return unlockBackground;
+  }, []);
+  return createPortal(children, document.body);
+}
+
 function BetaBanner({ onReport }) {
-  const [open, setOpen] = useState(() => loadPref("sb-beta-dismissed", false) !== true);
-  if (!open) return null;
-  const dismiss = () => { setOpen(false); savePref("sb-beta-dismissed", true); };
+  // "open" → visible, "closing" → playing the fade+collapse, then unmount.
+  const [state, setState] = useState(() => loadPref("sb-beta-dismissed", false) === true ? "gone" : "open");
+  if (state === "gone") return null;
+  const dismiss = () => {
+    savePref("sb-beta-dismissed", true);
+    setState("closing");
+    setTimeout(() => setState("gone"), 200);   // matches the betaOut animation
+  };
   return (
-    <div className="sb-beta">
+    <div className={"sb-beta" + (state === "closing" ? " closing" : "")}>
       <span className="sb-beta-tag">Beta</span>
       <span className="sb-beta-txt">Help us improve the app</span>
       <button className="sb-beta-report" onClick={onReport}>Report</button>
@@ -84,31 +144,73 @@ function BetaBanner({ onReport }) {
   );
 }
 
-/* Light/dark toggle. Default follows the OS; a manual choice is remembered. */
-function ThemeToggle({ compact }) {
-  const [theme, setT] = useState(getTheme());
-  const toggle = () => { const next = theme === "dark" ? "light" : "dark"; setTheme(next); setT(next); };
-  return compact
-    ? <button className="sb-report-top" onClick={toggle} aria-label="Toggle dark mode">
-        {theme==="dark"?<SunIcon className="hi" aria-hidden="true"/>:<MoonIcon className="hi" aria-hidden="true"/>}</button>
-    : <button className="sb-report" onClick={toggle} aria-label="Toggle dark mode">
-        {theme==="dark"?<SunIcon className="hi-sm hi" aria-hidden="true"/>:<MoonIcon className="hi-sm hi" aria-hidden="true"/>}
-        <span className="lbl">{theme==="dark"?"Light mode":"Dark mode"}</span></button>;
-}
+/* Appearance preference: Match system / Light / Dark. */
+const APPEARANCE_OPTIONS = [
+  { key:"system", label:"Match system", help:"Automatically follow this device", Icon: ComputerDesktopIcon },
+  { key:"light",  label:"Light",        help:"Always use light appearance",      Icon: SunIcon },
+  { key:"dark",   label:"Dark",         help:"Always use dark appearance",       Icon: MoonIcon },
+];
+const appearanceOption = (p) => APPEARANCE_OPTIONS.find(o=>o.key===p) || APPEARANCE_OPTIONS[0];
 
-/* Mobile account drawer — opened from the header avatar. Pulls the profile,
-   theme, report and sign-out off every screen and into one slide-up sheet. */
-function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onNotifications, onNotifPrefs, onWhatsNew, onFeatureRequest, onReport, onGoTab }) {
-  const [theme, setT] = useState(getTheme());
-  const toggleTheme = () => { const next = theme==="dark"?"light":"dark"; setTheme(next); setT(next); };
+/* Bottom sheet (mobile) / centred dialog (desktop) with a radio list. */
+function AppearanceSheet({ current, onChoose, onClose }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
+    <Portal>
     <div className="sb-scrim" onMouseDown={onClose}>
-      <div className="sb-drawer" onMouseDown={e=>e.stopPropagation()}>
+      <div className="sb-sheet" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Appearance">
+        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Appearance</b>
+          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+        <div className="bd">
+          <div className="sb-optlist" role="radiogroup" aria-label="Appearance">
+            {APPEARANCE_OPTIONS.map(o => {
+              const active = current === o.key;
+              return (
+                <button key={o.key} role="radio" aria-checked={active}
+                  className={"sb-optrow"+(active?" on":"")} onClick={()=>onChoose(o.key)}>
+                  <span className="sb-optrow-ic"><o.Icon className="hi" aria-hidden="true"/></span>
+                  <span className="sb-optrow-txt">
+                    <span className="sb-optrow-l">{o.label}</span>
+                    <span className="sb-optrow-h">{o.help}</span>
+                  </span>
+                  {active && <CheckIcon className="hi sb-optrow-chk" aria-hidden="true"/>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+    </Portal>
+  );
+}
+
+/* Mobile account drawer — opened from the header avatar. Pulls the profile,
+   theme, report and sign-out off every screen and into one slide-up sheet. */
+function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onNotifications, onNotifPrefs, onWhatsNew, onFeatureRequest, onReport, onGoTab }) {
+  const [pref, setPref] = useState(getThemePref());
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  useEffect(() => subscribeTheme(() => setPref(getThemePref())), []);
+  const chooseAppearance = (p) => {
+    setThemePref(p); setPref(p); setAppearanceOpen(false);
+    if (me?.id) updateDoc(doc(db, "users", me.id), { appearance: p }).catch(() => {}); // follows across devices
+  };
+  const PrefIcon = appearanceOption(pref).Icon;
+  const drag = useSheetDrag(onClose);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <Portal>
+    <div className="sb-scrim" onMouseDown={onClose}>
+      <div className="sb-drawer" onMouseDown={e=>e.stopPropagation()} style={drag.sheetStyle}>
+        <div className="sb-grab" {...drag.handleProps}><span/></div>
         <div className="sb-drawer-user">
           <span className="sb-av" style={{width:46,height:46,fontSize:16}}>{initials(me.name)}</span>
           <div style={{minWidth:0}}>
@@ -133,10 +235,9 @@ function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onN
         {onFeatureRequest && <button className="sb-drawer-item" onClick={()=>{ onFeatureRequest(); onClose(); }}>
           <span className="i"><LightBulbIcon className="hi" aria-hidden="true"/></span>Submit feature request
         </button>}
-        <button className="sb-drawer-item" onClick={toggleTheme}>
-          <span className="i">{theme==="dark"?<SunIcon className="hi" aria-hidden="true"/>:<MoonIcon className="hi" aria-hidden="true"/>}</span>
-          {theme==="dark"?"Light mode":"Dark mode"}
-          <span className="sb-drawer-state">{theme==="dark"?"On":"Off"}</span>
+        <button className="sb-drawer-item" onClick={()=>setAppearanceOpen(true)}>
+          <span className="i"><PrefIcon className="hi" aria-hidden="true"/></span>Appearance
+          <span className="sb-drawer-state">{appearanceOption(pref).label}</span>
         </button>
         <button className="sb-drawer-item" onClick={onNotifications}>
           <span className="i"><BellIcon className="hi" aria-hidden="true"/></span>Notifications
@@ -151,6 +252,8 @@ function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onN
         <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
       </div>
     </div>
+    {appearanceOpen && <AppearanceSheet current={pref} onChoose={chooseAppearance} onClose={()=>setAppearanceOpen(false)} />}
+    </Portal>
   );
 }
 
@@ -162,7 +265,6 @@ const seenRelease = () => { try { return localStorage.getItem("sb-seen-release")
 const markReleaseSeen = () => { try { localStorage.setItem("sb-seen-release", LATEST_RELEASE); } catch {} };
 
 function WhatsNew({ onClose }) {
-  useLockBody();
   useEffect(() => { markReleaseSeen(); }, []);
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -170,6 +272,7 @@ function WhatsNew({ onClose }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
+    <Portal>
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="What's new">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>What's new</b>
@@ -189,17 +292,19 @@ function WhatsNew({ onClose }) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
 /* Feature-request form — reuses the issues pipeline (kind: feature_request). */
 function FeatureRequestModal({ onClose }) {
-  useLockBody();
   const [f, setF] = useState({ title:"", problem:"", beneficiary:"", link:"" });
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [err, setErr] = useState(false);
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
+  const isDirty = !done && (f.title.trim() || f.problem.trim() || f.beneficiary.trim() || f.link.trim());
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
   const send = async () => {
     if (busy || !f.title.trim()) return;
     setBusy(true); setErr(false);
@@ -208,10 +313,11 @@ function FeatureRequestModal({ onClose }) {
     ok ? setDone(true) : setErr(true);   // entered text is preserved on failure
   };
   return (
-    <div className="sb-scrim" onClick={onClose}>
+    <Portal>
+    <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Submit feature request">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Submit feature request</b>
-          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
+          <button className="sb-x" onClick={requestClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
         <div className="bd">
           {done ? (
             <>
@@ -220,7 +326,7 @@ function FeatureRequestModal({ onClose }) {
             </>
           ) : (
             <>
-              <div className="sb-field"><label>What would you like to see?</label>
+              <div className="sb-field"><label>What would you like to see?<span className="sb-req" aria-hidden="true">*</span></label>
                 <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. A calendar view of all content" /></div>
               <div className="sb-field"><label>What problem would this solve?</label>
                 <textarea rows={3} value={f.problem} onChange={e=>set("problem",e.target.value)} /></div>
@@ -236,6 +342,8 @@ function FeatureRequestModal({ onClose }) {
         </div>
       </div>
     </div>
+    {leaveGuard}
+    </Portal>
   );
 }
 
@@ -265,8 +373,20 @@ function notifGroups(items) {
   return Object.entries(g).filter(([,v])=>v.length);
 }
 
-function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
+function NotifCenter({ notif, isAdmin, onClose, onOpenTask, onViewEvent, onGoPeople, onGoTab, onSettings }) {
   const { items, unread, hasMore, loadMore, markRead, markAllRead } = notif;
+  // Animate the drawer out before closing / navigating, so the hand-off to the
+  // destination isn't a hard cut. `finish(action)` fades, then runs the action.
+  const [closing, setClosing] = useState(false);
+  const closeT = useRef(null);
+  useEffect(() => () => clearTimeout(closeT.current), []);
+  const finish = (action) => {
+    if (closing) return;
+    setClosing(true);
+    clearTimeout(closeT.current);
+    closeT.current = setTimeout(() => (action || onClose)(), 180);
+  };
+  const drag = useSheetDrag(onClose);
   const [flt, setFlt] = useState("all");
   const [moreOpen, setMoreOpen] = useState(false);
   const active = NOTIF_FILTERS.find(f=>f.id===flt) || NOTIF_FILTERS[0];
@@ -282,21 +402,28 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
     : items.filter(n=>(active.types||[]).includes(n.type));
   const groups = notifGroups(filtered);
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => { if (e.key === "Escape") finish(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, closing]);
+  // Every notification must open something (#8). Prefer its task, then its
+  // event, then a type-based destination, and finally Home — never a dead end.
+  // The drawer fades out first, then the destination opens (smooth hand-off).
   const open = (n) => {
     if (!n.read) markRead(n.id);
-    if (n.taskId) { onClose(); onOpenTask(n.taskId); }
-    else if (n.eventOccurrenceId && onViewEvent) {
-      onClose();
-      onViewEvent({ eventOccurrenceId: n.eventOccurrenceId, name: n.eventName || "Event", annual: false });
-    }
+    const go =
+      n.taskId ? () => onOpenTask(n.taskId)
+      : (n.eventOccurrenceId && onViewEvent) ? () => onViewEvent({ eventOccurrenceId: n.eventOccurrenceId, name: n.eventName || "Event", annual: false })
+      : (n.type === "leadership" && isAdmin && onGoPeople) ? () => onGoPeople()
+      : onGoTab ? () => onGoTab("home")
+      : onClose;
+    finish(go);
   };
   return (
-    <div className="sb-scrim sb-scrim-right" onMouseDown={onClose}>
-      <div className="sb-notifpanel" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Notifications">
+    <Portal>
+    <div className={"sb-scrim sb-scrim-right"+(closing?" closing":"")} onMouseDown={()=>finish()}>
+      <div className="sb-notifpanel" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Notifications" style={drag.sheetStyle}>
+        <div className="sb-grab" {...drag.handleProps}><span/></div>
         <div className="sb-notifhd">
           <div className="sb-notifttl">
             <b className="sb-serif" style={{fontSize:17}}>Notifications</b>
@@ -305,16 +432,18 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
           <div className="sb-notifhd-actions">
             {unread>0 && <button className="sb-markall" onClick={markAllRead}>
               <CheckCircleIcon className="hi hi-sm" aria-hidden="true"/> Mark all read</button>}
-            <button className="sb-iconbtn" onClick={onSettings} aria-label="Notification settings"><Cog6ToothIcon className="hi" aria-hidden="true"/></button>
-            <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button>
+            <button className="sb-iconbtn" onClick={()=>finish(onSettings)} aria-label="Notification settings"><Cog6ToothIcon className="hi" aria-hidden="true"/></button>
+            <button className="sb-x" onClick={()=>finish()}><XMarkIcon className="hi" aria-hidden="true" /></button>
           </div>
         </div>
         <div className="sb-nfilters" role="tablist" aria-label="Filter notifications">
-          {NOTIF_PRIMARY.map(fo => (
-            <button key={fo.id} role="tab" aria-selected={flt===fo.id}
-              className={"sb-fchip"+(flt===fo.id?" on":"")}
-              onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
-          ))}
+          <div className="sb-nfilters-scroll">
+            {NOTIF_PRIMARY.map(fo => (
+              <button key={fo.id} role="tab" aria-selected={flt===fo.id}
+                className={"sb-fchip"+(flt===fo.id?" on":"")}
+                onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
+            ))}
+          </div>
           <div className="sb-nmore">
             <button className={"sb-fchip"+(moreActive?" on":"")} aria-haspopup="menu" aria-expanded={moreOpen}
               onClick={()=>setMoreOpen(o=>!o)}>
@@ -362,6 +491,7 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
             </div>}
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -371,15 +501,34 @@ function NotifCenter({ notif, onClose, onOpenTask, onViewEvent, onSettings }) {
 function PushControls({ me }) {
   const [state, setState] = useState("loading");
   const [busy, setBusy] = useState(false);
-  useEffect(() => { pushState().then(setState); }, []);
+  const [tokenOk, setTokenOk] = useState(null); // null=unknown, true=registered, false=granted-but-no-token
+  useEffect(() => {
+    (async () => {
+      const s = await pushState();
+      setState(s);
+      // Permission "granted" alone doesn't mean this device can receive push —
+      // verify a live FCM token is actually registered (and refresh it).
+      if (s === "granted" && me?.id) setTokenOk((await refreshPushToken(me.id)).ok);
+    })();
+  }, [me?.id]);
   const enable = async () => {
     setBusy(true);
     const r = await enablePush(me.id);
+    setTokenOk(r.ok);
     setState(r.ok ? "granted" : (r.reason === "denied" ? "denied" : await pushState()));
     setBusy(false);
   };
   if (state === "loading") return null;
-  if (state === "granted") return <div className="sb-push ok">✓ Push is on for this device.</div>;
+  if (state === "granted") {
+    if (tokenOk === false) return (
+      <div className="sb-push">
+        Notifications are allowed, but this device isn't registered for delivery yet.
+        <button className="sb-btn ghost" style={{marginTop:8}} disabled={busy} onClick={enable}>
+          {busy ? "Registering…" : "Re-register this device"}</button>
+      </div>
+    );
+    return <div className="sb-push ok">✓ Push is on for this device.</div>;
+  }
   if (state === "ios-needs-install") return (
     <div className="sb-push">
       <b>Turn on push on your iPhone / iPad</b>
@@ -468,29 +617,46 @@ function EmailUsage() {
 }
 
 /* Admin-only: verify the Resend email pipeline by sending a test message. */
+// Translate a callable error into a safe, specific message. The backend already
+// returns clean, user-facing messages for known cases; only a truly unknown
+// server fault ("internal", or a network/blocked call) falls back to generic.
+function friendlyEmailError(e) {
+  const code = (e?.code || "").replace(/^functions\//, "");
+  const msg = e?.message || "";
+  if (code && code !== "internal" && msg && msg.toLowerCase() !== "internal") return msg;
+  return "We couldn't send the test email. The error has been logged. Please try again or check the function logs.";
+}
 function AdminEmailTest() {
   const [to, setTo] = useState("");
-  const [status, setStatus] = useState(null);
+  const [err, setErr] = useState("");           // inline field-validation error
+  const [result, setResult] = useState(null);   // { ok, msg }
   const [busy, setBusy] = useState(false);
   const send = async () => {
-    if (!isValidEmail(to)) { setStatus({ ok:false, msg:"Enter a valid recipient email address before sending the test." }); return; }
-    setBusy(true); setStatus(null);
+    if (busy) return;                            // prevent duplicate submissions
+    const addr = to.trim();
+    if (!isValidEmail(addr)) { setErr("Enter a valid email address, e.g. name@example.com."); setResult(null); return; }
+    setErr(""); setResult(null); setBusy(true);
     try {
-      const res = await httpsCallable(functions, "sendTestEmail")({ to: to.trim() });
-      setStatus({ ok: true, msg: `Sent ✓${res.data?.messageId ? ` (id ${res.data.messageId})` : ""}` });
+      const res = await httpsCallable(functions, "sendTestEmail")({ to: addr });
+      setResult({ ok: true, msg: `Test email sent to ${res.data?.to || addr}.` });
     } catch (e) {
-      setStatus({ ok: false, msg: e?.message || "Send failed" });
+      // Keep the entered address so the admin can retry; never auto-close the panel.
+      setResult({ ok: false, msg: friendlyEmailError(e) });
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
   return (
     <>
       <div className="sb-mlabel">Admin · test email</div>
       <div className="sb-field">
-        <input type="email" value={to} onChange={(e)=>setTo(e.target.value)} placeholder="recipient@example.com" />
+        <input type="email" inputMode="email" value={to} aria-invalid={!!err}
+          onChange={(e)=>{ setTo(e.target.value); if(err) setErr(""); }}
+          onKeyDown={(e)=>{ if(e.key==="Enter") send(); }} placeholder="recipient@example.com" />
+        {err && <div className="sb-fielderr" role="alert">{err}</div>}
       </div>
       <button className="sb-btn ghost" disabled={busy || !to.trim()} onClick={send}>{busy ? "Sending…" : "Send test email"}</button>
-      {status && <div className="sb-sub" style={{marginTop:8, color: status.ok ? "var(--green)" : "var(--red)"}}>{status.msg}</div>}
+      {result && <div className="sb-sub" role="status" style={{marginTop:8, color: result.ok ? "var(--success)" : "var(--danger)"}}>{result.msg}</div>}
     </>
   );
 }
@@ -508,6 +674,7 @@ function NotifSettings({ me, isAdmin, onSave, onClose }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
+    <Portal>
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Notification settings</b>
@@ -530,6 +697,7 @@ function NotifSettings({ me, isAdmin, onSave, onClose }) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -553,17 +721,34 @@ export class ErrorBoundary extends React.Component {
     return (
       <div className="sb-pending">
         <div className="box">
-          <div className="ic"><ExclamationTriangleIcon className="hi hi-empty" aria-hidden="true"/></div>
-          <h1>Something went wrong</h1>
-          <p>The error has been logged. If you have a second, tell us what you were
-             doing and we'll look into it.</p>
-          <textarea rows={3} value={this.state.note} placeholder="What were you doing? (optional)"
-            onChange={(e)=>this.setState({ note: e.target.value })}
-            style={{width:"100%",borderRadius:12,border:"none",padding:"11px 12px",fontSize:16,marginBottom:12}} />
-          {this.state.sent
-            ? <p style={{marginTop:0}}>Thanks. Your report was sent.</p>
-            : <button onClick={async ()=>{ await reportIssue({ note: this.state.note, action: "crash report" }); this.setState({ sent: true }); }}>Send report</button>}
-          <button style={{marginTop:10}} onClick={()=>location.reload()}>Reload app</button>
+          <div className="sb-lwordmark"><span className="ifc">IFC</span>Creatives Board</div>
+          <div className="sb-statuscard">
+            <div className="ic warn"><ExclamationTriangleIcon className="hi" aria-hidden="true"/></div>
+            <h1>Something went wrong</h1>
+            <p>We ran into an unexpected problem. The error has already been logged.
+               If you have a moment, tell us what happened and we'll investigate.</p>
+            {this.state.sent ? (
+              <>
+                <div className="sb-statusnote" role="status">Thanks — your report was sent.</div>
+                <div className="sb-btnrow">
+                  <button className="sb-btn" onClick={()=>location.reload()}>Reload app</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="sb-field">
+                  <label htmlFor="sb-crash-note">What happened? (optional)</label>
+                  <textarea id="sb-crash-note" rows={3} value={this.state.note}
+                    placeholder="e.g. I tapped Approve on a task and the screen went blank."
+                    onChange={(e)=>this.setState({ note: e.target.value })} />
+                </div>
+                <div className="sb-btnrow">
+                  <button className="sb-btn ghost" onClick={()=>location.reload()}>Reload app</button>
+                  <button className="sb-btn" onClick={async ()=>{ await reportIssue({ note: this.state.note, action: "crash report" }); this.setState({ sent: true }); }}>Send report</button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -645,26 +830,50 @@ function useProfile(uid, retryKey) {
 // the subscription so we don't query before the user is allowed (Firestore
 // rules would reject it). A listener error leaves the last data in place and is
 // logged — it never throws or crashes the dashboard.
+// Returns [docs, loaded]. `loaded` distinguishes "the first snapshot has
+// arrived" (whether it had rows or not) from "still waiting" — so callers can
+// tell an empty result apart from an unloaded one and never render a "nothing
+// here" state during hydration. Docs are preserved across a re-subscribe
+// (path/canRead change) so switching filters doesn't flash empty.
 function useCollection(path, canRead) {
-  const [docs, setDocs] = useState([]);
+  const [state, setState] = useState({ docs: [], loaded: false });
   useEffect(() => {
-    if (!canRead) { setDocs([]); return; }
+    if (!canRead) { setState({ docs: [], loaded: true }); return; }
+    setState((s) => ({ docs: s.docs, loaded: false }));
     return onSnapshot(collection(db, path),
-      (snap) => setDocs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      (err) => logIssue({ kind: "error", action: `collection read failed: ${path}`,
-        message: err.message, code: err.code }));
+      (snap) => setState({ docs: snap.docs.map((d) => ({ id: d.id, ...d.data() })), loaded: true }),
+      (err) => { setState((s) => ({ docs: s.docs, loaded: true }));   // surface (log) the error; don't hang on loading
+        logIssue({ kind: "error", action: `collection read failed: ${path}`,
+          message: err.message, code: err.code }); });
   }, [path, canRead]);
-  return docs;
+  return [state.docs, state.loaded];
 }
 
-// Lock body scroll while an overlay is open, so a sheet/drawer is the only
-// scroll region on mobile (no competing background scroll). Ref-counted.
-let _lockCount = 0;
-function useLockBody() {
+
+/* Unsaved-changes guard for an editable modal/sheet.
+   - Installs a browser `beforeunload` warning ONLY while `isDirty` (never when
+     clean) — the one native confirmation we allow, for refresh / tab-close.
+   - Returns `requestClose`: use it for every in-app close affordance (scrim, ✕,
+     Escape, Cancel). When dirty it opens a branded "Leave without saving?"
+     confirm instead of closing; when clean it closes immediately.
+   - Render {leaveGuard} once inside the modal to mount that confirm dialog. */
+function useUnsavedGuard(isDirty, onClose) {
+  const [leaving, setLeaving] = useState(false);
   useEffect(() => {
-    _lockCount++; document.body.style.overflow = "hidden";
-    return () => { _lockCount = Math.max(0, _lockCount - 1); if (_lockCount === 0) document.body.style.overflow = ""; };
-  }, []);
+    if (!isDirty) return;                       // no listener while the form is clean
+    const h = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [isDirty]);
+  const requestClose = () => { if (isDirty) setLeaving(true); else onClose(); };
+  const leaveGuard = leaving ? (
+    <ConfirmDialog tone="warning" icon="warning"
+      title="Leave without saving?"
+      body="You have unsaved changes. If you leave now, your changes will be lost."
+      cancelLabel="Keep editing" confirmLabel="Leave without saving"
+      onConfirm={onClose} onClose={() => setLeaving(false)} />
+  ) : null;
+  return { requestClose, leaveGuard };
 }
 
 // Live subscription to a single document. undefined=loading, null=absent, object=data.
@@ -700,6 +909,16 @@ export default function App() {
   const [slow, setSlow] = useState(false);             // profile load is taking too long
   const creating = useRef(false);
   const { profile, error: profileError } = useProfile(user?.uid, retryKey);
+
+  // Warm the Firestore cache in PARALLEL with the profile read: the moment we're
+  // authenticated, start fetching the collections Board needs so their data is
+  // already local by the time Board mounts — instead of profile → then → data
+  // as two sequential round-trips. Best-effort (errors ignored: e.g. a still-
+  // pending user can't read eventSeries yet).
+  useEffect(() => {
+    if (!user?.uid) return;
+    for (const c of ["tasks", "users", "eventSeries"]) getDocs(collection(db, c)).catch(() => {});
+  }, [user?.uid]);
 
   // First sign-in: create the pending profile doc if it doesn't exist yet.
   // Properly awaited + caught so an offline failure can never become an
@@ -780,14 +999,17 @@ function ConnError({ online, onRetry, onSignOut }) {
   return (
     <div className="sb-pending">
       <div className="box">
-        <div className="ic">📡</div>
-        <h1>Can't connect</h1>
-        <p>Unable to connect right now. Please check your internet connection and try again.</p>
-        <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-          <button onClick={onRetry}>Try again</button>
-          <button onClick={onSignOut} style={{ background: "rgba(255,255,255,.1)" }}>Sign out</button>
+        <div className="sb-lwordmark"><span className="ifc">IFC</span>Creatives Board</div>
+        <div className="sb-statuscard">
+          <div className="ic" aria-hidden="true">📡</div>
+          <h1>Can't connect</h1>
+          <p>Unable to connect right now. Please check your internet connection and try again.</p>
+          {!online && <p>Your device is currently offline.</p>}
+          <div className="sb-btnrow">
+            <button className="sb-btn ghost" onClick={onSignOut}>Sign out</button>
+            <button className="sb-btn" onClick={onRetry}>Try again</button>
+          </div>
         </div>
-        {!online && <p style={{ fontSize: 12.5, marginTop: 14 }}>Your device is currently offline.</p>}
       </div>
     </div>
   );
@@ -862,8 +1084,7 @@ function Login({ online = true }) {
     <div className="sb-login">
       <div className="sb-loginbox">
         <div className="sb-lbrand">
-          <div className="logo">✦</div>
-          <h1>IFC Creatives Board</h1>
+          <div className="sb-lwordmark"><span className="ifc">IFC</span>Creatives Board</div>
           <div className="sb-tagline">Plan. Create. Review. Publish.</div>
           <p>The home of the IFC Creative Team.</p>
         </div>
@@ -882,13 +1103,13 @@ function Login({ online = true }) {
             <div className="sb-field"><label>Your name</label>
               <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="e.g. John Smith" /></div>
           )}
-          <div className="sb-field"><label>Email</label>
+          <div className="sb-field"><label>Email<span className="sb-req" aria-hidden="true">*</span></label>
             <input type="email" inputMode="email" autoComplete="username" value={email}
               aria-invalid={!!emailErr} aria-describedby={emailErr?"login-email-err":undefined}
               onChange={(e)=>{ setEmail(e.target.value); if(emailErr) setEmailErr(""); }} placeholder="you@email.com" />
             {emailErr && <div className="sb-fielderr" id="login-email-err" role="alert">{emailErr}</div>}</div>
           <div className="sb-field">
-            <label>Password{mode!=="register" && <button type="button" className="sb-fieldlink" onClick={doReset}>Forgot?</button>}</label>
+            <label>Password<span className="sb-req" aria-hidden="true">*</span>{mode!=="register" && <button type="button" className="sb-fieldlink" onClick={doReset}>Forgot?</button>}</label>
             <div className="sb-pwwrap">
               <input type={showPw?"text":"password"} autoComplete={mode==="register"?"new-password":"current-password"}
                 value={pw} onChange={(e)=>setPw(e.target.value)} placeholder="••••••••"
@@ -932,14 +1153,68 @@ function Pending({ profile }) {
   return (
     <div className="sb-pending">
       <div className="box">
-        <div className="ic">🪪</div>
-        <h1>You're on the list, {profile.name.split(" ")[0]}</h1>
-        <p>Your account is waiting for an admin to approve it. Once you're in, you'll see
-           every reel and poster the team is working on. Hang tight, this usually doesn't take long.</p>
-        <button onClick={()=>signOut(auth)}>Sign out</button>
+        <div className="sb-lwordmark"><span className="ifc">IFC</span>Creatives Board</div>
+        <div className="sb-statuscard">
+          <div className="ic" aria-hidden="true">🪪</div>
+          <h1>You're on the list, {profile.name.split(" ")[0]}</h1>
+          <p>Your account is waiting for an admin to approve it. Once you're in, you'll see
+             every reel and poster the team is working on. Hang tight — this usually doesn't take long.</p>
+          <div className="sb-btnrow">
+            <button className="sb-btn ghost" onClick={()=>signOut(auth)}>Sign out</button>
+          </div>
+        </div>
       </div>
     </div>
   );
+}
+
+/* A light page skeleton shown briefly during tab transitions — shimmer rows
+   instead of a blank flash. */
+function PageSkeleton() {
+  return (
+    <div className="sb-page sb-pageskel" aria-hidden="true">
+      <span className="sb-skel" style={{width:"38%",height:26,display:"block"}}/>
+      <span className="sb-skel" style={{width:"58%",height:14,display:"block",marginTop:12}}/>
+      <div className="sb-skelgrid">
+        {[0,1,2,3].map(i=><span className="sb-skel" key={i} style={{height:74}}/>)}
+      </div>
+      {[0,1,2].map(i=><span className="sb-skel" key={i} style={{height:56,display:"block",marginTop:10}}/>)}
+    </div>
+  );
+}
+
+/* Drag-to-dismiss for bottom sheets: the sheet follows the finger downward from
+   a grab handle, then either flings closed (enough distance or downward
+   velocity) or springs back. Pointer/touch based; scrolling is unaffected
+   because only the handle starts a drag. */
+function useSheetDrag(onClose) {
+  const [y, setY] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const st = useRef(null);
+  const start = (e) => {
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    st.current = { y0:cy, last:cy, t:Date.now(), lt:Date.now() };
+    setDragging(true);
+  };
+  const move = (e) => {
+    if (!st.current) return;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    st.current.last = cy; st.current.lt = Date.now();
+    setY(Math.max(0, cy - st.current.y0));
+  };
+  const end = () => {
+    if (!st.current) return;
+    const dy = Math.max(0, st.current.last - st.current.y0);
+    const v = dy / Math.max(1, st.current.lt - st.current.t);     // px per ms
+    st.current = null; setDragging(false);
+    if (dy > 110 || v > 0.55) onClose(); else setY(0);
+  };
+  return {
+    handleProps: { onTouchStart:start, onTouchMove:move, onTouchEnd:end,
+      onPointerDown:start, onPointerMove:(e)=>{ if(st.current) move(e); }, onPointerUp:end },
+    sheetStyle: { transform:`translateY(${y}px)`,
+      transition: dragging ? "none" : "transform .28s cubic-bezier(.32,1.32,.5,1)" },
+  };
 }
 
 /* ===================================================================
@@ -948,15 +1223,38 @@ function Pending({ profile }) {
 function Board({ profile, isAdmin }) {
   // `users` = the active team (used for assignment, capacity, owner pickers).
   // `allUsers` = everyone incl. pending — admins only, for the approval queue.
-  const users = useCollection("users", true).filter(u => u.status === "approved" || u.role === "admin");
-  const allUsers = useCollection("users", isAdmin);
-  const tasks = useCollection("tasks", true);
-  const issues = useCollection("issues", isAdmin); // admin-only (rules)
+  const [usersAll] = useCollection("users", true);
+  const users = usersAll.filter(u => u.status === "approved" || u.role === "admin");
+  const [allUsers] = useCollection("users", isAdmin);
+  const [tasksRaw, tasksLoaded] = useCollection("tasks", true);
+  // Titles always DISPLAY in Title Case, whatever the user typed. Formatting
+  // here at the source means every downstream surface (cards, modal, search,
+  // activity, admin, reminder summaries) inherits it. We keep the untouched
+  // original on `_rawTitle` so the editor edits/saves the real value — Firestore
+  // is never mutated by presentation formatting (spec #3).
+  const tasks = useMemo(() => tasksRaw.map(t =>
+    t.title ? { ...t, title: formatContentTitle(t.title), _rawTitle: t.title } : t), [tasksRaw]);
+  const [issues] = useCollection("issues", isAdmin); // admin-only (rules)
   const notifSettings = useDoc("settings/notifications", true); // reminder defaults
-  const eventSeries = useCollection("eventSeries", true); // admin-managed recurring events
+  const [eventSeries] = useCollection("eventSeries", true); // admin-managed recurring events
 
   const [tab, setTab] = useState("home");
+  // Inter-page transition: a brief skeleton on tab change so switching screens
+  // feels intentional (cross-fade in), never a blank flash. Data's already in
+  // memory, so this is purely a ~280ms polish beat — not real latency.
+  const [navLoading, setNavLoading] = useState(false);
+  const firstNav = useRef(true);
+  useEffect(() => {
+    if (firstNav.current) { firstNav.current = false; return; }   // no skeleton on very first mount
+    setNavLoading(true);
+    const t = setTimeout(() => setNavLoading(false), 280);
+    return () => clearTimeout(t);
+  }, [tab]);
   const [openId, setOpenId] = useState(null);
+  // Admin sub-section request (deep-link / notification → Admin → People etc.).
+  // Carries a nonce so repeat requests re-fire even when Admin is already open.
+  const [adminSecReq, setAdminSecReq] = useState(null);
+  const goPeople = () => { setTab("admin"); setAdminSecReq({ sec: "people", n: Date.now() }); };
   const [editTask, setEditTask] = useState(null);
   const [editPrefill, setEditPrefill] = useState(null);  // defaults for a new task (e.g. from an event)
   const newForEvent = (prefill) => { setEditPrefill(prefill); setEditTask("new"); };
@@ -974,13 +1272,16 @@ function Board({ profile, isAdmin }) {
   // Stamp the active screen onto any error/report logged from here.
   useEffect(() => setView(tab), [tab]);
 
-  // Deep link from a push notification (/?task=<id>) → open that task once.
+  // Deep link from a push notification (/?task=<id>, /?tab=admin&sec=people) →
+  // open that destination once.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const t = params.get("task");
     const tb = params.get("tab");
+    const sec = params.get("sec");
     if (t) setOpenId(t);
     if (tb && ["home","myday","board","mine","team","admin"].includes(tb)) setTab(tb);
+    if (tb === "admin" && sec) setAdminSecReq({ sec, n: Date.now() });
     if (t || tb) window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
@@ -1024,6 +1325,41 @@ function Board({ profile, isAdmin }) {
     return () => unsub();
   }, []);
 
+  // Global action-feedback banner. Shows what's happening in the background:
+  //   kind "pending" → persistent "Creating…/Saving…/Deleting…" (no auto-dismiss)
+  //   kind "ok"/"err" → result, auto-dismisses; may carry an action (e.g. "View").
+  // Fades in on show and out before unmounting, so re-triggers don't snap.
+  const [banner, setBanner] = useState(null); // { msg, kind, leaving, action }
+  const bannerT = useRef(null);
+  const bannerLeaveT = useRef(null);
+  const showPending = (msg) => {
+    clearTimeout(bannerT.current); clearTimeout(bannerLeaveT.current);
+    setBanner({ msg, kind: "pending", leaving: false, action: null });
+  };
+  const flashBanner = (msg, kind = "ok", action = null) => {
+    clearTimeout(bannerT.current);
+    clearTimeout(bannerLeaveT.current);
+    setBanner({ msg, kind, leaving: false, action });
+    bannerT.current = setTimeout(() => {
+      setBanner(b => (b ? { ...b, leaving: true } : null));
+      bannerLeaveT.current = setTimeout(() => setBanner(null), 220);
+    }, action ? 6000 : 4300);   // linger longer when there's something to click
+  };
+
+  // Keep this device's FCM token alive. Tokens rotate/expire and stale ones get
+  // pruned server-side; re-registering silently on each load (only when the user
+  // already granted permission) prevents "push stops arriving even though the UI
+  // says it's on." No prompt — enabling push is still an explicit opt-in.
+  useEffect(() => { if (me?.id) refreshPushToken(me.id); }, [me?.id]);
+
+  // Apply the appearance preference saved on the profile (so it follows the user
+  // across devices). localStorage already handled the pre-auth / flash-free boot;
+  // this only re-applies when Firestore disagrees. Never writes back here.
+  useEffect(() => {
+    const p = me?.appearance;
+    if ((p === "system" || p === "light" || p === "dark") && p !== getThemePref()) setThemePref(p);
+  }, [me?.appearance]);
+
   // Navigation model (v1.1.2): outline icon at rest, solid when active.
   // Mobile bottom nav = the 4 main destinations + Profile (Team/Admin live in
   // the profile sheet); desktop sidebar shows Main + Management groups.
@@ -1040,45 +1376,84 @@ function Board({ profile, isAdmin }) {
     ...(isAdmin ? [{ id:"admin", label:"Admin", badge: pendingCount, ico:()=>navIco(Cog6ToothIcon) }] : []),
   ];
 
+  // Desktop sidebar: one shared active indicator that glides between items.
+  // We measure the active button's position (robust to the Management group
+  // gap + the 900–1139px icon-collapse) and drive a CSS-transitioned pill —
+  // same "sliding indicator" language as the mobile bottom nav, no JS animation
+  // library. Runs before paint so there's no first-mount slide.
+  const navRef = useRef(null);
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const place = () => {
+      const active = nav.querySelector("button.on");
+      if (!active) { nav.style.setProperty("--ind-o", "0"); return; }
+      nav.style.setProperty("--ind-y", active.offsetTop + "px");
+      nav.style.setProperty("--ind-h", active.offsetHeight + "px");
+      nav.style.setProperty("--ind-o", "1");
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [tab, isAdmin, pendingCount]);
+
   /* ---- task writes ---- */
   const saveTask = async (t) => {
-    if (t.id) {
-      const { id, ...rest } = t;
-      await updateDoc(doc(db, "tasks", id), { ...rest, updatedAt: serverTimestamp() });
-    } else {
-      await addDoc(collection(db, "tasks"), {
-        ...t, comments: [], reactions: {}, activity: [activityEntry("created", me.name)],
-        createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-      });
+    const creating = !t.id;
+    showPending(creating ? "Creating content…" : "Saving changes…");
+    try {
+      let newId = t.id;
+      if (t.id) {
+        const { id, ...rest } = t;
+        await updateDoc(doc(db, "tasks", id), { ...rest, updatedAt: serverTimestamp() });
+      } else {
+        const ref = await addDoc(collection(db, "tasks"), {
+          ...t, comments: [], reactions: {}, activity: [activityEntry("created", me.name)],
+          createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+        });
+        newId = ref.id;
+      }
+      setEditTask(null);
+      if (creating) flashBanner("✓ Content created", "ok", { label: "View", onClick: () => setOpenId(newId) });
+      else flashBanner("✓ Changes saved", "ok");
+    } catch (e) {
+      flashBanner("Couldn't save — please try again.", "err");
+      throw e;   // let the editor keep the form open and reset its saving state
     }
-    setEditTask(null);
   };
-  const deleteTask = async (id) => { await deleteDoc(doc(db, "tasks", id)); };
+  // Wrap a mutation with consistent feedback: an optional "in progress" banner
+  // while it runs, then a success (or error) banner.
+  const withFeedback = async (p, okMsg, pendingMsg) => {
+    if (pendingMsg) showPending(pendingMsg);
+    try { await p; flashBanner(okMsg, "ok"); }
+    catch (e) { flashBanner("Something went wrong — please try again.", "err"); throw e; }
+  };
 
-  
+  const deleteTask = (id) => withFeedback(deleteDoc(doc(db, "tasks", id)), "✓ Content deleted", "Deleting content…");
+
   // Archive = move to the Posted/completed status (no separate flag in the model).
-  const archiveTask = async (task) =>
+  const archiveTask = (task) => withFeedback(
     updateDoc(doc(db, "tasks", task.id), {
       status: "Posted", archivedAt: serverTimestamp(),
       activity: [...(task.activity||[]), activityEntry("posted", me.name, "Posted")],
       updatedAt: serverTimestamp(),
-    });
+    }), "✓ Marked as posted", "Updating…");
 
   // Duplicate = fresh copy at the start of the workflow, no produced artifacts.
-  const duplicateTask = async (task) => {
-    const { id, comments, reactions, activity, createdAt, updatedAt,
+  const duplicateTask = (task) => {
+    const { id, _rawTitle, comments, reactions, activity, createdAt, updatedAt,
             caption, postLink, links, blockedOn, ...rest } = task;
-    await addDoc(collection(db, "tasks"), {
-      ...rest, title: `Copy of ${task.title}`, status: "Planned",
+    return withFeedback(addDoc(collection(db, "tasks"), {
+      ...rest, title: `Copy of ${_rawTitle ?? task.title}`, status: "Planned",
       caption: "", postLink: "", links: {}, blockedOn: "",
       comments: [], reactions: {}, activity: [activityEntry("created", me.name)],
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-    });
+    }), "✓ Content duplicated", "Duplicating content…");
   };
-  const importTasks = async (newTasks) =>
+  const importTasks = (newTasks) => withFeedback(
     Promise.all(newTasks.map((t) => addDoc(collection(db, "tasks"), {
       ...t, comments: [], reactions: {}, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-    })));
+    }))), `✓ Imported ${newTasks.length} item${newTasks.length!==1?"s":""}`, `Importing ${newTasks.length} item${newTasks.length!==1?"s":""}…`);
 
   // Map a destination status → the activity-timeline event type.
   const eventType = (status) => ({
@@ -1086,40 +1461,38 @@ function Board({ profile, isAdmin }) {
     "Changes Requested":"changes_requested", "Ready to Post":"ready", "Posted":"posted",
   }[status] || "status");
   // Admin manual status override (the status segmented control).
-  const setStatus = async (task, status) =>
+  const setStatus = (task, status) => withFeedback(
     updateDoc(doc(db, "tasks", task.id), {
       status, ...(status === "Posted" ? { archivedAt: serverTimestamp() } : {}),
       activity: [...(task.activity||[]), activityEntry(eventType(status), me.name, status)],
       updatedAt: serverTimestamp(),
-    });
+    }), `✓ Moved to ${status}`);
   // The guided workflow action (Start work / Submit for QA / Mark ready / Posted).
   // `extra` carries caption / postLink when the step requires them.
-  const runWorkflow = async (task, action, extra = {}) =>
+  const runWorkflow = (task, action, extra = {}) => withFeedback(
     updateDoc(doc(db, "tasks", task.id), {
       status: action.to, ...extra,
       ...(action.to === "Posted" ? { archivedAt: serverTimestamp() } : {}),
       activity: [...(task.activity||[]), activityEntry(action.kind, me.name, action.to)],
       updatedAt: serverTimestamp(),
-    });
+    }), `✓ Moved to ${action.to}`);
   // QA "request changes": send back as the first-class "Changes Requested" status.
-  const qaRequestChanges = async (task, note) =>
+  const qaRequestChanges = (task, note) => withFeedback(
     updateDoc(doc(db, "tasks", task.id), {
       status: "Changes Requested",
       activity: [...(task.activity||[]), activityEntry("changes_requested", me.name, note)],
       updatedAt: serverTimestamp(),
-    });
+    }), "✓ Changes requested");
   // Collaborative fields any approved member can set from a task's detail view.
   const setBlocked = async (id, blockedOn) =>
     updateDoc(doc(db, "tasks", id), { blockedOn, updatedAt: serverTimestamp() });
   const setLinks = async (task, links) =>
     updateDoc(doc(db, "tasks", task.id), { links, updatedAt: serverTimestamp() });
-  const setCaption = async (task, caption) =>
-    updateDoc(doc(db, "tasks", task.id), { caption, updatedAt: serverTimestamp() });
-  const addComment = async (task, txt) =>
+  const addComment = (task, txt) => withFeedback(
     updateDoc(doc(db, "tasks", task.id), {
       comments: [...(task.comments||[]), { who: me.name, txt, tm: Date.now() }],
       updatedAt: serverTimestamp(),
-    });
+    }), "✓ Note posted");
   const toggleReact = async (task, emo) => {
     const r = { ...(task.reactions||{}) };
     const arr = new Set(r[emo] || []);
@@ -1129,23 +1502,25 @@ function Board({ profile, isAdmin }) {
   };
   const autoAll = async () => {
     const targets = tasks.filter(t => !(t.support && t.support.length) && t.status !== "Posted");
-    await Promise.all(targets.map(t =>
-      updateDoc(doc(db, "tasks", t.id), { support: autoAssign(t, users), updatedAt: serverTimestamp() })));
+    await withFeedback(Promise.all(targets.map(t =>
+      updateDoc(doc(db, "tasks", t.id), { support: autoAssign(t, users), updatedAt: serverTimestamp() }))),
+      `✓ Auto-assigned crew to ${targets.length} task${targets.length!==1?"s":""}`, "Auto-assigning crew…");
   };
-  const autoOne = async (task) =>
-    updateDoc(doc(db, "tasks", task.id), { support: autoAssign(task, users), updatedAt: serverTimestamp() });
+  const autoOne = (task) => withFeedback(
+    updateDoc(doc(db, "tasks", task.id), { support: autoAssign(task, users), updatedAt: serverTimestamp() }),
+    "✓ Crew auto-assigned", "Assigning crew…");
 
   /* ---- user writes ---- */
   const saveUser = async (u) => {
     const { id, ...rest } = u;
-    await updateDoc(doc(db, "users", id), rest);
+    await withFeedback(updateDoc(doc(db, "users", id), rest), "✓ Team member updated", "Saving…");
     setEditUser(null);
   };
   const approveUser = async (u) => {
-    await updateDoc(doc(db, "users", u.id), { ...u, status: "approved" });
+    await withFeedback(updateDoc(doc(db, "users", u.id), { ...u, status: "approved" }), "✓ Member approved", "Approving…");
     setEditUser(null);
   };
-  const removeUser = async (id) => { await deleteDoc(doc(db, "users", id)); };
+  const removeUser = (id) => withFeedback(deleteDoc(doc(db, "users", id)), "✓ Removed from team", "Removing…");
   // Safer team removal: detach the person from their tasks first (tasks stay),
   // either reassigning owned work to someone else or marking it for reassignment.
   const removeUserWithTasks = async (user, { mode, target } = {}) => {
@@ -1162,36 +1537,49 @@ function Board({ profile, isAdmin }) {
       if (isCrew) patch.support = t.support.filter(s => s.name !== user.name);
       updates.push(updateDoc(doc(db, "tasks", t.id), patch));
     }
-    await Promise.all(updates);
-    await deleteDoc(doc(db, "users", user.id));
+    await withFeedback((async () => {
+      await Promise.all(updates);
+      await deleteDoc(doc(db, "users", user.id));
+    })(), "✓ Removed from team", "Removing from team…");
   };
 
   /* ---- bulk-assign imported "Pending" tasks to a newly-matched user ---- */
   const assignSuggested = async (user) => {
     const matches = pendingMatches(user, tasks);
-    await Promise.all(matches.map((t) => {
+    if (!matches.length) return;
+    await withFeedback(Promise.all(matches.map((t) => {
       const u = applyAssignment(t, user);
       return updateDoc(doc(db, "tasks", t.id),
         { owner: u.owner, ownerSuggested: u.ownerSuggested || "", support: u.support, updatedAt: serverTimestamp() });
-    }));
+    })), `✓ Assigned ${matches.length} task${matches.length!==1?"s":""}`, "Assigning tasks…");
   };
 
   /* ---- issue log (admin triage) ---- */
-  const resolveIssue = async (id, status) =>
-    updateDoc(doc(db, "issues", id), { status });
+  const resolveIssue = (id, status) =>
+    withFeedback(updateDoc(doc(db, "issues", id), { status }), status==="resolved"?"✓ Issue resolved":"✓ Issue reopened");
 
   const openTask = tasks.find(t => t.id === openId);
 
+  // Admin quick-actions available on every task card + the detail sheet.
+  const taskAdmin = useMemo(() => isAdmin ? {
+    onEdit: (t) => { setOpenId(null); setEditTask(t); },
+    onDuplicate: (t) => duplicateTask(t),
+    onArchive: (t) => archiveTask(t),
+    onDelete: async (t) => { if (openId === t.id) setOpenId(null); await deleteTask(t.id); },
+  } : null, [isAdmin, openId, me]);
+
   return (
+    <TaskAdminContext.Provider value={taskAdmin}>
     <div className="sb-root">
       <div className="sb-shell">
         <aside className="sb-side">
-          <div className="sb-sbrand"><span className="sb-spark">✦</span>
+          <div className="sb-sbrand">
             <span className="sb-brandtext"><span className="ifc">IFC</span>Creatives Board</span></div>
           <button className="sb-searchbtn" onClick={()=>setSearchOpen(true)} aria-label="Search">
             <span className="ico"><MagnifyingGlassIcon className="hi hi-sm" aria-hidden="true"/></span><span className="lbl">Search…</span><kbd className="sb-kbd">/</kbd>
           </button>
-          <nav className="sb-snav" aria-label="Main">
+          <nav className="sb-snav" aria-label="Main" ref={navRef}>
+            <span className="sb-snav-ind" aria-hidden="true" />
             {mainNav.map(n => (
               <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
                 <span className="ico">{n.ico(tab===n.id)}</span><span className="lbl">{n.label}</span>
@@ -1206,8 +1594,9 @@ function Board({ profile, isAdmin }) {
               </button>
             ))}
           </nav>
-          {isAdmin && <button className="sb-btn" style={{marginTop:14}} onClick={()=>setEditTask("new")} aria-label="New content">
-            <PlusIcon className="hi hi-sm" aria-hidden="true"/><span className="lbl">New content</span></button>}
+          {isAdmin && <button className="sb-newbtn" onClick={()=>setEditTask("new")} aria-label="New content">
+            <PlusIcon className="hi" aria-hidden="true"/><span className="lbl">New content</span></button>}
+          {/* Personal area: Notifications, then Profile, then the quiet Report link. */}
           <div className="sb-sfoot">
             <button className="sb-report" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
               <span className="sb-bellwrap"><BellIcon className="hi hi-sm" aria-hidden="true"/>
@@ -1226,7 +1615,7 @@ function Board({ profile, isAdmin }) {
 
         <div className="sb-main">
           <header className="sb-top">
-            <span className="brand"><span className="sb-spark" aria-hidden="true">✦</span><span className="brandwm">Creatives Board</span></span>
+            <span className="brand"><span className="brandwm"><span className="ifc-sm">IFC</span>Creatives Board</span></span>
             <div className="sb-topactions">
               <button className="sb-hbtn" onClick={()=>setSearchOpen(true)} aria-label="Search"><MagnifyingGlassIcon className="hi" aria-hidden="true"/></button>
               <button className="sb-hbtn sb-bellbtn" onClick={()=>setNotifOpen(true)}
@@ -1239,19 +1628,23 @@ function Board({ profile, isAdmin }) {
 
           <div className="sb-content">
             <BetaBanner onReport={()=>setShowReport(true)} />
-            {tab==="home"  && <Home tasks={tasks} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
+            {navLoading && <PageSkeleton />}
+            <div className={navLoading ? "sb-pagehide" : "sb-pageshow"}>
+            {tab==="home"  && <Home tasks={tasks} tasksLoaded={tasksLoaded} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
             {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
             {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} />}
             {tab==="mine"  && <Mine tasks={tasks} me={me} openTask={setOpenId} />}
             {tab==="team"  && <Team tasks={tasks} users={users} />}
             {tab==="admin" && isAdmin && (
               <Admin users={allUsers} tasks={tasks} teamUsers={users} issues={issues} eventSeries={eventSeries}
+                secReq={adminSecReq}
                 onEditUser={setEditUser} onEditTask={setEditTask}
                 onDeleteUser={removeUser} onRemoveUser={removeUserWithTasks} onDeleteTask={deleteTask}
                 onArchiveTask={archiveTask} onDuplicateTask={duplicateTask} onOpenTask={setOpenId}
                 onAutoAll={autoAll} onAutoOne={autoOne} onImport={importTasks} onResolveIssue={resolveIssue}
                 onAssignSuggested={assignSuggested} onNewForEvent={newForEvent} />
             )}
+            </div>
           </div>
 
           <nav className="sb-nav" aria-label="Main" style={{ "--nav-i": ["home","myday","board","mine"].indexOf(tab) >= 0 ? ["home","myday","board","mine"].indexOf(tab) : 4 }}>
@@ -1285,10 +1678,12 @@ function Board({ profile, isAdmin }) {
       )}
 
       {notifOpen && (
-        <NotifCenter notif={notif}
+        <NotifCenter notif={notif} isAdmin={isAdmin}
           onClose={()=>setNotifOpen(false)}
           onOpenTask={(id)=>{ setNotifOpen(false); setOpenId(id); }}
           onViewEvent={(occ)=>{ setNotifOpen(false); viewEvent(occ); }}
+          onGoPeople={()=>{ setNotifOpen(false); goPeople(); }}
+          onGoTab={(t)=>{ setNotifOpen(false); setTab(t); }}
           onSettings={()=>{ setNotifOpen(false); setNotifSettingsOpen(true); }} />
       )}
 
@@ -1301,6 +1696,20 @@ function Board({ profile, isAdmin }) {
 
       {toast && (
         <button className="sb-toast" onClick={()=>{ setToast(null); setNotifOpen(true); }}><BellIcon className="hi hi-sm" aria-hidden="true"/> {toast}</button>
+      )}
+
+      {banner && (
+        <div className={"sb-savebanner "+banner.kind+(banner.leaving?" leaving":"")} role="status" aria-live="polite">
+          {banner.kind==="pending"
+            ? <span className="sb-banner-spin" aria-hidden="true"/>
+            : banner.kind==="err"
+            ? <ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/>
+            : <CheckCircleIcon className="hi hi-sm" aria-hidden="true"/>}
+          <span className="sb-banner-msg">{banner.msg}</span>
+          {banner.action && <button className="sb-banner-action"
+            onClick={()=>{ const a = banner.action; setBanner(null); a.onClick(); }}>{banner.action.label}</button>}
+          {banner.kind!=="pending" && <button className="sb-x" onClick={()=>setBanner(null)} aria-label="Dismiss"><XMarkIcon className="hi" aria-hidden="true"/></button>}
+        </div>
       )}
 
       {searchOpen && (
@@ -1318,18 +1727,21 @@ function Board({ profile, isAdmin }) {
           onAction={(action, extra)=>runWorkflow(openTask, action, extra)}
           onApprove={()=>setStatus(openTask, "Approved")}
           onLinks={(links)=>setLinks(openTask, links)}
-          onCaption={(c)=>setCaption(openTask, c)}
           onRequestChanges={(note)=>qaRequestChanges(openTask, note)}
           onBlocked={(b)=>setBlocked(openTask.id, b)}
           onComment={(txt)=>addComment(openTask, txt)}
           onReact={(emo)=>toggleReact(openTask, emo)}
+          onSaved={()=>flashBanner("✓ Saved just now")}
+          onDuplicate={isAdmin ? async ()=>{ await duplicateTask(openTask); setOpenId(null); } : undefined}
+          onArchive={isAdmin ? async ()=>{ await archiveTask(openTask); setOpenId(null); } : undefined}
+          onDelete={isAdmin ? async ()=>{ await deleteTask(openTask.id); setOpenId(null); } : undefined}
           onEdit={()=>{ setOpenId(null); setEditTask(openTask); }} />
       )}
       {editTask && (
         <TaskEditor task={editTask==="new"?null:editTask} prefill={editPrefill} users={users}
           defaultReminders={notifSettings?.defaultReminders}
           onClose={()=>{ setEditTask(null); setEditPrefill(null); }}
-          onSave={(t)=>{ saveTask(t); setEditPrefill(null); }} onAuto={(t)=>autoAssign(t, users)} />
+          onSave={(t)=>{ setEditPrefill(null); return saveTask(t); }} onAuto={(t)=>autoAssign(t, users)} />
       )}
       {editUser && (
         <UserEditor user={editUser} onClose={()=>setEditUser(null)}
@@ -1337,6 +1749,7 @@ function Board({ profile, isAdmin }) {
       )}
       {showReport && <ReportIssue onClose={()=>setShowReport(false)} />}
     </div>
+    </TaskAdminContext.Provider>
   );
 }
 
@@ -1346,25 +1759,28 @@ function Board({ profile, isAdmin }) {
 function ReportIssue({ onClose }) {
   const [note, setNote] = useState("");
   const [state, setState] = useState("idle"); // idle | sending | sent | error
+  const isDirty = !!note.trim() && state !== "sent";   // typed text not yet sent
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
   const send = async () => {
     setState("sending");
     const ok = await reportIssue({ note: note.trim(), action: "manual report" });
     setState(ok ? "sent" : "error");
   };
   return (
-    <div className="sb-scrim" onClick={onClose}>
+    <Portal>
+    <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Report an issue</b>
-          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           {state==="sent" ? (
-            <div className="sb-empty"><div className="big">✓</div>
+            <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>
               Thanks. Your report was sent and we'll take a look.</div>
           ) : <>
             <div className="sb-sub" style={{marginTop:0}}>
               Tell us what went wrong or felt off. We'll automatically include your
               account, the screen you're on, and your device details.</div>
-            <div className="sb-field"><label>What happened?</label>
+            <div className="sb-field"><label>What happened?<span className="sb-req" aria-hidden="true">*</span></label>
               <textarea rows={5} value={note} onChange={e=>setNote(e.target.value)}
                 placeholder="e.g. I tried to mark a reel Approved and nothing happened." /></div>
             {state==="error" && <div className="sb-lerr">Couldn't send that. Please try again.</div>}
@@ -1374,12 +1790,31 @@ function ReportIssue({ onClose }) {
         </div>
       </div>
     </div>
+    {leaveGuard}
+    </Portal>
   );
 }
 
 /* ===================================================================
    HOME (personal)
    =================================================================== */
+/* Reusable KPI card — a large number over a label in a card that only "lights
+   up" (subtle tint + accent number) when the value is > 0, so the eye is drawn
+   to actionable metrics and calm zeros recede. The number animates on change.
+   Shared card component for dashboard KPI rows (My Day today; Home/Admin/Team
+   can adopt it for consistency). */
+function KpiCard({ n, label, tone, onClick }) {
+  const on = n > 0;
+  const cls = "sb-kpi tone-" + tone + (on ? " on" : "");
+  const inner = <>
+    <span className="sb-kpi-n"><AnimatedNumber value={n}/></span>
+    <span className="sb-kpi-l">{label}</span>
+  </>;
+  return onClick
+    ? <button className={cls} onClick={onClick} aria-label={`${n} ${label}`}>{inner}</button>
+    : <div className={cls}>{inner}</div>;
+}
+
 function MyDay({ tasks, me, openTask, goTab }) {
   // Personal slices, used for the compact "your numbers" strip.
   const mine = tasks.filter(t => t.owner===me.name || (t.support||[]).some(s=>s.name===me.name));
@@ -1406,20 +1841,14 @@ function MyDay({ tasks, me, openTask, goTab }) {
         ? `${attention.length} thing${attention.length!==1?"s":""} need${attention.length===1?"s":""} your attention.`
         : "You're all clear. Nothing needs you right now.");
 
-  const stats = [
-    { n:myOverdue.length, lbl:"Overdue",   dot:"dot-red" },
-    { n:myDueSoon.length, lbl:"Due soon",  dot:"dot-amber" },
-    { n:myMaking.length,  lbl:"Active",    dot:"dot-blue" },
-    { n:myReview.length,  lbl:"In review", dot:"dot-green" },
-  ];
-
-  // Whole-team pulse, shown smaller at the bottom.
-  const active = tasks.filter(t => t.status!=="Posted");
-  const pulse = [
-    { n:active.filter(t=>t.status==="In Review").length, lbl:"Needs approval", dot:"dot-amber" },
-    { n:tasks.filter(t=>t.status==="Approved").length,   lbl:"Ready to post",  dot:"dot-green" },
-    { n:active.filter(t=>{const d=daysTo(t.postDate);return d!==null&&d>=0&&d<=2;}).length, lbl:"Due soon", dot:"dot-blue" },
-    { n:active.filter(t=>{const d=daysTo(t.postDate);return d!==null&&d<0;}).length, lbl:"Overdue", dot:"dot-red" },
+  const myDueToday = myActive.filter(t => daysTo(t.postDate)===0);
+  // KPI cards, ordered by a person's morning mental model: what am I working on,
+  // what's due today, am I behind, what's waiting on someone else.
+  const kpis = [
+    { n:myMaking.length,   label:"Active",          tone:"blue"  },
+    { n:myDueToday.length, label:"Due today",       tone:"amber" },
+    { n:myOverdue.length,  label:"Overdue",         tone:"red"   },
+    { n:myReview.length,   label:"Awaiting review", tone:"green" },
   ];
 
   return (
@@ -1434,7 +1863,7 @@ function MyDay({ tasks, me, openTask, goTab }) {
         <QueueSection title="Returned for changes" items={qq.returned} me={me} openTask={openTask} />
         <QueueSection title="Recently approved" items={qq.approved} me={me} openTask={openTask} />
         {qq.awaiting.length===0 && qq.returned.length===0 &&
-          <div className="sb-empty"><div className="big">✓</div>No content is waiting on your review.</div>}
+          <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>No content is waiting on your review.</div>}
       </>}
 
       {/* Caption / upload dashboard — "what's approved and needs posting?" */}
@@ -1444,35 +1873,25 @@ function MyDay({ tasks, me, openTask, goTab }) {
         <QueueSection title="Ready to post" items={pq.ready} me={me} openTask={openTask} />
         <QueueSection title="Overdue posts" items={pq.overdue} me={me} openTask={openTask} />
         {pq.captions.length===0 && pq.ready.length===0 && pq.overdue.length===0 &&
-          <div className="sb-empty"><div className="big">✓</div>Nothing approved is waiting to be posted.</div>}
+          <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>Nothing approved is waiting to be posted.</div>}
       </>}
 
       {(me.qa || me.captions) && <div className="sb-div"><span>Your own tasks</span></div>}
 
-      {/* Personal numbers as one compact strip (was four chunky tiles). */}
-      <div className="sb-strip">
-        {stats.map(s => (
-          <div className="sb-stat" key={s.lbl}>
-            <span className={"num "+s.dot}>{s.n}</span><span className="lbl">{s.lbl}</span>
-          </div>
+      {/* Personal metrics as KPI cards (2×2 on phones, one row on desktop). */}
+      <div className="sb-kpigrid">
+        {kpis.map(k => (
+          <KpiCard key={k.label} n={k.n} label={k.label} tone={k.tone} onClick={()=>goTab("mine")} />
         ))}
       </div>
 
       <div className="sb-shead sb-shead-strong"><h2>Needs your attention</h2>
         <button className="link subtle" onClick={()=>goTab("mine")}>All my work →</button></div>
       {attention.length===0
-        ? <div className="sb-empty"><div className="big">✓</div>Nothing urgent. Enjoy the breather.</div>
+        ? <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>Nothing urgent. Enjoy the breather.</div>
         : <div className="sb-attnlist">{attention.map(t =>
             <AttentionItem key={t.id} t={t} onClick={()=>openTask(t.id)} />)}</div>}
 
-      <div className="sb-div"><span>Team pulse</span></div>
-      <div className="sb-strip" style={{marginTop:12}}>
-        {pulse.map(p => (
-          <button className="sb-stat" key={p.lbl} onClick={()=>goTab("board")}>
-            <span className={"num "+p.dot}>{p.n}</span><span className="lbl">{p.lbl}</span>
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
@@ -1508,6 +1927,7 @@ function AttentionItem({ t, onClick }) {
   return (
     <button className="sb-attn" onClick={onClick}>
       <span className={"sb-attn-bar "+reasonCls}/>
+      <span className="sb-av sb-attn-av" aria-hidden="true">{t.owner && t.owner!=="Pending" ? initials(t.owner) : "?"}</span>
       <span className="sb-attn-main">
         <span className="sb-attn-title">{label}</span>
         <span className="sb-attn-sub">
@@ -1544,6 +1964,7 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
   const nothing = query && !taskHits.length && !peopleHits.length && !eventHits.length;
 
   return (
+    <Portal>
     <div className="sb-modal" onMouseDown={onClose}>
       <div className="sb-search" onMouseDown={e=>e.stopPropagation()}>
         <div className="sb-searchbar">
@@ -1597,6 +2018,7 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -1749,7 +2171,7 @@ function Mine({ tasks, me, openTask }) {
           : `${total} thing${total!==1?"s":""} with your name on ${total!==1?"them":"it"}, most urgent first.`}
       </div>
 
-      {total===0 && <div className="sb-empty"><div className="big">✓</div>No assignments yet. Your creative work will appear here.</div>}
+      {total===0 && <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>No assignments yet. Your creative work will appear here.</div>}
 
       {sections.length>1 && <div className="sb-collapserow">
         <button className="sb-collapselink" onClick={()=>setAll(!allOpen)}>{allOpen?"Collapse all":"Expand all"}</button>
@@ -1780,7 +2202,6 @@ function Team({ tasks, users }) {
   const max = Math.max(1, ...Object.values(cap).map(c=>c.total));
   const rows = users.map(u=>({u,c:cap[u.name]||{shoot:0,edit:0,coordinate:0,design:0,shadow:0,total:0}}))
     .sort((a,b)=>b.c.total-a.c.total);
-  const avg = total/(users.length||1);
   const legend = [["seg-shoot","Shooting"],["seg-edit","Editing"],["seg-coordinate","Getting People"],["seg-design","Design"],["seg-shadow","Shadowing"]];
 
   return (
@@ -1793,19 +2214,21 @@ function Team({ tasks, users }) {
       <div className="sb-caplist">
         {rows.map(({u,c}) => {
           const pct = ((c.total/total)*100).toFixed(0);
-          const over = c.total>0 && c.total>=avg*1.8 && c.total>=3;
-          const idle = c.total===0;
+          const badge = workloadBadge(u, c.total);
+          const dept = userDepartments(u).join(" · ");
           return (
             <div className="sb-cap" key={u.id}>
-              <div className="top">
-                <span className="name">
-                  <span className="sb-av">{initials(u.name)}</span>{u.name}
-                  {over && <span className="sb-overload">High workload</span>}
-                  {idle && <span className="sb-idle">free</span>}
-                </span>
-                <span className="pct">{c.total} active task{c.total!==1?"s":""}<span className="share"> · {pct}% of team load</span></span>
+              <div className="sb-cap-hd">
+                <span className="sb-av sb-cap-av" aria-hidden="true">{initials(u.name)}</span>
+                <div className="sb-cap-id">
+                  <span className="sb-cap-name" title={u.name}>{u.name}</span>
+                  {dept && <span className="sb-cap-dept" title={dept}>{dept}</span>}
+                </div>
               </div>
-              <div className="sb-capbar">
+              <span key={badge.key} className={"sb-wlbadge tone-"+badge.tone}>
+                <i className="sb-wl-dot" aria-hidden="true"/>{badge.label}</span>
+              <div className="sb-cap-metrics">{c.total} active task{c.total!==1?"s":""} • {pct}% of team load</div>
+              <div className="sb-capbar" role="img" aria-label={`${c.total} active task${c.total!==1?"s":""}`}>
                 {["shoot","edit","coordinate","design","shadow"].map(r =>
                   c[r]>0 && <i key={r} className={"seg-"+r} style={{width:`${(c[r]/max)*100}%`}}/>)}
               </div>
@@ -1829,10 +2252,32 @@ function WinCard({ n, label, tone }) {
   );
 }
 
+/* A number that counts up to its value once on mount — a small, contained bit
+   of delight for the dashboard stats. Skips the animation entirely under
+   prefers-reduced-motion (shows the final value immediately). */
+function AnimatedNumber({ value }) {
+  const reduce = typeof window !== "undefined" &&
+    window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const [n, setN] = useState(reduce ? value : 0);
+  useEffect(() => {
+    if (reduce) { setN(value); return; }
+    let raf, start; const dur = 520;
+    const tick = (ts) => {
+      if (!start) start = ts;
+      const p = Math.min(1, (ts - start) / dur);
+      setN(Math.round(value * (1 - Math.pow(1 - p, 3))));   // easeOutCubic
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, reduce]);
+  return <>{n}</>;
+}
+
 /* The HOME landing page — a ministry / celebration dashboard, not a task list.
    It answers: what have we accomplished, what's coming up, what should I
    celebrate, what should I be aware of? Operational work lives in My Day. */
-function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, openTask, eventSeries }) {
+function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, openTask, eventSeries }) {
   const pw = personalWins(tasks, me);
   const m = dashboardMetrics(tasks, users);
   const thisM = monthlyWins(tasks, 0);
@@ -1846,6 +2291,45 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, op
   const doneCount = tasks.filter(t=>t.status==="Posted").length;
   const totalCount = tasks.length;
   const donePct = totalCount ? Math.round((doneCount/totalCount)*100) : 0;
+
+  // ---- Desktop dashboard widgets (hidden on mobile; the phone stays focused) ----
+  const myActive = tasks.filter(t => t.status!=="Posted" &&
+    (t.owner===me.name || (t.support||[]).some(s=>s.name===me.name)));
+  const dueSoonN = myActive.filter(t=>{ const d=daysTo(t.postDate); return d!==null && d>=0 && d<=2; }).length;
+  const overdueN = myActive.filter(t=>{ const d=daysTo(t.postDate); return d!==null && d<0; }).length;
+  const dueTodayN = myActive.filter(t=>daysTo(t.postDate)===0).length;
+  const inReviewN = myActive.filter(t=> t.owner===me.name && t.status==="In Review").length;
+  const waitingN = myActive.filter(t=> t.owner===me.name &&
+    ["In Review","Approved","Ready to Post"].includes(t.status)).length;
+  // Each stat carries a supporting sub-metric so the row answers "what next",
+  // not just "how many". Tints stay soft; icons give each card its own read.
+  const stats = [
+    { label:"My tasks",          n:myActive.length, tone:"violet", icon:ClipboardDocumentListIcon,
+      sub: dueTodayN>0 ? `${dueTodayN} due today` : "on track", go:()=>goTab("mine") },
+    { label:"Due soon",          n:dueSoonN,        tone:"amber",  icon:ClockIcon,
+      sub: overdueN>0 ? `${overdueN} overdue` : "next 2 days", go:()=>goTab("myday") },
+    { label:"Waiting on others", n:waitingN,        tone:"blue",   icon:UserGroupIcon,
+      sub: inReviewN>0 ? `${inReviewN} in review` : "with the crew", go:()=>goTab("mine") },
+    { label:"Upcoming events",   n:events.length,   tone:"green",  icon:CalendarDaysIcon,
+      sub: prepCount>0 ? `${prepCount} need prep` : "all planned", go:()=>goTab("board") },
+  ];
+  // My week — my dated responsibilities as an urgency-ordered agenda: Today /
+  // Tomorrow / This week / Later reads faster than calendar weekday names.
+  const weekBucket = (d) => d===0 ? "Today" : d===1 ? "Tomorrow" : d<=6 ? "This week" : "Later";
+  const WEEK_ORDER = ["Today","Tomorrow","This week","Later"];
+  const weekGroups = [];
+  myActive.filter(t=>t.postDate).map(t=>({t,d:daysTo(t.postDate)}))
+    .filter(x=>x.d!==null && x.d>=0 && x.d<=13).sort((a,b)=>a.d-b.d)
+    .forEach(x=>{ const label=weekBucket(x.d); let g=weekGroups.find(g=>g.label===label);
+      if(!g){ g={label,items:[]}; weekGroups.push(g); } g.items.push(x.t); });
+  weekGroups.sort((a,b)=>WEEK_ORDER.indexOf(a.label)-WEEK_ORDER.indexOf(b.label));
+  // Recent activity — reuses the admin activity aggregator. Kept short (5) so
+  // it never dominates the lower dashboard; the rest lives behind "View all".
+  const activityAll = recentActivity(tasks, 30);
+  const activity = activityAll.slice(0, 5);
+  const agoShort = (ms) => { if(!ms) return ""; const mn=Math.round((Date.now()-ms)/60000);
+    if(mn<1) return "now"; if(mn<60) return mn+"m"; const h=Math.round(mn/60);
+    if(h<24) return h+"h"; return Math.round(h/24)+"d"; };
 
   const hi = new Date().getHours();
   const greet = hi<12?"Good morning":hi<17?"Good afternoon":"Good evening";
@@ -1864,79 +2348,175 @@ function Home({ tasks, users, me, goTab, isAdmin, onNewForEvent, onViewEvent, op
     : "You're all caught up. Nothing needs prep right now.";
 
   return (
-    <div className="sb-page">
+    <div className="sb-page home">
       <div className="sb-eyebrow">{greet}</div>
-      <div className="sb-h">Welcome back, {me.name.split(" ")[0]} 👋</div>
+      <div className="sb-h">Welcome back, {me.name.split(" ")[0]} <span className="sb-wave" aria-hidden="true">👋</span></div>
       <div className="sb-sub sb-greet">
         <span>{s1}</span>
         <span>{s2}</span>
       </div>
 
-      {/* Coming up — what's on the ministry horizon */}
-      {events.length>0 && <>
-        <div className="sb-shead"><h2>Coming up</h2>
-          <button className="link subtle" onClick={()=>goTab("board")}>See all →</button></div>
-        <div className="sb-evlist">
-          {events.slice(0,3).map((e,i) => {
-            const n = occurrenceContentCount(e, tasks);
-            const rel = e.daysAway===0 ? "Today" : e.daysAway===1 ? "Tomorrow" : `In ${e.daysAway} days`;
-            const act = n===0
-              ? (isAdmin && onNewForEvent && { label:"Create", onClick:()=>onNewForEvent(eventPrefill(e)) })
-              : (onViewEvent && { label:"View", onClick:()=>onViewEvent(e) });
-            return (
-            <div className="sb-ev" key={e.eventOccurrenceId||i} style={{ "--d": `${i*55}ms` }}>
-              <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
-              <div className="sb-ev-body">
-                <div className="sb-ev-name">{e.name}</div>
-                <div className="sb-ev-sub"><b>{rel}</b> · {fmtEventDate(e.date)}</div>
-                <div className="sb-ev-foot">
-                  <span className={"sb-ev-status"+(n>0?" ok":"")}>{n>0 ? `${n} planned` : "Nothing planned"}</span>
-                  {act && <button className="sb-ev-link" onClick={act.onClick}>{act.label} →</button>}
-                </div>
-              </div>
+      {/* Below the welcome: a focused stack on mobile, a dashboard grid on
+          desktop. `.sb-dash`/`.sb-wd` are display:contents on phones, so the
+          mobile layout is byte-for-byte the existing one; on desktop they
+          become a grid and the desktop-only widgets (wd-desktop) appear. */}
+      <div className="sb-dash">
+
+        {/* Quick stats (desktop dashboard) — glanceable, each with a next-step sub */}
+        <section className="sb-wd wd-stats wd-desktop">
+          <div className="sb-statgrid">
+            {stats.map((s,i) => (
+              <button className={"sb-stat2 tone-"+s.tone} key={i} onClick={s.go}>
+                <span className="sb-stat2-ic"><s.icon className="hi" aria-hidden="true"/></span>
+                <span className="sb-stat2-n"><AnimatedNumber value={s.n}/></span>
+                <span className="sb-stat2-l">{s.label}</span>
+                <span className="sb-stat2-sub">{s.sub}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Your focus — the primary widget: what needs YOU right now. On desktop
+            it's placed top-left by the grid; in the DOM it comes first so MOBILE
+            (which follows source order) leads with it, not with "Coming up".
+            Three distinct states: loading (skeleton) / has-items / empty —
+            the empty state never renders while tasks are still loading. */}
+        <section className="sb-wd wd-focus">
+          <div className="sb-shead sb-shead-primary">
+            <div className="sb-shead-main">
+              <h2>Your focus</h2>
+              {tasksLoaded && focus.length>0 &&
+                <span className="sb-headcount" aria-label={`${focus.length} focus item${focus.length!==1?"s":""}`}>{focus.length}</span>}
             </div>
-            );
-          })}
-        </div>
-      </>}
+            <button className="link subtle" onClick={()=>goTab("myday")}>My Day →</button>
+          </div>
+          {!tasksLoaded
+            ? <div className="sb-attnlist sb-focus-loading" aria-busy="true" aria-label="Loading your focus">
+                {[0,1,2].map(i => <div className="sb-focus-skel" key={i}><span className="sb-skel"/><span className="sb-skel sm"/></div>)}
+              </div>
+            : focus.length===0
+            ? <div className="sb-empty compact sb-empty-glad"><span className="sb-empty-emoji" aria-hidden="true">🎉</span>
+                <b>You're all caught up.</b><span>Nothing needs you right now — enjoy your {hi<12?"morning":hi<17?"afternoon":"evening"}.</span></div>
+            : <div className="sb-attnlist">{focus.map(t =>
+                <AttentionItem key={t.id} t={t} onClick={()=>openTask ? openTask(t.id) : goTab("myday")} />)}</div>}
+        </section>
 
-      {/* Your focus — only what needs YOU; the full list lives in My Day */}
-      <div className="sb-shead"><h2>Your focus</h2>
-        <button className="link subtle" onClick={()=>goTab("myday")}>My Day →</button></div>
-      {focus.length===0
-        ? <div className="sb-empty compact">Nothing needs you right now. Enjoy the calm.</div>
-        : <div className="sb-attnlist">{focus.map(t =>
-            <AttentionItem key={t.id} t={t} onClick={()=>openTask ? openTask(t.id) : goTab("myday")} />)}</div>}
+        {/* Coming up — what's on the ministry horizon */}
+        <section className="sb-wd wd-events">
+          {events.length>0 && <>
+            <div className="sb-shead"><h2>Coming up</h2>
+              <button className="link subtle" onClick={()=>goTab("board")}>See all →</button></div>
+            <div className="sb-evlist">
+              {events.slice(0,3).map((e,i) => {
+                const n = occurrenceContentCount(e, tasks);
+                const rel = e.daysAway===0 ? "Today" : e.daysAway===1 ? "Tomorrow" : `In ${e.daysAway} days`;
+                const act = n===0
+                  ? (isAdmin && onNewForEvent && { label:"Create", onClick:()=>onNewForEvent(eventPrefill(e)) })
+                  : (onViewEvent && { label:"View", onClick:()=>onViewEvent(e) });
+                return (
+                <div className="sb-ev" key={e.eventOccurrenceId||i} style={{ "--d": `${i*55}ms` }}>
+                  <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+                  <div className="sb-ev-body">
+                    <div className="sb-ev-name">{e.name}</div>
+                    <div className="sb-ev-sub"><b>{rel}</b> · {fmtEventDate(e.date)}</div>
+                    <div className="sb-ev-foot">
+                      <span className={"sb-ev-status"+(n>0?" ok":"")}>{n>0 ? `${n} planned` : "Nothing planned"}</span>
+                      {act && <button className="sb-ev-link" onClick={act.onClick}>{act.label} →</button>}
+                    </div>
+                  </div>
+                </div>
+                );
+              })}
+            </div>
+          </>}
+        </section>
 
-      {/* Team progress — one compact summary instead of metric walls */}
-      <div className="sb-shead"><h2>Team progress</h2></div>
-      <div className="sb-progress">
-        <div className="row">
-          <b>{doneCount} of {totalCount} content pieces completed</b>
-          <span className="pct">{donePct}%</span>
-        </div>
-        <div className="bar" role="progressbar" aria-valuenow={donePct} aria-valuemin={0} aria-valuemax={100}
-          aria-label="Team content completion"><span style={{width:`${donePct}%`}}/></div>
-        <div className="chips">
-          <button onClick={()=>goTab("board")}>{m.awaiting} awaiting review</button>
-          <button onClick={()=>goTab("board")}>{readyToPost} ready to post</button>
-          {m.overdue>0 && <button className="warn" onClick={()=>goTab("myday")}>{m.overdue} overdue</button>}
-        </div>
+        {/* My week (desktop) — a quick timeline of what's ahead */}
+        <section className="sb-wd wd-week wd-desktop">
+          <div className="sb-shead"><h2>My week</h2></div>
+          {weekGroups.length===0
+            ? <div className="sb-empty compact">Nothing scheduled in the next 7 days.</div>
+            : <div className="sb-week">
+                {weekGroups.map((g,gi) => (
+                  <div className="sb-week-day" key={gi}>
+                    <div className="sb-week-lbl">{g.label}</div>
+                    {g.items.map(t => (
+                      <button className="sb-week-row" key={t.id} onClick={()=>openTask ? openTask(t.id) : goTab("myday")}>
+                        <span className={"sb-week-dot "+statusClass(t.status)} aria-hidden="true"/>
+                        <span className="sb-week-body">
+                          <span className="sb-week-t">{nextStep(t.status)}</span>
+                          <span className="sb-week-sub">{t.title} · {t.type}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>}
+        </section>
+
+        {/* Recent activity (desktop) — a quiet, secondary feed: action first,
+            then content, then who + when. Short by design. */}
+        <section className="sb-wd wd-activity wd-desktop">
+          <div className="sb-shead"><h2>Recent activity</h2>
+            {isAdmin && activityAll.length>5 && <button className="link subtle" onClick={()=>goTab("admin")}>View all →</button>}</div>
+          {activity.length===0
+            ? <div className="sb-empty compact">Nothing yet — the team's activity will show up here.</div>
+            : <div className="sb-actfeed2">
+                {activity.map((a,i) => (
+                  <button className="sb-actrow2" key={i} onClick={()=>openTask && openTask(a.taskId)}>
+                    <span className="sb-av sb-actrow2-av" aria-hidden="true">{initials(a.who)}
+                      <span className={"sb-actrow2-dot type-"+a.type}/></span>
+                    <span className="sb-actrow2-body">
+                      <span className="sb-actrow2-name">{a.who}</span>
+                      <span className="sb-actrow2-act">{a.verb} <span className="ct">{a.title}</span></span>
+                      <span className="sb-actrow2-meta">{agoShort(a.at)} ago</span>
+                    </span>
+                  </button>
+                ))}
+              </div>}
+        </section>
+
+        {/* Team progress — completion at a glance + the pipeline that needs moving */}
+        <section className="sb-wd wd-team">
+          <div className="sb-shead"><h2>Team progress</h2></div>
+          <div className="sb-progress">
+            <div className="row">
+              <b>{doneCount} of {totalCount} completed</b>
+              <span className="pct"><AnimatedNumber value={donePct}/>%</span>
+            </div>
+            <div className="bar" role="progressbar" aria-valuenow={donePct} aria-valuemin={0} aria-valuemax={100}
+              aria-label="Team content completion"><span className="fill" style={{width:`${donePct}%`}}/></div>
+            {/* Supporting stats, not KPI boxes — a calm pipeline list… */}
+            <div className="sb-statlist">
+              <button className="sb-statrow" onClick={()=>goTab("board")}>
+                <span className="v">{m.awaiting}</span><span className="k">Awaiting review</span></button>
+              <button className="sb-statrow" onClick={()=>goTab("board")}>
+                <span className="v">{readyToPost}</span><span className="k">Ready to post</span></button>
+              <button className={"sb-statrow"+(m.overdue>0?" warn":"")} onClick={()=>goTab("myday")}>
+                <span className="v">{m.overdue}</span><span className="k">Overdue</span></button>
+            </div>
+            {/* …then the wins as a right-aligned stat list under a divider. */}
+            <div className="sb-statlist sb-statlist-wins">
+              <div className="sb-winrow"><span className="e" aria-hidden="true">🏆</span>
+                <span className="k">Posted this month</span><span className="v"><AnimatedNumber value={thisM.posted}/></span></div>
+              <div className="sb-winrow"><span className="e" aria-hidden="true">🙌</span>
+                <span className="k">Completed by you</span><span className="v"><AnimatedNumber value={pw.completed}/></span></div>
+              <div className="sb-winrow"><span className="e" aria-hidden="true">✨</span>
+                <span className="k">Contributions</span><span className="v"><AnimatedNumber value={pw.contributions}/></span></div>
+            </div>
+            <button className="sb-proglink" onClick={()=>goTab("board")}>View workflow →</button>
+          </div>
+        </section>
+
+        {/* Recent wins (mobile keeps this; desktop shows Recent activity instead) */}
+        <section className="sb-wd wd-recent wd-mobile">
+          <div className="sb-shead"><h2>Recent wins</h2></div>
+          {recents.length===0
+            ? <div className="sb-empty">Nothing posted yet. Your first win is coming!</div>
+            : <div className="sb-recent">{recents.map((r,i)=>(<div className="sb-recent-row" key={i}><CheckCircleIcon className="hi hi-sm" aria-hidden="true" style={{color:"var(--success)",verticalAlign:"-4px",marginRight:6}}/>{r.text}</div>))}</div>}
+        </section>
+
       </div>
-
-      {/* Wins — this month + yours, kept encouraging and compact */}
-      <div className="sb-shead"><h2>Ministry wins</h2></div>
-      <div className="sb-wincards">
-        <WinCard n={thisM.posted} label="Posted this month" />
-        <WinCard n={pw.completed} label="You completed" />
-        <WinCard n={pw.contributions} label="Your contributions" />
-      </div>
-
-      {/* Recent wins */}
-      <div className="sb-shead"><h2>Recent wins</h2></div>
-      {recents.length===0
-        ? <div className="sb-empty">Nothing posted yet. Your first win is coming!</div>
-        : <div className="sb-recent">{recents.map((r,i)=>(<div className="sb-recent-row" key={i}><CheckCircleIcon className="hi hi-sm" aria-hidden="true" style={{color:"var(--success)",verticalAlign:"-4px",marginRight:6}}/>{r.text}</div>))}</div>}
     </div>
   );
 }
@@ -1973,26 +2553,58 @@ function KebabMenu({ items }) {
   );
 }
 
-/* Designed confirmation dialog (replaces browser confirm for destructive
-   actions): explains what happens, danger-coloured confirm only. */
-function ConfirmDialog({ title, body, confirmLabel = "Delete", cancelLabel = "Cancel", danger = true, onConfirm, onClose }) {
-  useLockBody();
+/* Branded confirmation dialog — the app-wide replacement for window.confirm for
+   both destructive actions and unsaved-changes prompts. Never colour alone:
+   each tone pairs an icon with its treatment.
+   - tone: "danger" (permanent deletion) | "warning" (unsaved / reversible-ish)
+     | "neutral". `danger` bool kept for back-compat (true → danger tone).
+   - consequences: optional string[] rendered as an explained list.
+   - onConfirm may be async: while it runs, buttons disable, the confirm button
+     shows a loading label, duplicate clicks are blocked, the dialog stays open,
+     and a thrown error is surfaced inline (the caller's data is never lost).
+   Focus starts on the SAFE (cancel) action, so Enter can't trigger deletion
+   unless the user deliberately tabs to the destructive button. */
+function ConfirmDialog({ title, body, consequences, confirmLabel = "Delete", cancelLabel = "Cancel",
+                         tone, icon, danger = true, busyLabel, onConfirm, onClose }) {
+  const t = tone || (danger ? "danger" : "neutral");
+  const ic = icon || (t === "danger" ? "danger" : t === "warning" ? "warning" : "neutral");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const cancelRef = useRef(null);
+  useEffect(() => { cancelRef.current?.focus(); }, []);       // initial focus = safe action
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e) => { if (e.key === "Escape" && !busy) onClose(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, busy]);
+  const confirm = async () => {
+    if (busy) return;                                          // block duplicate submits
+    try { setErr(null); setBusy(true); await onConfirm(); onClose(); }
+    catch (e) { setBusy(false); setErr(e?.message || "Something went wrong. Please try again."); }
+  };
+  const Icon = ic === "danger" ? ExclamationTriangleIcon : ic === "warning" ? ExclamationTriangleIcon : InformationCircleIcon;
+  const confirmClass = t === "danger" ? "sb-btn danger" : t === "warning" ? "sb-btn gold" : "sb-btn";
   return (
-    <div className="sb-scrim" onClick={onClose}>
-      <div className="sb-confirm" onClick={e=>e.stopPropagation()} role="alertdialog" aria-label={title}>
-        <b className="sb-serif" style={{fontSize:17}}>{title}</b>
-        {body && <p>{body}</p>}
+    <Portal>
+    <div className="sb-scrim" onClick={() => !busy && onClose()}>
+      <div className="sb-confirm" onClick={e=>e.stopPropagation()} role="alertdialog"
+        aria-modal="true" aria-labelledby="sb-confirm-t" aria-describedby={body?"sb-confirm-b":undefined}>
+        <div className={"sb-confirm-hd tone-"+t}>
+          <span className="sb-confirm-ic" aria-hidden="true"><Icon className="hi" /></span>
+          <b id="sb-confirm-t" className="sb-serif">{title}</b>
+        </div>
+        {body && <p id="sb-confirm-b">{body}</p>}
+        {consequences && consequences.length>0 &&
+          <ul className="sb-confirm-list">{consequences.map((c,i)=><li key={i}>{c}</li>)}</ul>}
+        {err && <div className="sb-lerr" role="alert" style={{marginTop:12,marginBottom:0}}>{err}</div>}
         <div className="sb-btnrow" style={{marginTop:16}}>
-          <button className="sb-btn ghost" onClick={onClose}>{cancelLabel}</button>
-          <button className={"sb-btn"+(danger?" danger":"")} onClick={()=>{ onConfirm(); onClose(); }}>{confirmLabel}</button>
+          <button ref={cancelRef} className="sb-btn ghost" onClick={onClose} disabled={busy}>{cancelLabel}</button>
+          <button className={confirmClass} onClick={confirm} disabled={busy} aria-busy={busy}>
+            {busy ? (busyLabel || "Working…") : confirmLabel}</button>
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -2097,23 +2709,26 @@ function AdminEvents({ series }) {
   );
 }
 function EventSeriesEditor({ doc: d, onSave, onClose }) {
-  useLockBody();
   const [f, setF] = useState(d ? { ...d } : { name:"", emoji:"", description:"", frequency:"monthly-weekday",
     interval:1, anchorDate:"", endDate:"", active:true, showOnHome:true });
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   const valid = f.name.trim() && f.anchorDate;
+  const initial = useRef(JSON.stringify(f));
+  const isDirty = JSON.stringify(f) !== initial.current;
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
   const preview = valid ? (() => {
     const sd = seriesFromDoc({ ...f, active:true });
     return sd ? nextOccurrences(sd.rule, new Date(), 3).map(fmtEventDate) : [];
   })() : [];
   return (
-    <div className="sb-scrim" onClick={onClose}>
+    <Portal>
+    <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Recurring event">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{d?"Edit recurring event":"New recurring event"}</b>
-          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
+          <button className="sb-x" onClick={requestClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
         <div className="bd">
           <div className="sb-btnrow">
-            <div className="sb-field" style={{flex:1}}><label>Event name</label>
+            <div className="sb-field" style={{flex:1}}><label>Event name<span className="sb-req" aria-hidden="true">*</span></label>
               <input value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Praise Night" /></div>
             <div className="sb-field" style={{width:90}}><label>Emoji</label>
               <input value={f.emoji} onChange={e=>set("emoji",e.target.value)} placeholder="🎤" maxLength={4} /></div>
@@ -2128,7 +2743,7 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
               <input type="number" min="1" max="12" value={f.interval} onChange={e=>set("interval",e.target.value)} /></div>
           </div>
           <div className="sb-btnrow">
-            <div className="sb-field" style={{flex:1}}><label>Next occurrence (anchor)</label>
+            <div className="sb-field" style={{flex:1}}><label>Next occurrence (anchor)<span className="sb-req" aria-hidden="true">*</span></label>
               <input type="date" value={f.anchorDate} onChange={e=>set("anchorDate",e.target.value)} /></div>
             <div className="sb-field" style={{flex:1}}><label>End date (optional)</label>
               <input type="date" value={f.endDate||""} onChange={e=>set("endDate",e.target.value)} /></div>
@@ -2142,11 +2757,16 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
         </div>
       </div>
     </div>
+    {leaveGuard}
+    </Portal>
   );
 }
 
-function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
-  const [sec, setSec] = useState("overview");
+function Admin({ users, tasks, teamUsers, issues, eventSeries, secReq, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
+  // Start on the requested section (deep-link / notification) so we never flash
+  // "Overview" before switching — that intermediate render looked jumpy.
+  const [sec, setSec] = useState(() => secReq?.sec || "overview");
+  useEffect(() => { if (secReq?.sec) setSec(secReq.sec); }, [secReq]);
   const [contentFilter, setContentFilter] = useState("all");
   const pending = users.filter(u => u.status === "pending");
   const openIssues = (issues || []).filter(i => i.status !== "resolved").length;
@@ -2168,8 +2788,6 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEdi
 
   return (
     <div className="sb-page">
-      <div className="sb-h">Admin</div>
-      <div className="sb-sub">What needs leadership attention.</div>
       <div className="sb-seg" style={{marginBottom:14}}>
         {tabs.map(([id,label]) => (
           <button key={id} className={"sb-segbtn"+(sec===id?" on":"")} onClick={()=>setSec(id)}>{label}</button>
@@ -2178,6 +2796,7 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEdi
 
       {sec==="overview" && <AdminOverview tasks={tasks} users={users} h={h}
         onGoContent={goContent} onGoPeople={()=>setSec("people")} onGoImport={()=>setSec("import")}
+        onGoEvents={()=>setSec("events")}
         onNewContent={()=>onEditTask("new")} onAutoAll={onAutoAll} onNewForEvent={onNewForEvent}
         onEditUser={onEditUser} onDeleteUser={onDeleteUser} onAssignSuggested={onAssignSuggested} />}
 
@@ -2192,132 +2811,226 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, onEditUser, onEdi
       {sec==="events" && <AdminEvents series={eventSeries} />}
       {sec==="import" && <ImportPanel users={teamUsers} onImport={onImport} />}
       {sec==="issues" && <IssueLog issues={issues} onResolve={onResolveIssue} />}
-      {confirmDel && <ConfirmDialog
+      {confirmDel && <ConfirmDialog tone="danger"
         title="Delete this content?"
-        body={`"${confirmDel.title}" will be permanently removed. This can't be undone. Comments and activity on it are removed too.`}
-        confirmLabel="Delete content"
+        body={`“${confirmDel.title}” will be permanently deleted.`}
+        consequences={[
+          "Its comments, reminder schedules, and activity history are removed too.",
+          "This action cannot be undone.",
+        ]}
+        cancelLabel="Keep content" confirmLabel="Delete content" busyLabel="Deleting…"
         onConfirm={()=>onDeleteTask(confirmDel.id)} onClose={()=>setConfirmDel(null)} />}
     </div>
   );
 }
 
-/* Overview = the admin landing page: health at a glance, then only the things
-   that need a leader — stuck work, approvals, unassigned content — plus recent
-   activity and quick actions. No endless content list. */
-function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, onNewContent, onAutoAll, onEditUser, onDeleteUser, onAssignSuggested, onNewForEvent }) {
+/* Compact "New" actions menu — moves the old admin toolbar into a single
+   top-right dropdown so the overview leads with information, not buttons. */
+function AdminActions({ onNewContent, onNewEvent, onAutoAll, onImport }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const f = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const k = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", f); document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("mousedown", f); document.removeEventListener("keydown", k); };
+  }, [open]);
+  return (
+    <div className="sb-kebab" ref={ref}>
+      <button className="sb-btn compact" onClick={()=>setOpen(o=>!o)} aria-haspopup="menu" aria-expanded={open}>
+        <PlusIcon className="hi hi-sm" aria-hidden="true"/> New <ChevronDownIcon className="hi hi-sm" aria-hidden="true"/></button>
+      {open && (
+        <div className="sb-kebab-menu" role="menu" style={{right:0,minWidth:180}}>
+          <button className="sb-kebab-item" role="menuitem" onClick={()=>{ setOpen(false); onNewContent(); }}>New content</button>
+          <button className="sb-kebab-item" role="menuitem" onClick={()=>{ setOpen(false); onNewEvent(); }}>New recurring event</button>
+          <button className="sb-kebab-item" role="menuitem" onClick={()=>{ setOpen(false); onAutoAll(); }}>Auto-assign crew</button>
+          {ENABLE_CSV_IMPORT && <button className="sb-kebab-item" role="menuitem" onClick={()=>{ setOpen(false); onImport(); }}>Import CSV</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Overview = the LEADERSHIP dashboard: decision-first, not data-first. Reuses
+   Home's hierarchy — a hero + digest that answers "what needs me right now",
+   then paired widgets (Needs attention · Approvals · Upcoming · Team health ·
+   Ready to publish · Activity). Same visual language as Home, leadership data. */
+function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, onGoEvents, onNewContent, onAutoAll, onEditUser, onDeleteUser, onAssignSuggested, onNewForEvent }) {
   const health = adminHealth(tasks, users);
   const attention = adminNeedsAttention(tasks);
   const pending = users.filter(u => u.status === "pending");
   const ready = adminReadyToMove(tasks);
-  const activity = recentActivity(tasks, 8);
+  const activity = recentActivity(tasks, 6);
   const events = upcomingEvents(3);
-  const [eventNote, setEventNote] = useState(false);
+  const hi = new Date().getHours();
+  const greet = hi<12?"Good morning":hi<17?"Good afternoon":"Good evening";
+  const pl = (n) => n===1?"":"s";
 
-  // Does any active task reference this event? Loose token match on relatedEvent.
   const eventCount = (e) => occurrenceContentCount(e, tasks);
-  const ago = (ms) => {
-    const m = Math.round((Date.now()-ms)/60000);
-    if (m<1) return "just now"; if (m<60) return `${m}m ago`;
-    const hrs = Math.round(m/60); if (hrs<24) return `${hrs}h ago`;
-    return `${Math.round(hrs/24)}d ago`;
-  };
+  const eventsNoContent = events.filter(e => eventCount(e)===0);
+  const blockerName = tasks.filter(t => t.blockedOn && t.status!=="Posted")[0]?.blockedOn;
 
-  // Severity-coded so a leader can scan instantly: red = broken, amber =
-  // slipping, gold = waiting on QA, green = good to go, violet = people.
-  const cards = [
-    { k:"blocked", n:health.blocked,      label:"Blocked",           tone:"red",    go:()=>onGoContent("blocked") },
-    { k:"overdue", n:health.overdue,      label:"Overdue",           tone:"amber",  go:()=>onGoContent("overdue") },
-    { k:"qa",      n:health.awaitingQA,   label:"Awaiting QA",       tone:"gold",   go:()=>onGoContent("qa") },
-    { k:"ready",   n:health.ready,        label:"Ready to post",     tone:"green",  go:()=>onGoContent("ready") },
-    { k:"pending", n:health.pendingUsers, label:"Awaiting approval", tone:"violet", go:onGoPeople },
-    { k:"unassig", n:health.unassigned,   label:"Unassigned",        tone:"blue",   go:()=>onGoContent("needowner") },
+  // Team health from live workload — ranked people, busiest first.
+  const team = users.filter(u => u.status==="approved" || u.role==="admin");
+  const teamRanked = team.map(u => ({ name:u.name, n:userActiveTasks(u, tasks) })).sort((a,b)=>b.n-a.n);
+  const maxLoad = Math.max(4, ...teamRanked.map(x=>x.n));
+  const busy = teamRanked.filter(x => x.n>=4).length;
+
+  const agoT = (ms) => { const m=Math.round((Date.now()-ms)/60000); if(m<1)return"just now";
+    if(m<60)return m+"m ago"; const hr=Math.round(m/60); if(hr<24)return hr+"h ago"; return Math.round(hr/24)+"d ago"; };
+
+  // Leadership digest — a morning briefing in plain language (leaders think in
+  // stories, not metrics): name names, name events, phrase as sentences.
+  const nc = eventsNoContent;
+  const digest = [];
+  if (health.blocked>0)      digest.push(`${health.blocked} project${pl(health.blocked)} ${health.blocked===1?"is":"are"} blocked${blockerName?`, waiting on ${blockerName}`:""}.`);
+  if (health.overdue>0)      digest.push(`${health.overdue} item${pl(health.overdue)} ${health.overdue===1?"has":"have"} slipped past ${health.overdue===1?"its":"their"} deadline.`);
+  if (health.awaitingQA>0)   digest.push(`${health.awaitingQA} piece${pl(health.awaitingQA)} ${health.awaitingQA===1?"needs":"need"} QA before going out.`);
+  if (nc.length>0)           digest.push(nc.length===1 ? `${nc[0].name} still has no assigned content.` : `${nc[0].name} and ${nc.length-1} other event${pl(nc.length-1)} have no content yet.`);
+  if (pending.length>0)      digest.push(`${pending.length} volunteer account${pl(pending.length)} ${pending.length===1?"is":"are"} waiting to be approved.`);
+  if (health.ready>0)        digest.push(`${health.ready} piece${pl(health.ready)} ${health.ready===1?"is":"are"} ready to post.`);
+  const primary = health.blocked>0 ? { label:"Review blockers", go:()=>onGoContent("blocked") }
+    : health.overdue>0    ? { label:"Review overdue",   go:()=>onGoContent("overdue") }
+    : pending.length>0    ? { label:"Review approvals", go:onGoPeople }
+    : health.awaitingQA>0 ? { label:"See the QA queue", go:()=>onGoContent("qa") }
+    : null;
+
+  // Ranked health strip — severity order, only tinted when there's something.
+  const chips = [
+    { n:health.blocked,    label:"Blocked",    tone:"red",     go:()=>onGoContent("blocked") },
+    { n:health.overdue,    label:"Overdue",    tone:"amber",   go:()=>onGoContent("overdue") },
+    { n:health.awaitingQA, label:"Awaiting QA",tone:"blue",    go:()=>onGoContent("qa") },
+    { n:pending.length,    label:"Approvals",  tone:"violet",  go:onGoPeople },
+    { n:health.ready,      label:"Ready",      tone:"green",   go:()=>onGoContent("ready") },
+    { n:health.unassigned, label:"Unassigned", tone:"neutral", go:()=>onGoContent("needowner") },
   ];
 
   return (
     <>
-      {/* Quick actions first — the things a leader comes here to DO */}
-      <div className="sb-toolbar">
-        <button className="sb-btn compact" onClick={onNewContent}><PlusIcon className="hi hi-sm" aria-hidden="true"/> New content</button>
-        <button className="sb-btn ghost compact" onClick={()=>setEventNote(v=>!v)}>Create event</button>
-        {ENABLE_CSV_IMPORT && <button className="sb-btn ghost compact" onClick={onGoImport}>Import</button>}
-        <button className="sb-tertiary" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign</button>
-      </div>
-      {eventNote && <div className="sb-assign" style={{marginTop:10}}>
-        Event management is coming soon. Pastor birthdays &amp; key dates already power the reminders on Home.</div>}
-
-      {/* Health overview */}
-      <div className="sb-health" style={{marginTop:18}}>
-        {cards.map(c => (
-          <button key={c.k} className={"sb-hcard tone-"+c.tone} onClick={c.go}>
-            <span className="n">{c.n}</span><span className="l">{c.label}</span>
-          </button>
-        ))}
+      <div className="sb-eyebrow">{greet}</div>
+      <div className="sb-adhead">
+        <div className="sb-h">Leadership overview</div>
+        <AdminActions onNewContent={onNewContent} onNewEvent={onGoEvents} onAutoAll={onAutoAll} onImport={onGoImport} />
       </div>
 
-      {/* Decision #1: people waiting to be let in */}
-      {pending.length>0 && <>
-        <div className="sb-shead sb-shead-strong"><h2>Waiting for approval</h2><span className="sb-tag">{pending.length}</span></div>
-        <div className="sb-prowlist">
-          {pending.map(u => (
-            <PendingRow key={u.id} u={u} tasks={tasks}
-              onReview={()=>onEditUser(u)} onReject={onDeleteUser} onAssignSuggested={onAssignSuggested} />
-          ))}
+      {/* Briefing row: the summary + project health, side by side (compact). */}
+      <div className="sb-adtop">
+        <div className="sb-digest">
+          <div className="sb-digest-h"><SparklesIcon className="hi hi-sm" aria-hidden="true"/> Today’s summary</div>
+          {digest.length===0
+            ? <div className="sb-digest-clear">Everything’s on track — nothing needs you right now. 🎉</div>
+            : <ul className="sb-digest-list">{digest.slice(0,4).map((d,i)=><li key={i}>{d}</li>)}</ul>}
+          {primary && <button className="sb-btn compact" style={{marginTop:12,alignSelf:"flex-start"}} onClick={primary.go}>{primary.label} →</button>}
         </div>
-      </>}
+        <div className="sb-healthcard">
+          <div className="sb-digest-h">Project health</div>
+          <div className="sb-healthrows">
+            {chips.map((c,i)=>(
+              <button key={i} className={"sb-healthrow tone-"+c.tone+(c.n>0?" active":"")} onClick={c.go}>
+                <span className="hdot" aria-hidden="true"/><span className="hl">{c.label}</span><span className="hn">{c.n}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
-      {/* Only problematic items — overdue, blocked, missing owner/crew */}
-      <div className="sb-shead sb-shead-strong"><h2>Needs attention</h2><span className="sb-tag">{attention.length}</span></div>
-      {attention.length===0
-        ? <div className="sb-empty"><div className="big">✓</div>Nothing currently needs leadership attention.</div>
-        : <div className="sb-list">{attention.slice(0,6).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>}
-      {attention.length>6 && <button className="sb-morelink" onClick={()=>onGoContent("overdue")}>See everything that's stuck in Content →</button>}
+      {/* Decision grid — same language as Home. */}
+      <div className="sb-adash">
+        {/* Needs attention — the hero: broken/overdue/unassigned work. */}
+        <section className="sb-awd wd-attn">
+          <div className="sb-shead sb-shead-primary">
+            <div className="sb-shead-main"><h2>Needs attention</h2>
+              {attention.length>0 && <span className="sb-headcount danger">{attention.length}</span>}</div>
+            {attention.length>4 && <button className="link subtle" onClick={()=>onGoContent("overdue")}>See all →</button>}
+          </div>
+          {attention.length===0
+            ? <div className="sb-empty compact sb-empty-glad"><span className="sb-empty-emoji" aria-hidden="true">✅</span>
+                <b>All clear.</b><span>Nothing is stuck right now.</span></div>
+            : <div className="sb-list">{attention.slice(0,4).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>}
+        </section>
 
-      {/* Healthy work that can advance with a nudge */}
-      {ready.length>0 && <>
-        <div className="sb-shead"><h2>Ready to move</h2><span className="sb-tag">{ready.length}</span></div>
-        <div className="sb-list">{ready.slice(0,5).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>
-        {ready.length>5 && <button className="sb-morelink" onClick={()=>onGoContent("ready")}>See all ready to move →</button>}
-      </>}
+        {/* Approvals — accounts waiting to be let in. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><div className="sb-shead-main"><h2>Waiting for approval</h2>
+            {pending.length>0 && <span className="sb-headcount">{pending.length}</span>}</div></div>
+          {pending.length===0
+            ? <div className="sb-empty compact">No one is waiting to be approved.</div>
+            : <div className="sb-prowlist">{pending.map(u => (
+                <PendingRow key={u.id} u={u} tasks={tasks} onReview={()=>onEditUser(u)} onReject={onDeleteUser} onAssignSuggested={onAssignSuggested} />
+              ))}</div>}
+        </section>
 
-      {/* Upcoming events with a "no content yet" flag */}
-      {events.length>0 && <>
-        <div className="sb-shead"><h2>Upcoming</h2></div>
-        <div className="sb-evlist">
-          {events.map((e,i) => {
-            const n = eventCount(e);
-            return (
-              <div className="sb-ev" key={i}>
-                <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
-                <div style={{flex:1,minWidth:0}}>
-                  <div className="sb-ev-name">{e.name}</div>
-                  <div className="sb-ev-sub">
-                    {fmtEventDate(e.date)} · {e.daysAway===0?"today":`${e.daysAway} day${e.daysAway!==1?"s":""} away`}
-                    {n>0
-                      ? <> · {n} content item{n!==1?"s":""} planned</>
-                      : <span className="sb-ev-warn"> · ⚠ no content assigned</span>}
+        {/* Upcoming — events + whether they have content yet. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><h2>Upcoming</h2>
+            <button className="link subtle" onClick={onGoEvents}>Manage →</button></div>
+          {events.length===0 ? <div className="sb-empty compact">No upcoming events.</div>
+            : <div className="sb-evlist">{events.map((e,i)=>{
+                const n = eventCount(e);
+                return (
+                  <div className="sb-ev" key={i}>
+                    <span className="sb-ev-ic">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
+                    <div className="sb-ev-body">
+                      <div className="sb-ev-name">{e.name}</div>
+                      <div className="sb-ev-sub"><b>{e.daysAway===0?"Today":e.daysAway===1?"Tomorrow":`In ${e.daysAway} days`}</b> · {fmtEventDate(e.date)}</div>
+                      <div className="sb-ev-foot">
+                        <span className={"sb-ev-status"+(n>0?" ok":" sb-ev-warn")}>{n>0?`${n} planned`:"No content assigned"}</span>
+                        {n===0 && onNewForEvent && <button className="sb-ev-link" onClick={()=>onNewForEvent(eventPrefill(e))}>Create →</button>}
+                      </div>
+                    </div>
                   </div>
-                </div>
-                {n===0 && onNewForEvent &&
-                  <button className="sb-btn ghost compact" onClick={()=>onNewForEvent(eventPrefill(e))}>Create content</button>}
-              </div>
-            );
-          })}
-        </div>
-      </>}
+                );
+              })}</div>}
+        </section>
 
-      {/* Recent activity feed — who did what across the team */}
-      {activity.length>0 && <>
-        <div className="sb-shead"><h2>Activity</h2></div>
-        <div className="sb-actfeed">
-          {activity.map((a,i) => (
-            <button className="sb-actrow" key={i} onClick={()=>h.open(a.taskId)}>
-              <span className="sb-act-dot"/>
-              <span className="sb-act-txt"><b>{a.who}</b> {a.verb} “{a.title}”</span>
-              <span className="sb-act-ago">{ago(a.at)}</span>
-            </button>
-          ))}
-        </div>
-      </>}
+        {/* Team health — the people, ranked by workload with a tiny load bar. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><div className="sb-shead-main"><h2>Team health</h2>
+            {busy>0 && <span className="sb-headcount">{busy} busy</span>}</div>
+            <button className="link subtle" onClick={onGoPeople}>People →</button></div>
+          <div className="sb-teamlist sb-widcard">
+            {teamRanked.slice(0,5).map((m,i)=>{
+              const tone = m.n>=4 ? "over" : m.n===0 ? "free" : "ok";
+              const tag  = m.n>=4 ? "Overloaded" : m.n===0 ? "Available" : "Healthy";
+              return (
+                <button className="sb-teamrow" key={i} onClick={onGoPeople}>
+                  <span className="sb-av" aria-hidden="true">{initials(m.name)}</span>
+                  <span className="sb-teamrow-name">{m.name}</span>
+                  <span className="sb-teambar"><i className={"t-"+tone} style={{width:`${Math.max(6,Math.min(100,(m.n/maxLoad)*100))}%`}}/></span>
+                  <span className={"sb-teamrow-tag t-"+tone}>{m.n} · {tag}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Ready to publish — healthy work a nudge from done. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><div className="sb-shead-main"><h2>Ready to post</h2>
+            {ready.length>0 && <span className="sb-headcount ok">{ready.length}</span>}</div>
+            {ready.length>4 && <button className="link subtle" onClick={()=>onGoContent("ready")}>See all →</button>}</div>
+          {ready.length===0 ? <div className="sb-empty compact">Nothing’s ready to post yet.</div>
+            : <div className="sb-list">{ready.slice(0,4).map(t => <AdminTaskCard key={t.id} t={t} h={h} />)}</div>}
+        </section>
+
+        {/* Recent activity — who did what, GitHub-style. */}
+        <section className="sb-awd">
+          <div className="sb-shead"><h2>Recent activity</h2></div>
+          {activity.length===0 ? <div className="sb-empty compact">No activity yet.</div>
+            : <div className="sb-actfeed2 sb-widcard">{activity.map((a,i)=>(
+                <button className="sb-actrow2" key={i} onClick={()=>h.open(a.taskId)}>
+                  <span className="sb-av sb-actrow2-av" aria-hidden="true">{initials(a.who)}
+                    <span className={"sb-actrow2-dot type-"+a.type}/></span>
+                  <span className="sb-actrow2-body">
+                    <span className="sb-actrow2-name">{a.who}</span>
+                    <span className="sb-actrow2-act">{a.verb} <span className="ct">{a.title}</span></span>
+                    <span className="sb-actrow2-meta">{agoT(a.at)}</span>
+                  </span>
+                </button>
+              ))}</div>}
+        </section>
+      </div>
     </>
   );
 }
@@ -2385,10 +3098,11 @@ function PendingRow({ u, tasks, onReview, onReject, onAssignSuggested }) {
         { label:"Review & approve", onClick:onReview },
         { label:"Reject", danger:true, onClick:()=>setConfirmReject(true) },
       ]} />
-      {confirmReject && <ConfirmDialog
+      {confirmReject && <ConfirmDialog tone="danger"
         title={`Reject ${u.name}?`}
-        body="Their pending account will be removed. They can register again if it was a mistake."
-        confirmLabel="Reject account"
+        body="Their pending account will be removed."
+        consequences={["They can register again later if this was a mistake."]}
+        cancelLabel="Keep pending" confirmLabel="Reject account" busyLabel="Rejecting…"
         onConfirm={()=>onReject(u.id)} onClose={()=>setConfirmReject(false)} />}
     </div>
   );
@@ -2408,7 +3122,8 @@ function PersonCard({ u, tasks, onEdit, onRemove }) {
   const chips = roleChips(u);
   const active = userActiveTasks(u, tasks);
   const campus = (u.location||[]).join(" · ") || "No campus";
-  const dept = u.department || "No department";
+  const dept = userDepartments(u).join(" · ") || "No department";   // #3 — multiple departments
+  const available = isAvailable(u);                                 // #4
   return (
     <div className="sb-task sb-task-act" role="button" tabIndex={0}
       onClick={onEdit} onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onEdit(); } }}>
@@ -2424,7 +3139,9 @@ function PersonCard({ u, tasks, onEdit, onRemove }) {
       <div className="sb-prow-chips">
         {chips.map(c => <span key={c} className={"sb-rolechip rc-"+c.toLowerCase()}>{c}</span>)}
         {(() => { const ps = pushStatus(u); return <span className={"sb-pushbadge "+ps.cls}>{ps.label}</span>; })()}
-        <span className="sb-activecount">{active} active task{active!==1?"s":""}</span>
+        {available
+          ? <span className="sb-activecount">{active} active task{active!==1?"s":""}</span>
+          : <span className="sb-activecount sb-unavail">Unavailable</span>}
       </div>
     </div>
   );
@@ -2484,7 +3201,7 @@ function AdminPeople({ users, tasks, onEditUser, onDeleteUser, onRemoveUser, onA
       </div>
 
       {teamTotal===0
-        ? <div className="sb-empty"><div className="big">👥</div>No one matches.</div>
+        ? <div className="sb-empty"><div className="big"><UserGroupIcon className="hi hi-empty" aria-hidden="true"/></div>No one matches.</div>
         : groups.map(g => (
             <div key={g.label}>
               <div className="sb-shead"><h2>{g.label}</h2><span className="sb-tag">{g.items.length}</span></div>
@@ -2521,6 +3238,7 @@ function RemoveUserModal({ user, tasks, team, onClose, onConfirm }) {
   };
 
   return (
+    <Portal>
     <div className="sb-scrim" onMouseDown={onClose}>
       <div className="sb-sheet" onMouseDown={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Remove {user.name}?</b>
@@ -2557,6 +3275,7 @@ function RemoveUserModal({ user, tasks, team, onClose, onConfirm }) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -2591,7 +3310,7 @@ function IssueLog({ issues, onResolve }) {
       </div>
 
       {list.length===0
-        ? <div className="sb-empty"><div className="big">✓</div>Nothing here. No {show==="open"?"open ":""}issues.</div>
+        ? <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>Nothing here. No {show==="open"?"open ":""}issues.</div>
         : <div className="sb-list" style={{gridTemplateColumns:"1fr"}}>
             {list.map(i => {
               const expanded = openId===i.id;
@@ -2807,7 +3526,7 @@ function ImportPanel({ users, onImport }) {
                   : <span className={"sb-chip "+typeClass(r.task.type)}>{r.task.type}</span>}
               </div>
               {r.error
-                ? <div className="sub"><span style={{color:"var(--red,#c0392b)"}}>{r.error}</span></div>
+                ? <div className="sub"><span style={{color:"var(--danger)"}}>{r.error}</span></div>
                 : <>
                     <div className="sub"><span><b>{r.task.owner||"-"}</b> · {r.task.location} · {r.task.status}</span>
                       <span>{fmt(r.task.postDate)}</span></div>
@@ -2827,6 +3546,26 @@ function ImportPanel({ users, onImport }) {
 /* ===================================================================
    TASK CARD
    =================================================================== */
+/* Admin quick-actions menu shown on task cards + the detail sheet. Stops click
+   propagation so opening it never also opens the card. */
+function TaskAdminMenu({ t, admin, className }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  return (
+    <span className={className} onClick={e=>e.stopPropagation()}>
+      <KebabMenu items={[
+        { label:"Edit content", onClick:()=>admin.onEdit(t) },
+        { label:"Duplicate", onClick:()=>admin.onDuplicate(t) },
+        ...(t.status!=="Posted" ? [{ label:"Mark as posted", onClick:()=>admin.onArchive(t) }] : []),
+        { label:"Delete content", danger:true, onClick:()=>setConfirmDel(true) },
+      ]} />
+      {confirmDel && <ConfirmDialog
+        title={`Delete “${t.title}”?`}
+        body="This permanently removes the content — its links, reminders and history. This can't be undone."
+        confirmLabel="Delete content" cancelLabel="Cancel"
+        onConfirm={async ()=>{ await admin.onDelete(t); }} onClose={()=>setConfirmDel(false)} />}
+    </span>
+  );
+}
 function TaskCard({ t, me, onClick }) {
   const d = daysTo(t.postDate);
   // Once a task is Posted the work is done, so we drop the due/overdue chip
@@ -2841,13 +3580,16 @@ function TaskCard({ t, me, onClick }) {
   // lead), name the lead. "Who owns it" otherwise lives in the detail screen.
   const supporting = me && t.owner!==me.name && (t.support||[]).some(s=>s.name===me.name);
   // Mobile-first card: title · status · due · next · avatars.
+  const admin = useContext(TaskAdminContext);   // admin quick-actions on the card
   return (
-    <button className="sb-task" onClick={onClick}>
+    <div className="sb-task sb-task-act" role="button" tabIndex={0} onClick={onClick}
+      onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onClick(); } }}>
       <div className="row1">
         <span className="title">{t.title}</span>
         <span className="sb-rowtags">
           {t.priority==="High" && <span className={"sb-pri "+priorityClass(t.priority)}>▲</span>}
           <span className={"sb-chip "+typeClass(t.type)}>{t.type}</span>
+          {admin && <TaskAdminMenu t={t} admin={admin} className="sb-cardkebab" />}
         </span>
       </div>
 
@@ -2868,26 +3610,94 @@ function TaskCard({ t, me, onClick }) {
         ))}
         {(t.comments?.length>0) && <span style={{fontSize:11,color:"var(--muted)",marginLeft:"auto"}}>{Ic.chat} {t.comments.length}</span>}
       </div>
-    </button>
+    </div>
   );
 }
 
 /* ===================================================================
    TASK DETAIL
    =================================================================== */
-function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onApprove, onLinks, onCaption, onRequestChanges, onBlocked, onComment, onReact, onEdit }) {
-  useLockBody();
+/* Reusable URL field used everywhere a link is expected (content links,
+   reference, deliverables, drive links, post link, future URL fields). Actions
+   live INSIDE the input on the right — Open (↗) then Copy (📋), shown only when
+   there's a valid URL. Owns its own validation UI (inline error + subtle
+   "valid link" hint) and copy feedback; the parent just reads `value`/`onChange`
+   and optionally persists on `onBlur`. Exposes disabled + loading states. */
+function UrlInput({ value, onChange, onBlur, placeholder = "https://…", disabled = false, loading = false, id, ariaLabel }) {
+  const [touched, setTouched] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copiedT = useRef(null);
+  useEffect(() => () => clearTimeout(copiedT.current), []);
+  const v = (value || "").trim();
+  const valid = isValidUrl(v);
+  const showError = touched && !!v && !valid;
+  const hasText = !!v;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(v);
+      setCopied(true);
+      clearTimeout(copiedT.current);
+      copiedT.current = setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard unavailable — no-op */ }
+  };
+  return (
+    <div className="sb-urlfield">
+      <div className={"sb-urlwrap"+(hasText?" has-actions":"")}>
+        <input id={id} type="url" inputMode="url" autoComplete="off" spellCheck={false}
+          className="sb-urlctrl" value={value || ""} disabled={disabled}
+          aria-label={ariaLabel} aria-invalid={showError || undefined} placeholder={placeholder}
+          onChange={e => onChange(e.target.value)}
+          onBlur={() => { setTouched(true); onBlur && onBlur(); }} />
+        {hasText && (
+          <div className="sb-urlactions">
+            {loading
+              ? <span className="sb-banner-spin" aria-hidden="true" />
+              : <>
+                  {valid && <a className="sb-urlbtn" href={v} target="_blank" rel="noreferrer noopener"
+                    title="Open link" aria-label="Open link"><ArrowTopRightOnSquareIcon className="hi hi-sm" aria-hidden="true" /></a>}
+                  <button type="button" className={"sb-urlbtn"+(copied?" copied":"")} onClick={copy}
+                    disabled={!valid} title={copied ? "Copied" : "Copy link"} aria-label="Copy link">
+                    {copied ? <CheckIcon className="hi hi-sm" aria-hidden="true" /> : <ClipboardIcon className="hi hi-sm" aria-hidden="true" />}</button>
+                </>}
+          </div>
+        )}
+      </div>
+      {showError
+        ? <div className="sb-fielderr" role="alert">Please enter a valid URL.</div>
+        : copied
+        ? <div className="sb-urlhint copied" role="status">✓ Link copied</div>
+        : valid
+        ? <div className="sb-urlhint ok">✓ Valid link</div>
+        : null}
+    </div>
+  );
+}
+function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onApprove, onLinks, onRequestChanges, onBlocked, onComment, onReact, onEdit, onDuplicate, onArchive, onDelete, onSaved }) {
+  const [confirmDel, setConfirmDel] = useState(false);   // admin delete confirmation
   const [draft, setDraft] = useState("");
   // Local drafts; persisted on blur. Component is keyed by task id, so these
   // reset when a new task opens.
   const [blocked, setBlocked] = useState(task.blockedOn || "");
   const [links, setLinksDraft] = useState(task.links || {});
-  const [caption, setCaptionDraft] = useState(task.caption || "");
   const [postLink, setPostLink] = useState(task.postLink || "");
   const [changeNote, setChangeNote] = useState("");
   const [showOverride, setShowOverride] = useState(false);
   const [askChanges, setAskChanges] = useState(false);
   const [warn, setWarn] = useState("");
+  const [copiedKey, setCopiedKey] = useState(""); // #7 — copy feedback for the read-only reference link
+  // #12 — auto-saves surface a global "✓ Saved just now" banner (always visible,
+  // whichever field was edited), via the parent.
+  const flashSaved = () => onSaved && onSaved();
+  // Persist a text field on blur, but ONLY when the trimmed value actually
+  // changed — whitespace-only edits don't count and don't flash "saved".
+  const commit = (orig, next, saveFn) => {
+    const a = (orig || "").trim(), b = (next || "").trim();
+    if (a === b) return;
+    saveFn(b); flashSaved();
+  };
+  const copyUrl = async (key, url) => {
+    try { await navigator.clipboard.writeText(url); setCopiedKey(key); setTimeout(()=>setCopiedKey(""), 1600); } catch {}
+  };
   const EMOJIS = ["👍","🔥","🙏","👀"];
   const isLink = task.link && task.link.startsWith("http");
   const phase = statusPhase(task.status);
@@ -2895,11 +3705,19 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
   const required = requiredLinkKeys(task.type);
   // Only the type's required links (plus any already filled) — keeps it focused.
   const linkKeys = Object.keys(LINK_FIELDS).filter(k => required.includes(k) || (links[k]||"").trim());
-  const captionStage = ["Approved","Ready to Post","Posted"].includes(task.status);
   const postStage = ["Ready to Post","Posted"].includes(task.status);
-  const canCaption = (!!me.captions || isAdmin) && task.status !== "Posted";
   const lastFeedback = [...(task.activity||[])].reverse().find(e => e.type==="changes_requested")?.note;
-  const saveLinks = (next) => { setLinksDraft(next); onLinks(next); };
+  // Persist a content-link edit, but only if it's a valid URL (or cleared) AND
+  // actually changed (trailing/whitespace-only edits don't count). The UrlInput
+  // shows the inline "not a valid URL" error itself. #6/#12
+  const saveLinks = (next, key) => {
+    setLinksDraft(next);
+    const v = key ? (next[key] || "").trim() : "";
+    if (key && v && !isValidUrl(v)) return;          // invalid — don't persist junk
+    const prev = key ? (task.links?.[key] || "").trim() : "";
+    if (key && v === prev) return;                    // nothing actually changed
+    onLinks(next); flashSaved();
+  };
   const tm = (t) => typeof t === "number" ? new Date(t).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : t;
 
   // Run the guided action, enforcing its preconditions (same gates as the rules).
@@ -2909,16 +3727,16 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
       const miss = missingLinks({ ...task, links });
       if (miss.length) { setWarn(`Add the required content link${miss.length>1?"s":""} first: ${miss.map(k=>LINK_FIELDS[k]).join(", ")}.`); return; }
     }
-    if (action.needsCaption && !caption.trim()) { setWarn("Write the caption first."); return; }
     if (action.needsPostLink && !postLink.trim()) { setWarn("Add the final post link first."); return; }
+    if (action.needsPostLink && !isValidUrl(postLink.trim())) { setWarn("Please enter a valid URL for the post link."); return; }
     setWarn("");
     const extra = {};
-    if (action.needsCaption) extra.caption = caption.trim();
     if (action.needsPostLink) extra.postLink = postLink.trim();
     onAction(action, extra);
   };
 
   return (
+    <Portal>
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd">
@@ -2959,7 +3777,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
 
           {task.brief && (
             <div className="sb-brief">
-              <div className="sb-brief-h">Creative brief</div>
+              <div className="sb-brief-h">Brief &amp; Notes</div>
               <div className="sb-brief-b">{task.brief}</div>
             </div>
           )}
@@ -2987,7 +3805,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
               <b>QA review</b>
               <div className="sb-btnrow">
                 <button className="sb-btn green compact" onClick={onApprove}>Approve</button>
-                <button className="sb-btn danger compact" onClick={()=>setAskChanges(v=>!v)}>Request changes</button>
+                <button className="sb-btn ghost subtle-danger compact" onClick={()=>setAskChanges(v=>!v)}>Request changes</button>
               </div>
               {askChanges && <>
                 <textarea rows={2} value={changeNote} placeholder="What needs to change?"
@@ -3009,38 +3827,19 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
               return (
                 <div className="sb-field" key={k}>
                   <label>{LINK_FIELDS[k]}{required.includes(k) && <span style={{color:"var(--red)"}}> *</span>}</label>
-                  <div className="sb-inline">
-                    <input value={val} placeholder="Paste a Google Drive link…"
-                      onChange={e=>setLinksDraft({...links, [k]: e.target.value})}
-                      onBlur={()=>saveLinks({ ...links, [k]: (links[k]||"").trim() })} />
-                    {val.startsWith("http") &&
-                      <a className="sb-btn ghost compact" style={{textDecoration:"none",display:"flex",alignItems:"center"}}
-                        href={val} target="_blank" rel="noreferrer noopener">Open</a>}
-                  </div>
+                  <UrlInput value={val} ariaLabel={LINK_FIELDS[k]} placeholder="https://drive.google.com/…"
+                    onChange={nv=>setLinksDraft({...links, [k]: nv})}
+                    onBlur={()=>saveLinks({ ...links, [k]: (links[k]||"").trim() }, k)} />
                 </div>
               );
             })}
           </>}
 
-          {/* Caption — written by the caption/upload team once approved. */}
-          {captionStage && (
-            <div className="sb-field"><label>Caption</label>
-              <textarea rows={3} value={caption} disabled={!canCaption}
-                onChange={e=>setCaptionDraft(e.target.value)} onBlur={()=>onCaption(caption.trim())}
-                placeholder="Write the Instagram caption…" />
-            </div>
-          )}
-
           {/* Final post link — captured when marking as posted. */}
           {postStage && (
             <div className="sb-field"><label>Final post link</label>
-              <div className="sb-inline">
-                <input value={postLink} disabled={task.status==="Posted"}
-                  onChange={e=>setPostLink(e.target.value)} placeholder="Instagram / TikTok post URL…" />
-                {postLink.startsWith("http") &&
-                  <a className="sb-btn ghost compact" style={{textDecoration:"none",display:"flex",alignItems:"center"}}
-                    href={postLink} target="_blank" rel="noreferrer noopener">Open</a>}
-              </div>
+              <UrlInput value={postLink} ariaLabel="Final post link" placeholder="https://instagram.com/…"
+                disabled={task.status==="Posted"} onChange={setPostLink} />
             </div>
           )}
 
@@ -3048,7 +3847,7 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
           {task.status!=="Posted" && (
             <div className="sb-field"><label>Waiting on (leave blank if not blocked)</label>
               <input value={blocked} onChange={e=>setBlocked(e.target.value)}
-                onBlur={()=>onBlocked(blocked.trim())}
+                onBlur={()=>commit(task.blockedOn, blocked, v=>onBlocked(v))}
                 placeholder="e.g. Pastor's approval, David's graphics" />
             </div>
           )}
@@ -3059,7 +3858,23 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
             <Detail k="Shoot date" v={fmt(task.shootDate)} />
             <Detail k="Post date" v={fmt(task.postDate)} />
             {task.notes && <Detail k="Notes" v={task.notes} />}
-            {task.link && <Detail k="Reference" v={isLink ? <a className="sb-link" href={task.link} target="_blank" rel="noreferrer noopener">{task.link}</a> : task.link} />}
+            {task.link && (isLink
+              ? <div className="sb-refrow">
+                  <span className="sb-refrow-k">Reference</span>
+                  <div className="sb-refrow-main">
+                    <a className="sb-refrow-url" href={task.link} target="_blank" rel="noreferrer noopener" title={task.link}>{task.link}</a>
+                    <div className="sb-refrow-actions">
+                      <a className="sb-urlbtn" href={task.link} target="_blank" rel="noreferrer noopener"
+                        title="Open link" aria-label="Open link"><ArrowTopRightOnSquareIcon className="hi hi-sm" aria-hidden="true"/></a>
+                      <button type="button" className={"sb-urlbtn sb-refcopy"+(copiedKey==="ref"?" copied":"")}
+                        title={copiedKey==="ref"?"Copied":"Copy link"} aria-label="Copy link" onClick={()=>copyUrl("ref",task.link)}>
+                        {copiedKey==="ref"
+                          ? <><CheckIcon className="hi hi-sm" aria-hidden="true"/><span className="sb-refcopy-txt">Copied</span></>
+                          : <ClipboardDocumentIcon className="hi hi-sm" aria-hidden="true"/>}</button>
+                    </div>
+                  </div>
+                </div>
+              : <Detail k="Reference" v={task.link} />)}
           </div>
 
           <div className="sb-shead" style={{marginTop:18}}><h2>Crew</h2></div>
@@ -3123,7 +3938,13 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
           {/* Workflow moves through the explicit action above; admins keep a
               tucked-away manual override for corrections (not a duplicate field). */}
           {isAdmin && <>
-            <button className="sb-btn ghost" style={{marginTop:18}} onClick={onEdit}>Edit content details</button>
+            <div className="sb-shead" style={{marginTop:20}}><h2>Admin controls</h2></div>
+            <div className="sb-btnrow">
+              <button className="sb-btn ghost" onClick={onEdit}>Edit details</button>
+              {onDuplicate && <button className="sb-btn ghost" onClick={onDuplicate}>Duplicate</button>}
+              {onArchive && task.status!=="Posted" && <button className="sb-btn ghost" onClick={onArchive}>Mark posted</button>}
+            </div>
+            {onDelete && <button className="sb-btn danger" style={{marginTop:9}} onClick={()=>setConfirmDel(true)}>Delete content</button>}
             <button className="sb-quietlink" style={{marginTop:10}} onClick={()=>setShowOverride(o=>!o)} aria-expanded={showOverride}>
               {showOverride ? "Hide manual status override" : "Change status manually"}</button>
             {showOverride && <div className="sb-field" style={{marginTop:8}}>
@@ -3136,13 +3957,19 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
         </div>
       </div>
     </div>
+    {confirmDel && onDelete && <ConfirmDialog
+      title={`Delete “${task.title}”?`}
+      body="This permanently removes the content — its links, reminders and history. This can't be undone."
+      confirmLabel="Delete content" cancelLabel="Cancel"
+      onConfirm={async ()=>{ await onDelete(); }} onClose={()=>setConfirmDel(false)} />}
+    </Portal>
   );
 }
 function Detail({ k, v }) {
   return (
     <div style={{display:"flex",justifyContent:"space-between",gap:14,padding:"7px 0",borderBottom:"1px solid var(--line)"}}>
       <span style={{fontSize:12.5,color:"var(--muted)",fontWeight:600,flex:"none"}}>{k}</span>
-      <span style={{fontSize:13.5,textAlign:"right"}}>{v}</span>
+      <span style={{fontSize:13.5,textAlign:"right",minWidth:0,overflow:"hidden"}}>{v}</span>
     </div>
   );
 }
@@ -3229,7 +4056,6 @@ function ReminderSummary({ reminders, defaults, postDate, onCustomize }) {
 }
 
 function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
-  useLockBody();
   const rem = reminders || [];
   const [openId, setOpenId] = useState(null);
   useEffect(() => {
@@ -3248,6 +4074,7 @@ function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
   const sorted = [...rem].sort((a,b)=>remChrono(a)-remChrono(b));
   const isDefault = sameSchedule(rem, defaults);
   return (
+    <Portal>
     <div className="sb-scrim" onClick={onClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Reminder schedule">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Reminders</b>
@@ -3325,45 +4152,107 @@ function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
 function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, onAuto }) {
-  useLockBody();
   const [f, setF] = useState(() => {
-    const base = task ? { ...task } : {
-      title:"", type:"Reel", location:"828", owner:users[0]?.name||"", ownerSuggested:"",
+    // Edit the RAW stored title (not the Title-Cased display value), and never
+    // carry the display-only `_rawTitle` field into the saved document.
+    const { _rawTitle, ...editable } = task || {};
+    const base = task ? { ...editable, title: _rawTitle ?? task.title } : {
+      title:"", type:"", location:"", owner:"", ownerSuggested:"",   // #1/#2 — nothing pre-selected
       shootDate:"", postDate:"", status:"Planned", priority:"Medium",
       blockedOn:"", brief:"", relatedEvent:"", link:"", notes:"", support:[], links:{},
       ...(prefill || {}),
     };
+    // #11 — merge legacy "Creative brief" + "Notes" into one "Brief & Notes" field.
+    if (task && task.notes && !String(base.brief || "").includes(task.notes))
+      base.brief = [base.brief, task.notes].filter(Boolean).join("\n\n");
+    base.notes = "";
     if (!base.reminders || !base.reminders.length)
       base.reminders = (defaultReminders && defaultReminders.length) ? defaultReminders : DEFAULT_REMINDERS;
     return base;
   });
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
-  const valid = f.title.trim() && f.location && f.type && f.owner;
+  const [attempted, setAttempted] = useState(false);   // #5 — surface validation only after a save attempt
+  // #10 — shoot-based types (Reel/Photography) need a shoot date + location;
+  // graphics types (Poster) don't, so those inputs clear/disable.
+  const isShoot = isShootType(f.type);
+  const setType = (t) => setF(p => ({ ...p, type:t,
+    ...(isShootType(t) ? {} : { shootDate:"", location:"" }) }));
   const [remOpen, setRemOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [crewWarn, setCrewWarn] = useState(false);
   const remDefaults = (defaultReminders && defaultReminders.length) ? defaultReminders : DEFAULT_REMINDERS;
+  const hasOwner = f.owner && f.owner !== "Pending";
+  // #1 — only AVAILABLE people can be chosen as owner, but keep an already-set
+  // (now-unavailable) owner visible on an existing task so it still displays.
+  const ownerOptions = useMemo(() => {
+    const avail = users.filter(isAvailable);
+    if (hasOwner && !avail.some(u => u.name === f.owner)) {
+      const cur = users.find(u => u.name === f.owner);
+      if (cur) return [cur, ...avail];
+    }
+    return avail;
+  }, [users, f.owner]);
+  // #5 — one clear reason the form can't be saved yet (empty when it's valid).
+  const validationMsg =
+    !f.title.trim() ? "Add a content title."
+    : !f.type ? "Select a content type."
+    : !f.owner ? "Select an owner."
+    : (isShoot && !f.location) ? "Select a location."
+    : (isShoot && !f.shootDate) ? "Set a shoot date."
+    : !f.postDate ? "Set a post date."
+    : (f.link && !isValidUrl(f.link)) ? "The reference link isn't a valid URL."
+    : "";
+  const valid = !validationMsg;
+  // Dirty = the form differs from the snapshot taken on first render. Compared
+  // by value, so focus/blur/formatting don't trip it; a successful save closes
+  // the editor (unmount) before this could warn.
+  const initial = useRef(JSON.stringify(f));
+  const isDirty = JSON.stringify(f) !== initial.current;
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
+  const drag = useSheetDrag(requestClose);
+  const doSave = async (withSoloOwner) => {
+    // #2 — with no crew, the owner becomes the sole lead (Lead Designer / Content Lead).
+    const payload = withSoloOwner && hasOwner ? { ...f, support: [soloCrewFor(f.type, f.owner)] } : f;
+    setSaving(true);
+    try { await onSave(payload); } catch { setSaving(false); }   // success unmounts the editor
+  };
+  const trySave = () => {
+    setAttempted(true);
+    if (!valid) return;   // keep the button enabled; the footer shows the reason
+    // #2 — no support crew → confirm the owner will work alone before saving.
+    if ((f.support || []).length === 0 && hasOwner) { setCrewWarn(true); return; }
+    doSave(false);
+  };
   return (
-    <div className="sb-scrim" onClick={onClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
+    <Portal>
+    <div className="sb-scrim" onClick={requestClose}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} style={drag.sheetStyle}>
+        <div className="sb-grab" {...drag.handleProps}><span/></div>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{task?"Edit content":"Plan content"}</b>
-          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           <div className="sb-sub" style={{marginTop:0}}>Plan a piece of content. The team adds the deliverable links later, when it's ready for QA.</div>
-          <div className="sb-field"><label>Content title</label>
+          <div className="sb-field"><label>Content title<span className="sb-req" aria-hidden="true">*</span></label>
             <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Sunday welcome reel" /></div>
-          <div className="sb-btnrow">
-            <div className="sb-field" style={{flex:1}}><label>Type</label>
-              <select value={f.type} onChange={e=>set("type",e.target.value)}>{TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
-            <div className="sb-field" style={{flex:1}}><label>Location</label>
-              <select value={f.location} onChange={e=>set("location",e.target.value)}><option>479</option><option>828</option><option>Both</option></select></div>
+          <div className="sb-formrow">
+            <div className="sb-field"><label>Type<span className="sb-req" aria-hidden="true">*</span></label>
+              <select value={f.type} onChange={e=>setType(e.target.value)}>
+                <option value="" disabled>Select content type</option>
+                {TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+            <div className="sb-field"><label>Location{isShoot && <span className="sb-req" aria-hidden="true">*</span>}</label>
+              <select value={f.location} disabled={!isShoot} onChange={e=>set("location",e.target.value)} title={!isShoot?"Location applies to shoot-based content only":undefined}>
+                <option value="">Select location</option><option>479</option><option>828</option><option>Both</option></select></div>
           </div>
-          <div className="sb-field"><label>Owner: who brings the idea / leads</label>
-            <select value={f.owner||"Pending"} onChange={e=>set("owner",e.target.value)}>
+          <div className="sb-field"><label>Owner: who brings the idea / leads<span className="sb-req" aria-hidden="true">*</span></label>
+            <select value={f.owner||""} onChange={e=>set("owner",e.target.value)}>
+              <option value="" disabled>Select owner</option>
               <option value="Pending">Pending: unassigned</option>
-              {users.map(u=><option key={u.id}>{u.name}</option>)}</select>
+              {ownerOptions.map(u=><option key={u.id}>{u.name}</option>)}</select>
             {f.owner==="Pending" && f.ownerSuggested && (() => {
               const m = matchUser(f.ownerSuggested, users);
               return m
@@ -3373,13 +4262,14 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
                 : <div className="sb-sub" style={{marginTop:6}}>From the sheet: “{f.ownerSuggested}” (no matching account yet)</div>;
             })()}
           </div>
-          <div className="sb-field"><label>Creative brief: what are we making &amp; why</label>
-            <textarea rows={3} value={f.brief||""} onChange={e=>set("brief",e.target.value)}
-              placeholder="Objective, key message, deliverables, references / creative direction…" /></div>
-          <div className="sb-btnrow">
-            <div className="sb-field" style={{flex:1}}><label>Shoot date</label>
-              <input type="date" value={f.shootDate} onChange={e=>set("shootDate",e.target.value)} /></div>
-            <div className="sb-field" style={{flex:1}}><label>Post date</label>
+          <div className="sb-field"><label>Brief &amp; Notes</label>
+            <textarea rows={4} value={f.brief||""} onChange={e=>set("brief",e.target.value)}
+              placeholder="Objectives, key message, references, notes, links, or anything the team should know." /></div>
+          <div className="sb-formrow">
+            <div className="sb-field"><label>Shoot date{isShoot && <span className="sb-req" aria-hidden="true">*</span>}</label>
+              <input type="date" value={f.shootDate||""} disabled={!isShoot} onChange={e=>set("shootDate",e.target.value)}
+                title={!isShoot?"Shoot date applies to shoot-based content only":undefined} /></div>
+            <div className="sb-field"><label>Post date<span className="sb-req" aria-hidden="true">*</span></label>
               <input type="date" value={f.postDate} onChange={e=>set("postDate",e.target.value)} /></div>
           </div>
           <div className="sb-field" style={{maxWidth:200}}><label>Priority</label>
@@ -3387,14 +4277,14 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
           <div className="sb-field"><label>Related event (optional)</label>
             <input value={f.relatedEvent} onChange={e=>set("relatedEvent",e.target.value)} placeholder="e.g. Easter Service" /></div>
           <div className="sb-field"><label>Reference link (optional)</label>
-            <input value={f.link} onChange={e=>set("link",e.target.value)} placeholder="Idea / inspiration / reference" /></div>
-          <div className="sb-field"><label>Notes (optional)</label>
-            <textarea rows={2} value={f.notes} onChange={e=>set("notes",e.target.value)} /></div>
+            <UrlInput value={f.link} ariaLabel="Reference link"
+              placeholder="https://…  (idea / inspiration / reference)"
+              onChange={v=>set("link",v)} /></div>
 
           <div className="sb-shead"><h2>Support crew</h2>
             <button className="link" onClick={()=>set("support", onAuto(f))}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign</button></div>
           {(f.support||[]).length===0
-            ? <div className="sb-sub">No crew yet. Tap Auto-assign or add below.</div>
+            ? <div className="sb-sub">Select support crew (optional) — tap Auto-assign or add below.</div>
             : (f.support||[]).map((s,i)=>{
               const pending = s.name==="Pending";
               const m = pending && s.suggested ? matchUser(s.suggested, users) : null;
@@ -3422,36 +4312,54 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
           </div>
           {remOpen && <ReminderSheet reminders={f.reminders} defaults={remDefaults}
             postDate={f.postDate} onChange={(r)=>set("reminders",r)} onClose={()=>setRemOpen(false)} />}
-
-          <button className="sb-btn" style={{marginTop:14}} disabled={!valid} onClick={()=>onSave(f)}>{task?"Save changes":"Create task"}</button>
-          {!valid && <div className="sb-sub" style={{marginTop:8,textAlign:"center"}}>Title, type, location and owner are required.</div>}
+        </div>
+        {/* #7 — sticky footer: an optional validation message (only after a save
+            attempt, and only while invalid) above a full-width Save button. */}
+        <div className="sb-sheetfoot">
+          {attempted && validationMsg &&
+            <div className="sb-footmsg" role="alert">{validationMsg}</div>}
+          <button className="sb-btn sb-footbtn" disabled={saving || (task && !isDirty)} onClick={trySave}>
+            {saving ? "Saving…" : task ? "Save changes" : "Create content"}</button>
         </div>
       </div>
     </div>
+    {crewWarn && <ConfirmDialog
+      title="No support crew assigned"
+      body={`${f.owner} will be responsible for ${soloCrewVerb(f.type)} alone.`}
+      confirmLabel="Continue" cancelLabel="Go back" tone="warning" danger={false}
+      busyLabel="Saving…" onConfirm={()=>doSave(true)} onClose={()=>setCrewWarn(false)} />}
+    {leaveGuard}
+    </Portal>
   );
 }
 function AddCrew({ users, onAdd }) {
-  const [n,setN] = useState(users[0]?.name||""); const [r,setR] = useState("shoot");
+  // #4 — can't manually assign someone who's marked unavailable.
+  const assignable = (users || []).filter(isAvailable);
+  // #3 — nothing pre-selected: the user intentionally picks a member AND a role.
+  const [n,setN] = useState(""); const [r,setR] = useState("");
   const [label,setLabel] = useState("");
-  useEffect(()=>{ if(!n && users[0]) setN(users[0].name); },[users]); // keep valid default
   const isOther = r === "other";
-  const canAdd = !!n && (!isOther || label.trim());      // "Other" requires a custom label
+  const canAdd = !!n && !!r && (!isOther || label.trim());   // both required; "Other" also needs a label
   const add = () => {
     onAdd(isOther ? { name:n, role:"other", label:label.trim() } : { name:n, role:r });
-    setLabel("");
+    setN(""); setR(""); setLabel("");
   };
-  const sel = {flex:2,border:"1px solid var(--line)",borderRadius:11,padding:11,background:"var(--card)"};
   return (
     <div style={{marginTop:8}}>
-      <div className="sb-btnrow">
-        <select style={sel} value={n} onChange={e=>setN(e.target.value)}>{users.map(u=><option key={u.id}>{u.name}</option>)}</select>
-        <select style={sel} value={r} onChange={e=>setR(e.target.value)}>
-          {CREW_ROLES.map(x=><option key={x} value={x}>{roleLabel(x)}</option>)}</select>
-        <button className="sb-btn compact" disabled={!canAdd} onClick={add}>Add</button>
+      <div className="sb-formrow sb-addcrew">
+        <div className="sb-field"><label>Crew member</label>
+          <select value={n} onChange={e=>setN(e.target.value)}>
+            <option value="" disabled>Select team member</option>
+            {assignable.map(u=><option key={u.id}>{u.name}</option>)}</select></div>
+        <div className="sb-field"><label>Role</label>
+          <select value={r} onChange={e=>setR(e.target.value)}>
+            <option value="" disabled>Select role</option>
+            {CREW_ROLES.map(x=><option key={x} value={x}>{roleLabel(x)}</option>)}</select></div>
       </div>
-      {isOther && <input value={label} onChange={e=>setLabel(e.target.value)}
-        placeholder="Custom task, e.g. Caption Writing, Voiceover, Lighting"
-        style={{width:"100%",marginTop:8,border:"1px solid var(--line)",borderRadius:11,padding:11,background:"var(--card)",color:"var(--ink)"}} />}
+      {isOther && <input value={label} onChange={e=>setLabel(e.target.value)} className="sb-addcrew-label"
+        placeholder="Custom task, e.g. Caption Writing, Voiceover, Lighting" />}
+      <button className="sb-btn ghost compact" style={{marginTop:8}} disabled={!canAdd} onClick={add}>
+        <PlusIcon className="hi hi-sm" aria-hidden="true"/> Add crew</button>
     </div>
   );
 }
@@ -3465,14 +4373,19 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
     skills: user.skills||[], location: user.location||[], role: user.role||"member",
     deprioritize: !!user.deprioritize, limited: !!user.limited, manualSchedule: !!user.manualSchedule,
     qa: !!user.qa, captions: !!user.captions, name: user.name||"",
-    department: user.department||"", lead: !!user.lead,
+    departments: userDepartments(user), lead: !!user.lead,   // #3 — multiple departments
+    available: user.available !== false,                     // #4 — available for assignment (default on)
   });
   const [resetMsg, setResetMsg] = useState("");
   const set = (k,v)=>setF(p=>({...p,[k]:v}));
   const toggleSkill = (s)=>set("skills", f.skills.includes(s)?f.skills.filter(x=>x!==s):[...f.skills,s]);
   const toggleLoc = (l)=>set("location", f.location.includes(l)?f.location.filter(x=>x!==l):[...f.location,l]);
+  const toggleDept = (d)=>set("departments", f.departments.includes(d)?f.departments.filter(x=>x!==d):[...f.departments,d]);
   const valid = f.name.trim() && f.skills.length && f.location.length;
   const SK = ["shoot","edit","coordinate","design","shadow"];
+  const initial = useRef(JSON.stringify(f));
+  const isDirty = JSON.stringify(f) !== initial.current;
+  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
 
   const payload = () => ({ id:user.id, ...f });
   const reset = async () => {
@@ -3481,14 +4394,15 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
   };
 
   return (
-    <div className="sb-scrim" onClick={onClose}>
+    <Portal>
+    <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{isPending?"Approve "+user.name:"Edit "+user.name}</b>
-          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           {isPending && <div className="sb-banner">Set their skills and location, then approve to let them in.</div>}
 
-          <div className="sb-field"><label>Name</label>
+          <div className="sb-field"><label>Name<span className="sb-req" aria-hidden="true">*</span></label>
             <input value={f.name} onChange={e=>set("name",e.target.value)} /></div>
           <div className="sb-field"><label>Email (login)</label>
             <input value={user.email} disabled style={{opacity:.7}} /></div>
@@ -3498,19 +4412,25 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
               <option value="member">Member: can view all tasks</option>
               <option value="admin">Admin: full control</option></select></div>
 
-          <div className="sb-field"><label>Department</label>
-            <select value={f.department} onChange={e=>set("department",e.target.value)}>
-              <option value="">No department yet</option>
-              {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
+          <div className="sb-field"><label>Departments <span className="sb-optional">(one or more)</span></label>
+            <div className="sb-seg" style={{flexWrap:"wrap"}}>
+              {DEPARTMENTS.map(d => <button key={d} type="button"
+                className={"sb-segbtn"+(f.departments.includes(d)?" on":"")}
+                aria-pressed={f.departments.includes(d)} onClick={()=>toggleDept(d)}>{d}</button>)}</div></div>
 
-          <div className="sb-field"><label>Skills (what they can do)</label>
+          <div className="sb-field"><label>Skills (what they can do)<span className="sb-req" aria-hidden="true">*</span></label>
             <div className="sb-seg" style={{flexWrap:"wrap"}}>
               {SK.map(s=>(<button key={s} className={"sb-segbtn"+(f.skills.includes(s)?" on":"")}
                 onClick={()=>toggleSkill(s)}>{roleLabel(s)}</button>))}</div></div>
 
-          <div className="sb-field"><label>Service location</label>
+          <div className="sb-field"><label>Service location<span className="sb-req" aria-hidden="true">*</span></label>
             <div className="sb-seg">{["479","828"].map(l=>(
               <button key={l} className={"sb-segbtn"+(f.location.includes(l)?" on":"")} onClick={()=>toggleLoc(l)}>{l}</button>))}</div></div>
+
+          <div className="sb-field"><label>Availability</label>
+            <Toggle label="Available for assignment" v={f.available} on={()=>set("available",!f.available)} />
+            {!f.available && <div className="sb-sub" style={{marginTop:4}}>Excluded from auto-assignment and can't be manually assigned until turned back on.</div>}
+          </div>
 
           <div className="sb-field"><label>Roles &amp; permissions</label>
             <Toggle label="Department lead: leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
@@ -3535,6 +4455,8 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
         </div>
       </div>
     </div>
+    {leaveGuard}
+    </Portal>
   );
 }
 function Toggle({ label, v, on }) {

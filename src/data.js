@@ -17,6 +17,16 @@ export function isValidEmail(raw) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 
+// A stored link must be a real http(s) URL — never plain text. Used to guard
+// every URL input (content links, deliverables, references, drive links, etc.).
+export function isValidUrl(raw) {
+  const s = (raw || "").trim();
+  if (!s || /\s/.test(s)) return false;
+  if (!/^https?:\/\//i.test(s)) return false;         // must start http:// or https://
+  try { const u = new URL(s); return !!u.hostname && u.hostname.includes("."); }
+  catch { return false; }
+}
+
 // Reminder-schedule building blocks (v1.1). Mirrors the server default in
 // functions/lib.js; the server falls back to this if settings aren't set.
 export const REMINDER_CHANNELS = ["in-app", "push", "email"];
@@ -42,7 +52,7 @@ export const nextStep = (status) =>
      "In Progress": "Submit content for QA",
      "In Review": "Awaiting QA approval",
      "Changes Requested": "Revise & resubmit for QA",
-     "Approved": "Write the caption",
+     "Approved": "Mark ready to post",
      "Ready to Post": "Post to Instagram",
      "Posted": "Done, posted" }[status] || "");
 
@@ -91,7 +101,23 @@ export function occurrenceContentCount(occ, tasks) {
 // support-crew role code → human label.
 export const roleLabel = (r) =>
   ({ shoot:"Shooting", edit:"Editing", coordinate:"Getting People",
-     design:"Graphic Design", shadow:"Shadowing", other:"Other" }[r] || r);
+     design:"Graphic Design", shadow:"Shadowing", other:"Other",
+     contentlead:"Content Lead", leaddesign:"Lead Designer" }[r] || r);
+
+// When a piece of content is saved with NO support crew, the owner takes on the
+// lead role themselves. Graphics (Poster) → Lead Designer; everything else
+// (Reel/Video, Photography) → Content Lead. Used by the "produce it alone?"
+// confirmation to add the owner as the sole crew member.
+export const soloCrewRole = (type) => (type === "Poster" ? "leaddesign" : "contentlead");
+export function soloCrewFor(type, ownerName) {
+  return { name: ownerName, role: soloCrewRole(type) };
+}
+// The verb used in the solo-owner warning, by type ("designing this graphic"
+// vs "producing this reel").
+export const soloCrewVerb = (type) =>
+  type === "Poster" ? "designing this graphic"
+  : type === "Photography" ? "shooting this content"
+  : "producing this reel";
 
 // The crew task picker; "other" carries a free-text custom label on the entry.
 export const CREW_ROLES = ["shoot", "edit", "coordinate", "design", "shadow", "other"];
@@ -115,8 +141,11 @@ export const LINK_FIELDS = {
   video: "Video link (Drive)",
   photos: "Photography folder / album",
 };
-// Content types and their chip colour.
+// Content types and their chip colour. Shoot-based types (Reel, Photography)
+// need a shoot date + location; the rest (Poster) are design/graphics.
 export const TYPES = ["Reel", "Poster", "Photography"];
+export const SHOOT_TYPES = ["Reel", "Photography"];
+export const isShootType = (t) => SHOOT_TYPES.includes(t);
 export const typeClass = (t) =>
   ({ Reel:"chip-reel", Poster:"chip-poster", Photography:"chip-photo" }[t] || "chip-reel");
 
@@ -159,7 +188,7 @@ export const isApprovalEvent = (e) =>
 
 /* The single guided action this user can take next, given the task's status
    and their role — the heart of the system-driven workflow. Returns
-   { label, to, kind, requiresLinks?, needsCaption?, needsPostLink? } or null
+   { label, to, kind, requiresLinks?, needsPostLink? } or null
    (no action for this person right now; e.g. they're waiting on someone else).
    QA approve / request-changes is handled by its own panel, not here. */
 export function workflowAction(task, me) {
@@ -175,7 +204,7 @@ export function workflowAction(task, me) {
     case "Changes Requested":
       return mine ? { label: "Resubmit for QA", to: "In Review", kind: "qa_sent", requiresLinks: true } : null;
     case "Approved":
-      return isCaption ? { label: "Mark ready to post", to: "Ready to Post", kind: "ready", needsCaption: true } : null;
+      return isCaption ? { label: "Mark ready to post", to: "Ready to Post", kind: "ready" } : null;
     case "Ready to Post":
       return isCaption ? { label: "Mark as posted", to: "Posted", kind: "posted", needsPostLink: true } : null;
     default: // In Review (QA panel), Posted (done)
@@ -197,13 +226,62 @@ export const fmt = (s) => { if(!s) return "-"; const d=new Date(s+"T00:00:00");
   return d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); };
 export const daysTo = (s) => { if(!s) return null; const d=new Date(s+"T00:00:00");
   return Math.round((d-today())/86400000); };
+/* ===================================================================
+   Content-title formatting — proper Title Case for CONTENT / TASK titles
+   only (never names, emails, URLs, file names, descriptions, comments,
+   captions). Preserves apostrophes, hyphens and punctuation; keeps known
+   acronyms/platforms in their canonical casing; keeps minor words lowercase
+   except at the start or end. Idempotent (safe to apply to an already-formatted
+   title). Mirrored in functions/lib.js for notification generation — keep both
+   copies in sync.
+   =================================================================== */
+const TITLE_SMALL = new Set(["a","an","and","as","at","but","by","en","for","if",
+  "in","nor","of","on","or","per","the","to","v","vs","via","with"]);
+const TITLE_SPECIAL = { qa:"QA", csv:"CSV", ifc:"IFC", pwa:"PWA",
+  instagram:"Instagram", youtube:"YouTube", ig:"IG", tiktok:"TikTok" };
+
+// Case one whitespace-free token, preserving leading/trailing punctuation.
+function titleCaseToken(word, forceCap) {
+  if (!word) return word;
+  const lower = word.toLowerCase();
+  const m = lower.match(/^([^a-z0-9]*)([a-z0-9](?:.*[a-z0-9])?)([^a-z0-9]*)$/);
+  if (!m) return word;                                   // pure punctuation
+  const [, pre, core, post] = m;
+  if (TITLE_SPECIAL[core]) return pre + TITLE_SPECIAL[core] + post;   // QA, CSV, Instagram…
+  if (!forceCap && TITLE_SMALL.has(core)) return pre + core + post;   // minor word, mid-title
+  return pre + core.charAt(0).toUpperCase() + core.slice(1) + post;
+}
+
+// A space-delimited word may be hyphenated (behind-the-scenes) — case each part,
+// forcing the outer parts to capitalise.
+function titleCaseWord(word, isFirst, isLast) {
+  if (word.indexOf("-") === -1) return titleCaseToken(word, isFirst || isLast);
+  const parts = word.split("-");
+  return parts.map((p, i) =>
+    titleCaseToken(p, i === 0 || i === parts.length - 1)
+  ).join("-");
+}
+
+export function formatContentTitle(title) {
+  const s = (title == null ? "" : String(title)).trim();
+  if (!s) return "";
+  const toks = s.split(/(\s+)/);                          // keep whitespace tokens
+  const wordPos = [];
+  toks.forEach((t, i) => { if (/\S/.test(t)) wordPos.push(i); });
+  const first = wordPos[0], last = wordPos[wordPos.length - 1];
+  return toks.map((t, i) => /\S/.test(t) ? titleCaseWord(t, i === first, i === last) : t).join("");
+}
 
 /* ---- auto-assign (mirrors the Apps Script rules) ---- */
 export function autoAssign(task, users) {
-  if (task.type === "Poster") {
+  users = (users || []).filter(isAvailable); // #4: never auto-assign unavailable people
+  if (!isShootType(task.type)) {   // Poster (graphics) → a designer
     const ownerU = users.find(u => u.name===task.owner);
     const ownerIsDesigner = ownerU && (ownerU.skills||[]).includes("design");
-    if (ownerIsDesigner && task.owner!=="David") return [{name:"David",role:"design"}];
+    if (ownerIsDesigner && task.owner!=="David") {
+      const david = users.find(u=>u.name==="David");
+      return david ? [{name:"David",role:"design"}] : [];
+    }
     if (!ownerIsDesigner) {
       const d = users.find(u=>u.name==="David") || users.find(u=>(u.skills||[]).includes("design"));
       return d ? [{name:d.name,role:"design"}] : [];
@@ -679,7 +757,7 @@ export function searchPeople(users, query) {
   if (!q) return [];
   const terms = q.split(/\s+/);
   const haystack = (u) => [
-    u.name, u.email, u.role, u.status, u.department,
+    u.name, u.email, u.role, u.status, ...userDepartments(u),
     ...(u.skills || []), ...(u.location || []),
   ].join(" ").toLowerCase();
   return (users || []).filter((u) => { const h = haystack(u); return terms.every((term) => h.includes(term)); });
@@ -688,9 +766,26 @@ export function searchPeople(users, query) {
 /* ===================================================================
    People management (Admin → People)
    =================================================================== */
+// Departments are org groupings only. "Caption & Upload" and "QA" are NOT
+// departments — they're capabilities, already surfaced as Roles & permissions
+// toggles (user.captions / user.qa), so keeping them here would duplicate.
 export const DEPARTMENTS = [
-  "Graphic Design", "Content Creation", "Videography", "Photography", "Caption & Upload", "QA",
+  "Graphic Design", "Content Creation", "Videography", "Photography",
 ];
+
+// A user may belong to MULTIPLE departments. Stored as `departments: [...]`,
+// but older docs used a single `department` string — normalise both to an
+// array so every read path is consistent.
+export function userDepartments(user) {
+  if (!user) return [];
+  if (Array.isArray(user.departments)) return user.departments.filter(Boolean);
+  return user.department ? [user.department] : [];
+}
+
+// Availability for assignment (#4). Missing = available (opt-out, not opt-in),
+// so existing users keep working. When false: excluded from auto-assign and
+// blocked from manual assignment; the Team page shows "Unavailable".
+export const isAvailable = (user) => !(user && user.available === false);
 
 // Permission/role chips shown on a person card.
 export function roleChips(user) {
@@ -701,6 +796,17 @@ export function roleChips(user) {
   if (user.captions) chips.push("Captions");
   if (!chips.length) chips.push("Member");
   return chips;
+}
+
+// Workload badge for the Team Load cards (presentation only — thresholds are
+// UI buckets, not a change to how load itself is computed). Unavailable always
+// wins; otherwise it's driven by the active-task count.
+export function workloadBadge(user, activeCount) {
+  if (!isAvailable(user)) return { key: "unavail", label: "Unavailable", tone: "neutral" };
+  if (activeCount === 0) return { key: "available", label: "Available", tone: "green" };
+  if (activeCount <= 2) return { key: "light", label: "Light", tone: "blue" };
+  if (activeCount <= 5) return { key: "moderate", label: "Moderate", tone: "amber" };
+  return { key: "high", label: "High", tone: "red" };
 }
 
 // How many active (non-Posted) tasks a person owns or is crew on.
@@ -717,7 +823,8 @@ export const PEOPLE_FILTERS = [
   { id: "captions", label: "Captions",       test: (u) => !!u.captions },
   { id: "479",      label: "479",            test: (u) => (u.location || []).includes("479") },
   { id: "828",      label: "828",            test: (u) => (u.location || []).includes("828") },
-  { id: "nodept",   label: "No department",  test: (u) => !u.department },
+  { id: "unavail",  label: "Unavailable",    test: (u) => !isAvailable(u) },
+  { id: "nodept",   label: "No department",  test: (u) => userDepartments(u).length === 0 },
 ];
 
 export function applyPeopleFilter(users, id) {
@@ -737,7 +844,7 @@ export function groupPeople(users) {
   };
   take("Admins", (u) => u.role === "admin");
   take("Department Leads", (u) => u.lead);
-  DEPARTMENTS.forEach((d) => take(d, (u) => u.department === d));
+  DEPARTMENTS.forEach((d) => take(d, (u) => userDepartments(u).includes(d)));
   take("No department", () => true);
   return out;
 }

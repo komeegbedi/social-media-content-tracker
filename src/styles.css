@@ -9,42 +9,42 @@
    surfaces migrate slice-by-slice.
    =================================================================== */
 :root{
-  /* -- color: neutrals -- */
-  --background:#F7F6FA;          /* canvas (design_changes.md) */
-  --background-muted:#F0EEF6;
-  --surface:#FFFFFF;
-  --surface-elevated:#FFFFFF;
-  --sidebar:#FFFFFF;
-  --surface-muted:#F0EEF6;
-  --text-primary:#211B32;
-  --text-secondary:#777187;
-  --text-muted:#8B849C;
-  --border:#E6E2EC;
-  --border-strong:#D6D1E0;
-  /* -- color: brand -- */
-  --primary:#6750C8;
-  --primary-hover:#5941BA;
-  --primary-pressed:#4C3AA4;
-  --primary-muted:#EEEAFE;
-  /* -- color: semantic -- */
-  --success:#258A5B;   --success-muted:#E3F4EC;
-  --warning:#C88513;   --warning-muted:#FBF0DA;
-  --danger:#D24F52;    --danger-muted:#FBE6E6;
-  --info:#3974B9;      --info-muted:#E6EEF8;
-  --focus-ring:#8D7FE0;
-  --overlay:rgba(33,27,51,.45);
+  /* -- color: neutrals (Linear-grade; colour only ever communicates meaning) -- */
+  --background:#F7F7F8;          /* page */
+  --background-muted:#F1F1F3;    /* secondary surface */
+  --surface:#FFFFFF;            /* cards */
+  --surface-elevated:#FFFFFF;   /* sheets, popovers */
+  --sidebar:#FAFAFB;
+  --surface-muted:#F1F1F3;
+  --text-primary:#18181B;
+  --text-secondary:#6B7280;
+  --text-muted:#9CA3AF;
+  --border:#E8E8EC;             /* clean hairline */
+  --border-strong:#DCDCE1;
+  /* -- color: brand (deep indigo; used sparingly, solid — never gradient) -- */
+  --primary:#5E6AD2;
+  --primary-hover:#525DBE;
+  --primary-pressed:#4A54AC;
+  --primary-muted:#EEEFFB;
+  /* -- color: semantic (muted; meaning only) -- */
+  --success:#16A34A;   --success-muted:#E7F6EC;
+  --warning:#F59E0B;   --warning-muted:#FEF3E2;
+  --danger:#EF4444;    --danger-muted:#FDECEC;
+  --info:#3B82F6;      --info-muted:#E9F0FE;
+  --focus-ring:#8E97E4;
+  --overlay:rgba(9,9,11,.40);
   /* -- typography scale -- */
   --text-page:28px; --text-section:21px; --text-card:16px;
   --text-body:14.5px; --text-support:13px; --text-label:12px; --text-meta:12px;
   /* -- spacing scale -- */
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px;
   --sp-6:24px; --sp-7:32px; --sp-8:40px; --sp-9:48px; --sp-10:64px;
-  /* -- radius scale -- */
-  --r-control:10px; --r-input:12px; --r-card:12px; --r-panel:16px;
-  --r-modal:22px; --r-pill:999px;
-  /* -- elevation (soft, low opacity; prefer borders + spacing) -- */
-  --shadow-sm:0 1px 2px rgba(33,27,51,.05),0 2px 8px rgba(33,27,51,.05);
-  --shadow-lg:0 2px 6px rgba(33,27,51,.07),0 12px 32px rgba(33,27,51,.10);
+  /* -- radius scale (Linear: 8 / 12 / 16; nothing larger but the floating nav) -- */
+  --r-control:8px; --r-input:8px; --r-card:12px; --r-panel:16px;
+  --r-modal:16px; --r-pill:999px;
+  /* -- elevation (almost invisible; cards read as elevated via contrast) -- */
+  --shadow-sm:0 1px 2px rgba(0,0,0,.04);
+  --shadow-lg:0 4px 12px rgba(0,0,0,.06);
   /* -- motion (v1.2 shared system) -- */
   --motion-instant:100ms; --motion-fast:160ms; --motion-standard:220ms; --motion-slow:280ms;
   --ease-standard:cubic-bezier(.22,1,.36,1); --ease-enter:cubic-bezier(.16,1,.3,1); --ease-exit:cubic-bezier(.4,0,1,1);
@@ -53,6 +53,9 @@
   --ease-out:var(--ease-standard); --ease-inout:var(--ease-standard);
   /* -- icon sizes -- */
   --icon-xs:14px; --icon-sm:16px; --icon-md:18px; --icon-nav:19px; --icon-empty:40px;
+  /* -- z-index layering system (one source of truth; never hand-pick numbers) -- */
+  --z-base:0; --z-sticky:20; --z-navigation:40; --z-popover:50;
+  --z-drawer-backdrop:70; --z-drawer:80; --z-modal-backdrop:90; --z-modal:100; --z-toast:110;
   /* -- layout -- */
   --side:248px;
   /* -- legacy aliases (do not use in NEW rules) -- */
@@ -60,7 +63,9 @@
   --ink:var(--text-primary); --muted:var(--text-muted);
   --line:var(--border);
   --violet:var(--primary); --violet-soft:var(--primary-muted); --violet-deep:var(--primary-pressed);
-  --gold:var(--warning); --gold-soft:var(--warning-muted);
+  /* Gold is the LOGO accent — its own hue, used sparingly (logo, greeting,
+     celebrations, milestones). Distinct from the amber `warning` status. */
+  --gold:#C58B1B; --gold-soft:#F5EEDC;
   --green:var(--success); --green-soft:var(--success-muted);
   --amber:var(--warning); --amber-soft:var(--warning-muted);
   --red:var(--danger); --red-soft:var(--danger-muted);
@@ -76,27 +81,30 @@
    and hairline borders rather than heavy shadows. Accent brightens for
    contrast but stays soft; text has three clear steps. */
 [data-theme="dark"]{
-  --background:#0F0C16;          /* canvas */
-  --background-muted:#131019;
-  --sidebar:#14101D;             /* distinct sidebar level */
-  --surface:#191522;             /* cards, rows */
-  --surface-elevated:#211B2D;    /* sheets, drawers, popovers */
-  --surface-muted:#272035;       /* inputs, wells, chips */
-  --text-primary:#F5F2FA;
-  --text-secondary:#A9A2B7;
-  --text-muted:#817A90;
-  --border:#332A42;
-  --border-strong:#443A58;
-  --primary:#9A83EE; --primary-hover:#AD9AF3; --primary-pressed:#8770DC;
-  --primary-muted:#2B2345;
-  --success:#48B981; --success-muted:#132A1F;
-  --warning:#E0A43B; --warning-muted:#302412;
-  --danger:#EC7277;  --danger-muted:#331B1B;
-  --info:#7FA9E6;    --info-muted:#16222F;
-  --focus-ring:#AC9CFF;
-  --overlay:rgba(8,6,13,.62);
-  --shadow-sm:0 1px 2px rgba(0,0,0,.5),0 2px 10px rgba(0,0,0,.35);
-  --shadow-lg:0 4px 12px rgba(0,0,0,.5),0 16px 40px rgba(0,0,0,.55);
+  /* Linear's signature dark scale: near-black base, subtly layered surfaces,
+     blue-grey neutral text, hairline white-alpha borders. */
+  --background:#08090A;          /* app base */
+  --background-muted:#0E0F11;    /* surface layer */
+  --sidebar:#0B0C0D;             /* distinct sidebar level */
+  --surface:#141516;             /* cards, rows */
+  --surface-elevated:#1C1D1F;    /* sheets, drawers, popovers */
+  --surface-muted:#1C1D20;       /* inputs, wells, chips */
+  --text-primary:#F7F8F8;
+  --text-secondary:#8A8F98;
+  --text-muted:#62666D;
+  --border:rgba(255,255,255,.07);
+  --border-strong:rgba(255,255,255,.12);
+  --primary:#6E79E8; --primary-hover:#7C86EC; --primary-pressed:#5E6AD2;   /* Linear indigo, interactive on dark */
+  --primary-muted:#1E2030;
+  --success:#22C55E; --success-muted:#0F2418;
+  --warning:#F59E0B; --warning-muted:#2A2010;
+  --danger:#F87171;  --danger-muted:#2C1616;
+  --info:#5A96F7;    --info-muted:#111E2D;
+  --gold:#D9A63A; --gold-soft:#28210E;
+  --focus-ring:#7C86EC;
+  --overlay:rgba(0,0,0,.66);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.5);
+  --shadow-lg:0 8px 24px rgba(0,0,0,.5);
   color-scheme:dark;
 }
 /* The info banner hardcodes dark-brown text/border; fix it for dark backgrounds. */
@@ -137,8 +145,9 @@ a{color:var(--primary)}
 @media(min-width:900px){
   .sb-side{display:flex;flex-direction:column;width:var(--side);flex:none;height:100%;
     border-right:1px solid var(--line);overflow-y:auto;padding:22px 14px;background:var(--sidebar)}
-  .sb-content{padding-bottom:24px}
-  .sb-content>*{max-width:1000px;padding-left:10px;padding-right:10px}
+  /* Breathing room around the main body — clear of the sidebar and the top. */
+  .sb-content{padding:20px 32px 40px}
+  .sb-content>*{max-width:1040px;padding-left:0;padding-right:0}
 }
 
 .sb-sbrand{letter-spacing:-.015em;font-weight:600;font-size:19px;display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
@@ -147,6 +156,18 @@ a{color:var(--primary)}
 .sb-brandfoot{margin-top:14px;padding-top:11px;border-top:1px solid var(--line);
   display:flex;flex-direction:column;font-size:11px;color:var(--muted);line-height:1.5}
 .sb-brandfoot b{color:var(--ink);font-weight:600;font-size:12px}
+/* Linear-style sidebar "New content" — a subtle FILLED secondary with an accent
+   icon: reads clearly as a button (not a faint outline), still quiet. */
+.sb-newbtn{width:100%;display:inline-flex;align-items:center;justify-content:flex-start;gap:9px;
+  margin-top:16px;padding:8px 11px;min-height:38px;border-radius:var(--r-control);
+  background:var(--surface-muted);border:1px solid var(--border);color:var(--text-primary);
+  font-size:13.5px;font-weight:500;cursor:pointer;box-shadow:var(--shadow-sm);
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-newbtn:hover{border-color:var(--border-strong);background:color-mix(in srgb,var(--primary) 6%,var(--surface-muted))}
+.sb-newbtn:active{transform:scale(.99)}
+.sb-newbtn .hi{width:16px;height:16px;color:var(--primary);flex:none}
 .sb-snav{display:flex;flex-direction:column;gap:3px}
 .sb-snav button{display:flex;align-items:center;gap:11px;background:none;border:none;width:100%;
   padding:11px 12px;border-radius:11px;color:var(--muted);font-size:14px;font-weight:600;text-align:left}
@@ -168,7 +189,7 @@ a{color:var(--primary)}
 /* Mobile header (v1.2): a light translucent glass surface that complements the
    floating bottom nav — not a solid purple block. Profile lives in the bottom
    nav, so only Search + Notifications appear here. */
-.sb-top{flex:0 0 auto;z-index:40;display:flex;align-items:center;justify-content:space-between;
+.sb-top{flex:0 0 auto;z-index:var(--z-sticky);display:flex;align-items:center;justify-content:space-between;
   min-height:54px;padding:calc(8px + env(safe-area-inset-top)) 16px 8px;
   background:var(--background); /* solid fallback for iOS < 16.2 (no color-mix) */
   background:color-mix(in srgb,var(--background) 88%,transparent);
@@ -193,9 +214,9 @@ a{color:var(--primary)}
 .sb-hbtn .hi{width:21px;height:21px}
 
 /* Account drawer (mobile) — bottom sheet from the header avatar */
-.sb-drawer{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+.sb-drawer{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:var(--r-modal) var(--r-modal) 0 0;
   padding:10px 12px calc(20px + env(safe-area-inset-bottom));animation:rise .2s ease}
-@media(min-width:900px){ .sb-drawer{border-radius:20px} }
+@media(min-width:900px){ .sb-drawer{border-radius:var(--r-modal)} }
 .sb-drawer-user{display:flex;align-items:center;gap:12px;padding:10px 10px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
 .sb-drawer-user .nm{font-size:15px;font-weight:600}
 .sb-drawer-user .rl{font-size:12px;color:var(--muted);word-break:break-all}
@@ -209,7 +230,7 @@ a{color:var(--primary)}
   background:var(--card);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
 
 .sb-page{padding:20px 16px 8px}
-@media(min-width:900px){ .sb-page{padding:30px 14px 24px} }
+@media(min-width:900px){ .sb-page{padding:8px 0 24px} }  /* horizontal inset comes from .sb-content now */
 .sb-eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);opacity:.85}
 .sb-h{font-size:30px;font-weight:700;margin:5px 0 6px;line-height:1.1;letter-spacing:-.02em}
 @media(min-width:900px){ .sb-h{font-size:38px} }
@@ -228,12 +249,20 @@ a{color:var(--primary)}
 .dot-amber{color:var(--amber)} .dot-green{color:var(--green)}
 .dot-blue{color:var(--blue)} .dot-red{color:var(--red)} .dot-violet{color:var(--violet)}
 
-.sb-shead{display:flex;align-items:baseline;justify-content:space-between;margin:30px 2px 12px}
+.sb-shead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:30px 2px 12px}
 .sb-shead h2{font-size:19px;font-weight:600;letter-spacing:-.01em}
 @media(min-width:900px){ .sb-shead h2{font-size:21px} }
-.sb-shead .link{font-size:12.5px;color:var(--violet);font-weight:600;background:none;border:none;padding:0}
+.sb-shead .link{font-size:12.5px;color:var(--violet);font-weight:600;background:none;border:none;padding:0;flex:none}
 .sb-shead .link.subtle{color:var(--muted);font-weight:500;font-size:12px}
 .sb-shead-strong h2{font-size:19px;font-weight:700}
+/* Section heading with an optional count badge — title + badge stay grouped
+   (never concatenated) and the right-hand link stays aligned. Works at every
+   width; the badge is a real chip, not stray text next to the title. */
+.sb-shead-main{display:inline-flex;align-items:center;gap:8px;min-width:0}
+.sb-headcount{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+  min-width:24px;height:24px;padding:0 7px;border-radius:var(--r-pill);
+  background:var(--surface-muted);color:var(--text-secondary);
+  font-size:12px;font-weight:600;line-height:1}
 
 .sb-list{display:grid;grid-template-columns:1fr;gap:12px}
 @media(min-width:900px){ .sb-list{grid-template-columns:1fr 1fr} }
@@ -262,7 +291,7 @@ a{color:var(--primary)}
 .sb-kebab-btn{width:40px;height:40px;border:none;background:transparent;border-radius:var(--r-control);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;color:var(--text-muted);
   color:var(--muted);font-size:18px;line-height:1;display:grid;place-items:center;padding:0}
 .sb-kebab-btn:hover{background:var(--line);color:var(--ink)}
-.sb-kebab-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:20;min-width:148px;
+.sb-kebab-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:var(--z-popover);min-width:148px;
   background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);
   padding:6px;display:flex;flex-direction:column}
 .sb-kebab-item{text-align:left;border:none;background:transparent;cursor:pointer;border-radius:8px;
@@ -290,6 +319,10 @@ a{color:var(--primary)}
 
 /* Cluster of tags on the right of a card title row. */
 .sb-rowtags{display:flex;gap:6px;flex:none;align-items:center}
+/* Admin quick-action kebab on a task card — compact, visible, tucked top-right. */
+.sb-cardkebab{display:inline-flex;align-self:flex-start;margin:-4px -6px 0 -2px}
+.sb-cardkebab .sb-kebab-btn{width:30px;height:30px;color:var(--text-secondary)}
+.sb-cardkebab .sb-kebab-btn:hover{background:var(--surface-muted);color:var(--text-primary)}
 
 .sb-status{font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:5px}
 .sb-status.big{font-size:13px;padding:5px 12px;font-weight:700}
@@ -302,7 +335,7 @@ a{color:var(--primary)}
 .st-changes{background:var(--red-soft);color:var(--red)}
 .st-approved{background:var(--green-soft);color:var(--green)}
 .st-ready{background:var(--amber-soft);color:var(--amber)}
-.st-posted{background:var(--violet);color:#fff}
+.st-posted{background:var(--surface-muted);color:var(--text-secondary)}
 .sb-status .pip{width:6px;height:6px;border-radius:50%;background:currentColor}
 
 /* Status-dominant header/card lines + system-driven "Next" text. */
@@ -354,7 +387,7 @@ a{color:var(--primary)}
 /* Floating "liquid glass" bottom nav (v1.2): a rounded capsule that hovers
    above the home indicator, five equal columns, with one shared indicator
    that glides behind the active tab. */
-.sb-nav{position:fixed;left:16px;right:16px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:50;
+.sb-nav{position:fixed;left:16px;right:16px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:var(--z-navigation);
   display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
   min-height:66px;padding:6px;border-radius:26px;
   border:1px solid rgba(255,255,255,.5);
@@ -402,7 +435,7 @@ a{color:var(--primary)}
 .sb-navbtn .pill{position:absolute;top:1px;right:calc(50% - 24px);background:var(--danger);color:#fff;font-size:9px;
   font-weight:700;border-radius:999px;padding:0 5px;line-height:15px;min-width:15px;text-align:center;z-index:2}
 
-.sb-fab{position:fixed;bottom:calc(94px + env(safe-area-inset-bottom));right:18px;z-index:41;width:58px;height:58px;
+.sb-fab{position:fixed;bottom:calc(94px + env(safe-area-inset-bottom));right:18px;z-index:var(--z-navigation);width:58px;height:58px;
   border-radius:18px;background:var(--primary);color:#fff;border:none;box-shadow:var(--shadow-lg);
   display:flex;align-items:center;justify-content:center;
   transition:background var(--motion-micro) var(--ease-out),transform var(--motion-micro) var(--ease-out)}
@@ -421,7 +454,8 @@ a{color:var(--primary)}
   .sb-reactbtn{padding:7px 12px;font-size:15px}
 }
 
-.sb-cap{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 14px;box-shadow:var(--shadow)}
+.sb-cap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:14px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:9px;min-width:0}
 /* Wins & metrics cards. */
 .sb-wincards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:4px}
 @media(min-width:680px){ .sb-wincards{grid-template-columns:repeat(4,1fr)} }
@@ -435,7 +469,7 @@ a{color:var(--primary)}
 /* Event cards (v1.2): dense Apple-Reminders layout — emoji, title, relative
    date, then a divider and a footer row (status · action link). Staggered in. */
 .sb-ev{display:flex;align-items:flex-start;gap:12px;background:var(--surface);border:1px solid var(--border);
-  border-radius:14px;padding:13px 14px;animation:pageIn var(--motion-standard) var(--ease-enter) both;animation-delay:var(--d,0ms)}
+  border-radius:var(--r-card);padding:13px 14px;animation:pageIn var(--motion-standard) var(--ease-enter) backwards;animation-delay:var(--d,0ms)}
 .sb-ev-ic{font-size:24px;flex:none;line-height:1;color:var(--text-muted);margin-top:1px}
 .sb-ev-body{flex:1;min-width:0}
 .sb-ev-name{font-weight:600;font-size:15px;line-height:1.3;
@@ -522,33 +556,132 @@ a{color:var(--primary)}
 .sb-recent{display:flex;flex-direction:column;gap:6px}
 .sb-recent-row{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:10px 13px;font-size:13.5px}
 
-.sb-caplist{display:grid;grid-template-columns:1fr;gap:9px}
+.sb-caplist{display:grid;grid-template-columns:1fr;gap:10px}
 @media(min-width:900px){ .sb-caplist{grid-template-columns:1fr 1fr} }
-.sb-cap .top{display:flex;align-items:center;justify-content:space-between}
-.sb-cap .name{font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px}
-.sb-cap .pct{font-size:12px;color:var(--muted);font-weight:600}
-.sb-capbar{height:7px;border-radius:4px;background:var(--line);margin-top:10px;overflow:hidden;display:flex}
-.sb-capbar i{height:100%;display:block}
+/* Row 1 — avatar + name (name gets up to two lines, then ellipsis) + optional dept. */
+.sb-cap-hd{display:flex;align-items:flex-start;gap:10px;min-width:0}
+.sb-cap-av{width:34px;height:34px;font-size:12px;font-weight:700;flex:none}
+.sb-cap-id{min-width:0;display:flex;flex-direction:column;gap:2px;padding-top:1px}
+.sb-cap-name{font-weight:600;font-size:14.5px;line-height:1.25;color:var(--text-primary);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.sb-cap-dept{font-size:12px;color:var(--text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Row 2 — workload badge pill (subtle tinted background; fades in on change). */
+.sb-wlbadge{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;
+  padding:3px 9px;border-radius:var(--r-pill);font-size:11.5px;font-weight:600;white-space:nowrap;
+  animation:revealIn var(--motion-fast) var(--ease-enter)}
+.sb-wl-dot{width:7px;height:7px;border-radius:50%;flex:none;background:currentColor}
+.sb-wlbadge.tone-green{background:var(--success-muted);color:var(--success)}
+.sb-wlbadge.tone-blue{background:var(--info-muted);color:var(--info)}
+.sb-wlbadge.tone-amber{background:var(--warning-muted);color:var(--warning)}
+.sb-wlbadge.tone-red{background:var(--danger-muted);color:var(--danger)}
+.sb-wlbadge.tone-neutral{background:var(--surface-muted);color:var(--text-secondary)}
+/* Row 3 — metrics, one aligned line, secondary type. */
+.sb-cap-metrics{font-size:12.5px;color:var(--text-secondary);font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Row 4 — full-width department-coloured bar, pinned to the card bottom so bars
+   line up across a row; width animates when load changes (height never does). */
+.sb-capbar{height:7px;border-radius:var(--r-pill);background:var(--surface-muted);
+  margin-top:auto;overflow:hidden;display:flex}
+.sb-capbar i{height:100%;display:block;transition:width var(--motion-slow) var(--ease-standard)}
 .seg-shoot{background:var(--violet)} .seg-edit{background:var(--blue)}
 .seg-coordinate{background:var(--gold)} .seg-design{background:var(--green)} .seg-shadow{background:var(--amber)}
 .sb-caplegend{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:9px;font-size:10.5px;color:var(--muted)}
 .sb-caplegend span{display:flex;align-items:center;gap:4px}
 .sb-caplegend i{width:8px;height:8px;border-radius:2px;display:inline-block}
-.sb-overload{font-size:10.5px;color:var(--red);font-weight:700;margin-left:6px}
-.sb-idle{font-size:10.5px;color:var(--amber);font-weight:700;margin-left:6px}
 
-.sb-scrim{position:fixed;inset:0;height:100vh;height:100dvh;background:rgba(33,27,51,.45);z-index:50;
+.sb-scrim{position:fixed;inset:0;height:100vh;height:100dvh;background:var(--overlay);z-index:var(--z-modal);
   display:flex;align-items:flex-end;justify-content:center}
 /* Cap the sheet to the *visible* viewport (dvh), minus the top safe-area, so a
    bottom-anchored sheet's top can never hide under the iPhone Safari/Chrome URL
    bar. `vh` is the fallback for browsers without dvh. */
-.sb-sheet{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:22px 22px 0 0;
+/* #7 — sticky editor footer: optional (wrapping) validation message above a
+   full-width Save button; respects the iPhone home-indicator safe area. */
+.sb-sheetfoot{flex:0 0 auto;display:flex;flex-direction:column;gap:10px;
+  padding:14px 16px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--border);
+  background:var(--surface-elevated)}
+.sb-footmsg{font-size:var(--text-support);color:var(--danger);font-weight:500;line-height:1.45}
+.sb-footbtn{width:100%;margin-top:0}
+/* #6 — responsive two-column form row: side by side when wide, stacked when
+   narrow, never overlapping (min-width:0 lets date/select inputs shrink). */
+.sb-formrow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sb-formrow > .sb-field{min-width:0;margin-bottom:13px}
+.sb-formrow > .sb-field input,.sb-formrow > .sb-field select{width:100%;min-width:0}
+@media(max-width:439px){ .sb-formrow{grid-template-columns:1fr;gap:0} }
+/* #3 — custom "Other" crew label input (outside a .sb-field) matches inputs. */
+.sb-addcrew-label{width:100%;margin-top:8px;border:1px solid var(--border);border-radius:var(--r-input);
+  padding:11px 12px;font-size:16px;font-family:inherit;background:var(--surface);color:var(--text-primary)}
+.sb-addcrew-label:focus{outline:2px solid var(--focus-ring);border-color:transparent}
+/* #4 — "Unavailable" workload chip + #3 optional-field hint */
+.sb-unavail{background:var(--surface-muted)!important;color:var(--text-muted)!important;font-weight:600}
+.sb-optional{color:var(--text-muted);font-weight:400;font-size:var(--text-label)}
+
+/* Appearance radio list (Match system / Light / Dark). */
+.sb-optlist{display:flex;flex-direction:column;gap:6px}
+.sb-optrow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+  padding:12px 12px;border:1px solid var(--border);border-radius:var(--r-card);
+  background:var(--surface);color:var(--text-primary);cursor:pointer;
+  transition:background var(--motion-fast) var(--ease-standard),border-color var(--motion-fast) var(--ease-standard)}
+.sb-optrow:hover{background:var(--surface-muted)}
+.sb-optrow.on{border-color:var(--primary);background:var(--primary-muted)}
+.sb-optrow-ic{flex:none;display:inline-flex;color:var(--text-secondary)}
+.sb-optrow.on .sb-optrow-ic{color:var(--primary)}
+.sb-optrow-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.sb-optrow-l{font-size:14.5px;font-weight:600}
+.sb-optrow-h{font-size:12px;color:var(--text-muted)}
+.sb-optrow-chk{flex:none;color:var(--primary)}
+
+/* Reusable URL input (UrlInput) — Open/Copy embedded on the input's right edge.
+   Minimal, borderless actions that read as part of the field; hover tint +
+   slight scale; subtle inline validation. */
+.sb-urlfield{width:100%}
+.sb-urlwrap{position:relative;display:block}
+.sb-urlwrap.has-actions .sb-urlctrl{padding-right:78px}
+.sb-urlactions{position:absolute;top:0;right:6px;height:100%;display:flex;align-items:center;gap:2px;
+  pointer-events:none}
+.sb-urlactions > *{pointer-events:auto}
+.sb-urlbtn{width:36px;height:36px;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:var(--r-control);border:none;background:transparent;color:var(--text-muted);cursor:pointer;
+  text-decoration:none;-webkit-tap-highlight-color:transparent;
+  transition:background var(--motion-fast) var(--ease-standard),color var(--motion-fast) var(--ease-standard),transform var(--motion-fast) var(--ease-standard)}
+.sb-urlbtn:hover{background:var(--surface-muted);color:var(--text-primary);transform:scale(1.08)}
+.sb-urlbtn:active{transform:scale(.94)}
+.sb-urlbtn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+.sb-urlbtn:disabled{opacity:.4;cursor:not-allowed;transform:none;background:transparent;color:var(--text-muted)}
+.sb-urlbtn.copied{color:var(--success)}
+.sb-urlhint{margin-top:5px;font-size:12px;font-weight:500;display:flex;align-items:center;gap:4px}
+.sb-urlhint.ok{color:var(--text-secondary)}      /* subtle — not a loud green */
+.sb-urlhint.copied{color:var(--success)}
+/* Reference row in the task-detail metadata card.
+   Desktop: single line — label · truncated URL · Open · Copy.
+   Mobile (<520px): two levels — label on its own line, then URL + actions. */
+.sb-refrow{display:flex;align-items:center;gap:12px;min-width:0;
+  padding:7px 0;border-bottom:1px solid var(--line)}
+.sb-refrow-k{flex:none;font-size:12.5px;color:var(--muted);font-weight:600}
+.sb-refrow-main{flex:1;min-width:0;display:flex;align-items:center;gap:8px}
+.sb-refrow-url{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  text-align:left;font-size:13px;color:var(--primary);text-decoration:none}
+.sb-refrow-url:hover{text-decoration:underline}
+.sb-refrow-actions{flex:none;display:inline-flex;align-items:center;gap:8px}
+/* Copy button expands to "✓ Copied" briefly after a successful copy. */
+.sb-refcopy.copied{width:auto;padding:0 10px;gap:5px;color:var(--success);transform:none}
+.sb-refcopy-txt{font-size:12px;font-weight:600}
+@media(max-width:520px){
+  .sb-refrow{flex-direction:column;align-items:stretch;gap:6px}
+  .sb-refrow-main{width:100%}
+}
+/* Mobile: ≥44px touch targets, still inside the field, no wrap. */
+@media(max-width:560px){
+  .sb-urlbtn{width:44px;height:44px}
+  .sb-urlwrap.has-actions .sb-urlctrl{padding-right:98px}
+}
+.sb-sheet{background:var(--surface-elevated);width:100%;max-width:560px;border-radius:var(--r-modal) var(--r-modal) 0 0;
   max-height:calc(100vh - 48px);
   max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
   display:flex;flex-direction:column;overflow:hidden;-webkit-overflow-scrolling:touch;
   animation:rise .22s ease;overscroll-behavior:contain}
 @media(min-width:900px){ .sb-scrim{align-items:center;padding:20px}
-  .sb-sheet{border-radius:20px;max-height:86dvh} }
+  .sb-sheet{border-radius:var(--r-modal);max-height:86dvh} }
 @keyframes rise{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
 /* Sticky header pins the type badge + ✕ to the top of the panel, always
    visible and tappable; extra top padding clears the notch/home indicator. */
@@ -563,17 +696,25 @@ a{color:var(--primary)}
 @media(max-width:899px){ .sb-x{width:44px;height:44px} }
 
 /* --- Notification Center --- */
-.sb-notifpanel{background:var(--surface-elevated);width:100%;max-width:440px;border-radius:22px 22px 0 0;
+.sb-notifpanel{background:var(--surface-elevated);width:100%;max-width:440px;border-radius:var(--r-modal) var(--r-modal) 0 0;
   max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
   display:flex;flex-direction:column;overflow:hidden;animation:rise .22s ease}
-@media(min-width:900px){ .sb-notifpanel{border-radius:20px;max-height:80dvh} }
+@media(min-width:900px){ .sb-notifpanel{border-radius:var(--r-modal);max-height:80dvh} }
 .sb-notifhd{position:sticky;top:0;background:var(--surface-elevated);padding:16px 16px 10px;
   border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}
 @media(max-width:899px){ .sb-notifhd{padding-top:calc(18px + env(safe-area-inset-top))} }
 .sb-notifhd-actions{display:flex;align-items:center;gap:8px}
 .sb-iconbtn{background:var(--surface-muted);border:1px solid var(--border);width:40px;height:40px;border-radius:50%;
   display:inline-flex;align-items:center;justify-content:center;
-  font-size:15px;color:var(--ink);cursor:pointer}
+  font-size:15px;color:var(--ink);cursor:pointer;text-decoration:none}
+.sb-iconbtn:hover{background:var(--surface);border-color:var(--border-strong)}
+/* Copy / Open beside a link input — clean, borderless, muted; softly tinted on
+   hover. Lighter than the filled circle so a row of two doesn't feel heavy. */
+.sb-inline .sb-iconbtn{flex:none;align-self:center;width:36px;height:36px;
+  background:transparent;border:1px solid transparent;color:var(--text-muted);
+  transition:background var(--motion-fast) var(--ease-standard),color var(--motion-fast) var(--ease-standard),border-color var(--motion-fast) var(--ease-standard)}
+.sb-inline .sb-iconbtn:hover{background:var(--primary-muted);border-color:transparent;color:var(--primary)}
+.sb-inline .sb-iconbtn:active{transform:scale(.92)}
 .sb-notiflist{overflow-y:auto;-webkit-overflow-scrolling:touch;padding:6px 0 calc(14px + env(safe-area-inset-bottom))}
 .sb-notif{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;
   background:none;border:none;cursor:pointer;padding:12px 16px;border-bottom:1px solid var(--line)}
@@ -599,12 +740,39 @@ a{color:var(--primary)}
 .sb-push b{color:var(--ink);display:block;margin-bottom:5px;font-size:13px}
 .sb-push ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
 /* Foreground push toast */
+/* Centered toast/banner entrance — animates translate(-50%, …) so the
+   horizontal centering is preserved throughout (no sideways shudder). */
+@keyframes centeredRise{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
+@keyframes centeredFall{from{opacity:1;transform:translate(-50%,0)}to{opacity:0;transform:translate(-50%,8px)}}
 .sb-toast{position:fixed;left:50%;transform:translateX(-50%);
-  bottom:calc(78px + env(safe-area-inset-bottom));z-index:70;
+  bottom:calc(78px + env(safe-area-inset-bottom));z-index:var(--z-toast);
   background:var(--ink);color:var(--paper);border:none;border-radius:999px;
   padding:11px 18px;font-size:13px;font-weight:600;max-width:88vw;cursor:pointer;
-  box-shadow:0 8px 24px rgba(0,0,0,.28);animation:rise .2s ease}
+  box-shadow:0 8px 24px rgba(0,0,0,.28);animation:centeredRise var(--motion-standard) var(--ease-enter)}
 @media(min-width:900px){ .sb-toast{bottom:24px} }
+/* Save/create feedback banner (task created · changes saved · error). */
+.sb-savebanner{position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(78px + env(safe-area-inset-bottom));z-index:var(--z-toast);
+  display:flex;align-items:center;gap:9px;width:max-content;max-width:92vw;
+  padding:11px 12px 11px 15px;border-radius:var(--r-pill);font-size:13px;font-weight:600;
+  box-shadow:var(--shadow-lg);animation:centeredRise var(--motion-standard) var(--ease-enter);will-change:transform,opacity}
+.sb-savebanner.leaving{animation:centeredFall var(--motion-fast) var(--ease-exit) forwards}
+/* Colour morphs smoothly as a banner goes pending → ok/err. */
+.sb-savebanner{transition:background-color var(--motion-standard) var(--ease-standard),color var(--motion-standard) var(--ease-standard),border-color var(--motion-standard) var(--ease-standard)}
+.sb-savebanner.pending{background:var(--surface-elevated);color:var(--text-primary);border:1px solid var(--border-strong)}
+.sb-savebanner.ok{background:var(--success-muted);color:var(--success);border:1px solid color-mix(in srgb,var(--success) 30%,transparent)}
+.sb-savebanner.err{background:var(--danger-muted);color:var(--danger);border:1px solid color-mix(in srgb,var(--danger) 30%,transparent)}
+.sb-banner-msg{min-width:0}
+/* Tiny inline spinner for the "in progress" state. */
+.sb-banner-spin{width:15px;height:15px;flex:none;border-radius:50%;
+  border:2px solid var(--border-strong);border-top-color:var(--primary);animation:spin .7s linear infinite}
+/* "View" / action affordance inside a banner. */
+.sb-banner-action{flex:none;background:transparent;border:none;color:inherit;cursor:pointer;
+  font-weight:700;font-size:13px;text-decoration:underline;text-underline-offset:2px;padding:2px 2px 2px 4px}
+.sb-banner-action:hover{opacity:.75}
+.sb-savebanner .sb-x{color:inherit;opacity:.7;flex:none}
+.sb-savebanner .sb-x:hover{opacity:1}
+@media(min-width:900px){ .sb-savebanner{bottom:24px} }
 /* Reminder schedule editor */
 .sb-remlist{display:flex;flex-direction:column;gap:9px;margin-top:8px}
 .sb-rem{border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:var(--card)}
@@ -682,34 +850,31 @@ a{color:var(--primary)}
 
 .sb-login{height:100vh;height:100dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;
   padding:24px 20px calc(24px + env(safe-area-inset-bottom));padding-top:calc(24px + env(safe-area-inset-top));
-  background:radial-gradient(120% 120% at 50% 0%, var(--violet) 0%, var(--violet-deep) 70%)}
+  background:var(--background)}
 .sb-loginbox{width:100%;max-width:440px;margin:auto}
-/* Branding block — prominent, centered, brand-coloured */
+/* Branding block — centered wordmark (see .sb-lwordmark for the mark itself) */
 .sb-lbrand{text-align:center;margin-bottom:22px}
-.sb-login .logo{width:72px;height:72px;border-radius:20px;background:var(--gold);color:#3a2a06;
-  display:inline-flex;align-items:center;justify-content:center;letter-spacing:-.015em;font-weight:700;
-  font-size:40px;margin:0 auto 18px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
-.sb-login h1{color:#fff;font-size:34px;font-weight:600;line-height:1.05}
-.sb-tagline{color:var(--gold);font-weight:700;font-size:16px;letter-spacing:.02em;margin-top:10px}
-.sb-login p{color:rgba(255,255,255,.78);font-size:14.5px;margin:8px 0 0}
-@media(min-width:560px){ .sb-login h1{font-size:40px} .sb-login .logo{width:78px;height:78px;font-size:44px} }
 
-.sb-lcard{background:var(--card);border-radius:20px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.32)}
+.sb-lcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:24px 22px;box-shadow:var(--shadow-lg)}
 .sb-lcardhd{letter-spacing:-.015em;font-size:19px;font-weight:600;color:var(--ink);margin-bottom:16px}
 .sb-lerr{background:var(--red-soft);color:var(--red);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
 .sb-lok{background:var(--green-soft);color:var(--green);font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:12px}
-.sb-gbtn{width:100%;background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px;
-  font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--ink);cursor:pointer}
-.sb-gbtn:hover{border-color:var(--violet)}
+/* Google button: fixed white surface (brand), but with a defined border, dark
+   Google-grey text, and a soft shadow so it lifts off the white sign-in card
+   instead of blending in. Fixed colours keep it correct in light AND dark. */
+.sb-gbtn{width:100%;background:#fff;border:1px solid #dadce0;border-radius:12px;padding:13px;
+  font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:9px;
+  color:#3c4043;cursor:pointer;box-shadow:0 1px 2px rgba(60,64,67,.14),0 1px 3px rgba(60,64,67,.08)}
+.sb-gbtn:hover{background:#f8f9fa;border-color:#c9ccce;box-shadow:0 1px 3px rgba(60,64,67,.2),0 2px 6px rgba(60,64,67,.1)}
 .sb-gicon{width:18px;height:18px;display:inline-block}
 .sb-ldiv{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:11px;margin:16px 0}
 .sb-ldiv::before,.sb-ldiv::after{content:"";height:1px;background:var(--line);flex:1}
 /* Taller, roomier inputs */
 .sb-lcard .sb-field{margin-bottom:14px}
 .sb-lcard .sb-field input{padding:13px 14px;font-size:15px;border-radius:12px}
-/* Vivid primary sign-in button */
-.sb-lprimary{margin-top:6px;padding:14px;font-size:15.5px;font-weight:700;
-  box-shadow:0 8px 22px rgba(76,58,140,.38)}
+/* Primary sign-in button — design-system primary, no coloured glow */
+.sb-lprimary{margin-top:6px;padding:14px;font-size:15.5px;font-weight:700}
 .sb-lprimary:disabled{opacity:.7}
 /* Prominent create-account / switch CTA, directly beneath sign-in */
 .sb-lswitch{margin-top:18px;padding-top:16px;border-top:1px solid var(--line);
@@ -717,14 +882,25 @@ a{color:var(--primary)}
 .sb-lswitch span{font-size:13.5px;color:var(--muted);font-weight:600}
 .sb-lswitch .sb-btn{width:100%;margin-top:0}
 
-.sb-pending{height:100vh;height:100dvh;overflow-y:auto;display:flex;padding:26px;
-  background:linear-gradient(160deg,var(--violet-deep),var(--violet));text-align:center}
-.sb-pending .box{max-width:380px;color:#fff;margin:auto}
-.sb-pending .ic{font-size:44px;margin-bottom:12px}
-.sb-pending h1{font-size:26px;font-weight:600}
-.sb-pending p{color:rgba(255,255,255,.8);font-size:14px;margin:10px 0 22px;line-height:1.55}
-.sb-pending button{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);color:#fff;
-  padding:11px 18px;border-radius:12px;font-weight:600;font-size:14px}
+/* Status pages (Waiting-for-approval, render-crash boundary). Same visual
+   language as the login: neutral app background + a single elevated surface
+   card, design-token type/spacing/radius/shadow, full light+dark support.
+   No legacy purple-gradient splash. */
+.sb-pending{min-height:100vh;min-height:100dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  display:flex;padding:26px;background:var(--background);text-align:center}
+.sb-pending .box{max-width:440px;width:100%;margin:auto}
+.sb-pending .sb-lwordmark{margin-bottom:22px}
+.sb-pending .sb-statuscard{background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-card);box-shadow:var(--shadow-lg);padding:28px 24px;text-align:center}
+.sb-pending .ic{width:56px;height:56px;margin:0 auto 16px;border-radius:var(--r-panel);
+  display:flex;align-items:center;justify-content:center;background:var(--primary-muted);color:var(--primary);font-size:28px}
+.sb-pending .ic .hi{width:28px;height:28px}
+.sb-pending .ic.warn{background:var(--warning-muted);color:var(--warning)}
+.sb-pending h1{font-size:var(--text-section);font-weight:600;color:var(--text-primary);letter-spacing:-.015em}
+.sb-pending p{color:var(--text-secondary);font-size:var(--text-body);margin:10px 0 0;line-height:1.55}
+.sb-pending .sb-statuscard .sb-field{margin:18px 0 0;text-align:left}
+.sb-pending .sb-statuscard .sb-btnrow{margin-top:18px}
+.sb-pending .sb-statusnote{color:var(--success);font-weight:600;font-size:var(--text-support);margin-top:16px}
 
 /* Connectivity banner (offline / back-online) */
 .sb-netbar{position:fixed;top:0;left:0;right:0;z-index:90;text-align:center;font-weight:600;font-size:12.5px;
@@ -802,10 +978,10 @@ a{color:var(--primary)}
   padding:1px 7px;font-size:11px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
 
 /* ===== Global search overlay ===== */
-.sb-modal{position:fixed;inset:0;z-index:60;background:rgba(33,27,51,.45);
+.sb-modal{position:fixed;inset:0;z-index:var(--z-modal);background:var(--overlay);
   display:flex;align-items:flex-start;justify-content:center;padding:10vh 16px 16px}
-.sb-search{background:var(--paper);width:100%;max-width:600px;border-radius:18px;
-  box-shadow:var(--shadow);overflow:hidden;animation:rise .18s ease;max-height:78vh;display:flex;flex-direction:column}
+.sb-search{background:var(--surface-elevated);width:100%;max-width:600px;border-radius:var(--r-modal);
+  box-shadow:var(--shadow-lg);overflow:hidden;animation:rise .18s ease;max-height:78vh;display:flex;flex-direction:column}
 .sb-searchbar{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
 .sb-searchbar .ico{font-size:16px;flex:none}
 .sb-searchbar input{flex:1;border:none;background:none;font-size:16px;color:var(--ink);outline:none;min-width:0}
@@ -1114,9 +1290,6 @@ a{color:var(--primary)}
 /* Beta banner: compact status strip, no competition with headings */
 .sb-beta{padding:7px 12px;font-size:12px;border-radius:var(--r-control);margin-bottom:8px}
 .sb-beta b{font-weight:600}
-/* Team load share text quieter */
-.sb-cap .pct .share{color:var(--text-muted);font-weight:500}
-.sb-overload{text-transform:none;letter-spacing:0}
 /* Designed CSV drop zone */
 .sb-dropzone{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;
   border:1.5px dashed var(--border-strong);border-radius:var(--r-card);padding:26px 16px;cursor:pointer;
@@ -1190,12 +1363,26 @@ a{color:var(--primary)}
 
 /* Designed confirmation dialog */
 .sb-confirm{background:var(--surface-elevated);border-radius:var(--r-panel);padding:22px;width:100%;max-width:400px;
-  margin:auto;box-shadow:var(--shadow-lg);animation:rise var(--motion-standard) var(--ease-out)}
-@media(max-width:559px){ .sb-confirm{margin:auto 0 0;border-radius:var(--r-panel) var(--r-panel) 0 0;max-width:100%} }
+  margin:auto;box-shadow:var(--shadow-lg);animation:modalIn var(--motion-standard) var(--ease-enter)}
+@media(max-width:559px){ .sb-confirm{margin:auto 0 0;border-radius:var(--r-panel) var(--r-panel) 0 0;max-width:100%;
+  padding-bottom:calc(22px + env(safe-area-inset-bottom))} }
 .sb-confirm p{font-size:13.5px;color:var(--text-secondary);line-height:1.5;margin-top:8px}
 .sb-confirm .sb-btnrow .sb-btn{margin-top:0}
 .sb-btn.danger{background:var(--danger);color:#fff}
 .sb-btn.danger:hover{background:var(--danger);filter:brightness(.94)}
+/* Tone header: an icon chip paired with the title (never colour alone). */
+.sb-confirm-hd{display:flex;align-items:center;gap:11px}
+.sb-confirm-hd b{font-size:17px}
+.sb-confirm-ic{width:36px;height:36px;border-radius:10px;flex:none;display:grid;place-items:center}
+.sb-confirm-ic .hi{width:20px;height:20px}
+.sb-confirm-hd.tone-danger .sb-confirm-ic{background:var(--danger-muted);color:var(--danger)}
+.sb-confirm-hd.tone-warning .sb-confirm-ic{background:var(--warning-muted);color:var(--warning)}
+.sb-confirm-hd.tone-neutral .sb-confirm-ic{background:var(--primary-muted);color:var(--primary)}
+/* Consequences: what will be removed / what remains. */
+.sb-confirm-list{margin:10px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
+.sb-confirm-list li{font-size:12.5px;color:var(--text-secondary);line-height:1.45}
+.sb-confirm .sb-btn[aria-busy="true"]{opacity:.85;cursor:progress}
+.sb-btn.gold:hover{filter:brightness(.96)}
 
 /* =================================================================
    MOTION PASS (v1.2) — one shared system, transform/opacity only.
@@ -1232,6 +1419,9 @@ a{color:var(--primary)}
 /* Overlays: backdrop fade + token-eased entrances. */
 .sb-scrim{animation:scrimIn var(--motion-fast) var(--ease-standard)}
 @keyframes scrimIn{from{opacity:0}to{opacity:1}}
+/* Graceful exit for the notification drawer before it navigates away. */
+.sb-scrim-right.closing{animation:scrimOut var(--motion-fast) var(--ease-exit) forwards;pointer-events:none}
+@keyframes scrimOut{from{opacity:1}to{opacity:0}}
 .sb-sheet{animation:sheetUp var(--motion-slow) var(--ease-enter)}
 @keyframes sheetUp{from{transform:translateY(24px);opacity:.4}to{transform:none;opacity:1}}
 .sb-drawer{animation:sheetUp var(--motion-slow) var(--ease-enter)}
@@ -1273,3 +1463,920 @@ input,textarea,select{transition:border-color var(--motion-fast) var(--ease-stan
 .sb-group.archived{opacity:.72}
 .sb-status.st-archived{color:var(--text-muted)}
 .sb-status.st-archived .pip{background:var(--text-muted)}
+
+/* =================================================================
+   DESKTOP PARITY (v1.1.2) — make the fixed desktop shell feel like a
+   larger, more spacious version of the mobile experience: one gliding
+   sidebar indicator (same language as the mobile bottom nav), tighter
+   rhythm, integrated footer, centred beta banner, compact cards. Shares
+   the SAME motion tokens + palette as mobile; no animation library.
+   ================================================================= */
+@media(min-width:900px){
+  /* Sidebar surface: soft layered tint + a hairline border, not a hard block. */
+  .sb-side{padding:20px 14px;gap:2px;
+    border-right:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
+
+  /* Navigation: compact rhythm + one shared sliding active indicator. */
+  .sb-snav{position:relative;gap:4px}
+  .sb-snav-ind{position:absolute;left:0;right:0;top:0;z-index:0;pointer-events:none;
+    height:var(--ind-h,44px);border-radius:13px;background:var(--primary-muted);
+    opacity:var(--ind-o,0);transform:translateY(var(--ind-y,0));
+    transition:transform var(--motion-standard) var(--ease-standard),
+               height var(--motion-standard) var(--ease-standard),
+               opacity var(--motion-fast) var(--ease-standard)}
+  @media (prefers-reduced-motion:reduce){ .sb-snav-ind{transition:none} }
+  .sb-snav button{position:relative;z-index:1;min-height:44px;padding:10px 12px;
+    border-radius:13px;gap:12px;
+    transition:color var(--motion-fast) var(--ease-standard),
+               background-color var(--motion-fast) var(--ease-standard),
+               transform var(--motion-instant) var(--ease-standard)}
+  .sb-snav button .ico .hi{width:21px;height:21px}
+  .sb-snav button:hover{transform:translateX(2px)}
+  .sb-snav button:active{transform:translateX(1px) scale(.99)}
+  /* Active = the gliding lavender pill provides the fill; keep only colour+weight. */
+  .sb-snav button.on{background:transparent;color:var(--primary);font-weight:600}
+  .sb-snav button:not(.on):hover{background:var(--surface-muted);color:var(--text-primary)}
+  /* Section label: a comfortable gap above, not a big void. */
+  .sb-navgroup{padding:18px 12px 5px}
+
+  /* Footer: notification row + profile row + quiet link, aligned to the nav. */
+  /* Pin the personal area (Profile · Notifications · Report) to the BOTTOM. */
+  .sb-sfoot{margin-top:auto;padding-top:12px;gap:3px;
+    border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent)}
+  .sb-sfoot .sb-report{background:none;border:none;border-radius:13px;min-height:44px;
+    padding:9px 12px;gap:12px;color:var(--text-secondary);
+    transition:color var(--motion-fast) var(--ease-standard),
+               background-color var(--motion-fast) var(--ease-standard),
+               transform var(--motion-instant) var(--ease-standard)}
+  .sb-sfoot .sb-report:hover{background:var(--surface-muted);color:var(--text-primary);transform:translateX(2px)}
+  .sb-sfoot .sb-report:active{transform:translateX(1px) scale(.99)}
+  .sb-sfoot .sb-report .hi{width:21px;height:21px}
+  .sb-suserbtn{min-height:48px;padding:8px 10px;border-radius:13px;gap:11px}
+  .sb-suserbtn:hover{transform:translateX(2px)}
+  .sb-searchbtn .hi{width:20px;height:20px}
+
+  /* Beta banner: centred in the content column, aligned with the page below. */
+  .sb-beta{margin:18px auto 26px;padding:11px 16px}
+
+  /* Interactive cards: the same restrained 1px lift as mobile press language.
+     (Static info cards + the staggered event cards are intentionally excluded.) */
+  @media(hover:hover){
+    .sb-task-act:hover,.sb-attn:hover,.sb-listrow:hover,.sb-hcard:hover{transform:translateY(-1px)}
+  }
+}
+
+/* Beta-banner dismissal: fade + smooth height collapse, then unmount — no
+   blank gap left behind. Runs at every width (mobile keeps its compact style). */
+.sb-beta.closing{animation:betaOut 200ms var(--ease-exit) forwards;overflow:hidden;pointer-events:none}
+@keyframes betaOut{
+  from{max-height:56px}
+  to{opacity:0;max-height:0;margin-top:0;margin-bottom:0;padding-top:0;padding-bottom:0;transform:translateY(-4px)}
+}
+
+/* =================================================================
+   HOME DASHBOARD (desktop) — the phone stays a focused stack; wide
+   screens reflow the same widgets into a productivity dashboard and
+   reveal a few desktop-only ones. `.sb-dash`/`.sb-wd` are display:contents
+   on mobile so the phone layout is byte-for-byte the existing one.
+   ================================================================= */
+.sb-dash{display:contents}
+.sb-wd{display:contents}
+.wd-desktop{display:none}          /* new widgets: desktop-only */
+
+/* Widget surfaces used only inside desktop-only widgets (parents are
+   display:none on mobile, so these never affect the phone). */
+.sb-week{display:flex;flex-direction:column;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r-card);padding:8px 12px}
+.sb-week-day{display:flex;flex-direction:column;gap:1px;padding:7px 0;border-bottom:1px solid var(--border)}
+.sb-week-day:last-child{border-bottom:none}
+.sb-week-lbl{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--text-muted);margin-bottom:3px}
+.sb-week-row{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:6px 4px;border-radius:8px;
+  transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-week-row:hover{background:var(--surface-muted)}
+.sb-week-dot{width:6px;height:6px;border-radius:50%;background:var(--primary);flex:none}
+.sb-week-t{flex:1;min-width:0;font-size:13.5px;color:var(--text-primary);font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-week-meta{font-size:11.5px;color:var(--text-muted);flex:none}
+.sb-widcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:0 14px}
+.sb-actfeed.sb-widcard .sb-actrow:last-child{border-bottom:none}
+.sb-statgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.sb-qaGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.sb-qabtn{position:relative;display:flex;align-items:center;gap:10px;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r-card);padding:12px 13px;cursor:pointer;
+  font-size:13.5px;font-weight:600;color:var(--text-primary);text-align:left;
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-qabtn:hover{background:var(--surface-muted);border-color:var(--border-strong)}
+.sb-qabtn:active{transform:scale(.98)}
+.sb-qabtn .hi{width:19px;height:19px;color:var(--primary);flex:none}
+.sb-qabadge{margin-left:auto;background:var(--danger);color:#fff;font-size:10px;font-weight:700;
+  border-radius:999px;min-width:18px;height:18px;padding:0 5px;
+  display:inline-flex;align-items:center;justify-content:center}
+
+@media(min-width:900px){
+  /* Home breathes wider than the standard content column to fill the space. */
+  .sb-content>.sb-page.home{max-width:1320px;padding-bottom:60px}
+  /* Dashboard grid: full-width stats, then paired widgets of differing heights
+     so the board feels alive rather than stacked. Generous row gap between
+     sections; the pairs read as one connected workspace. */
+  /* Priority reads top-to-bottom, left-first: Stats → Your Focus (primary) →
+     Coming Up → Team Progress → Recent Activity → My Week. */
+  .sb-dash{display:grid;grid-template-columns:1fr 1fr;gap:44px 26px;margin-top:14px;
+    grid-template-areas:
+      "stats  stats"
+      "focus  events"
+      "team   activity"
+      "week   week";}
+  .sb-wd{display:flex;flex-direction:column;min-width:0}
+  .wd-desktop{display:flex}         /* now visible */
+  .wd-mobile{display:none}          /* recent-wins hidden — activity replaces it */
+  .wd-stats{grid-area:stats} .wd-events{grid-area:events} .wd-focus{grid-area:focus}
+  .wd-week{grid-area:week} .wd-activity{grid-area:activity} .wd-team{grid-area:team}
+  /* Widget heads: flush with the card edge below (perfect left-edge alignment),
+     tighter than the mobile 30px section gap (the grid gap spaces sections). */
+  .sb-wd .sb-shead{margin:0 0 12px;align-items:center}
+  .sb-wd .sb-shead h2{font-size:15px;font-weight:600}
+  /* Quick stats: four glanceable cards across. */
+  .sb-statgrid{grid-template-columns:repeat(4,1fr);margin-bottom:0}
+  /* Compact event cards on desktop — premium widget density, less whitespace. */
+  .sb-dash .sb-evlist{gap:8px}
+  .sb-dash .sb-ev{padding:11px 13px}
+  .sb-dash .sb-ev-ic{font-size:21px}
+  .sb-dash .sb-ev-foot{margin-top:7px;padding-top:7px}
+  /* Progress + wins fill their cell cleanly. */
+  .sb-wd .sb-wincards{margin-bottom:0}
+  /* Narrower desktop: stack the pairs so nothing gets cramped. */
+  @media(max-width:1099px){
+    .sb-statgrid{grid-template-columns:repeat(2,1fr)}
+  }
+}
+
+/* =================================================================
+   PREMIUM POLISH (v1.1.2) — hierarchy, richer stat cards, conversational
+   activity, urgency reads, lighter chrome, and restrained delight.
+   Refinement only; colours/typography/functionality unchanged.
+   ================================================================= */
+
+/* --- Stat cards: a number that answers "what next", with a soft tint,
+   an icon chip, and a supporting sub-metric. (Desktop-only widget.) --- */
+.sb-stat2{position:relative;display:flex;flex-direction:column;align-items:flex-start;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:14px 15px 13px;cursor:pointer;text-align:left;overflow:hidden;
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             box-shadow var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-stat2:hover{border-color:var(--border-strong);box-shadow:var(--shadow-sm);transform:translateY(-1px)}
+.sb-stat2:active{transform:translateY(0) scale(.99)}
+.sb-stat2-ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;
+  margin-bottom:9px;background:var(--surface-muted);color:var(--text-secondary)}
+.sb-stat2-ic .hi{width:18px;height:18px}
+.sb-stat2-n{font-size:26px;font-weight:700;line-height:1;letter-spacing:-.02em;
+  color:var(--text-primary);font-variant-numeric:tabular-nums}
+.sb-stat2-l{font-size:12.5px;font-weight:600;color:var(--text-secondary);margin-top:4px}
+.sb-stat2-sub{font-size:11.5px;font-weight:600;color:var(--text-muted);margin-top:2px}
+/* Neutral cards (calm, ~95% neutral) — colour lives only where it means
+   something: the icon chip and the supporting sub-metric. No decorative tint. */
+.sb-stat2.tone-violet .sb-stat2-ic{background:var(--primary-muted);color:var(--primary)}
+.sb-stat2.tone-violet .sb-stat2-sub{color:var(--text-muted)}
+.sb-stat2.tone-amber .sb-stat2-ic{background:var(--warning-muted);color:var(--warning)}
+.sb-stat2.tone-amber .sb-stat2-sub{color:var(--warning)}
+.sb-stat2.tone-blue .sb-stat2-ic{background:var(--info-muted);color:var(--info)}
+.sb-stat2.tone-blue .sb-stat2-sub{color:var(--text-muted)}
+.sb-stat2.tone-green .sb-stat2-ic{background:var(--success-muted);color:var(--success)}
+.sb-stat2.tone-green .sb-stat2-sub{color:var(--text-muted)}
+
+/* --- Greeting: the hand waves once on load; the eyebrow steps back so the
+   main greeting stays the hero. --- */
+.sb-eyebrow{opacity:.7}
+.sb-wave{display:inline-block;transform-origin:72% 74%;animation:wave 1.8s ease .5s 1}
+@keyframes wave{0%,58%,100%{transform:rotate(0)}12%{transform:rotate(14deg)}
+  22%{transform:rotate(-8deg)}32%{transform:rotate(12deg)}42%{transform:rotate(-4deg)}50%{transform:rotate(8deg)}}
+@media(min-width:900px){
+  .sb-page.home .sb-h{margin-bottom:9px}
+  .sb-page.home .sb-greet{margin-bottom:4px;line-height:1.7}
+}
+
+/* --- Your focus: urgency should read instantly. A faint row tint by the
+   pre-computed reason class (graceful no-op where :has is unsupported). --- */
+/* Rows stay neutral (Linear); the left accent bar alone carries the urgency. */
+.sb-attnlist .sb-attn{background:transparent}
+.sb-attn-bar{width:4px}
+
+/* --- Recent activity: a quiet, secondary feed. Action first, then content,
+   then who + when — scannable in one glance, short by design. --- */
+.sb-actfeed2{display:flex;flex-direction:column}
+.sb-actrow2{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:9px 4px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);border-radius:8px;
+  transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-actrow2:last-child{border-bottom:none}
+.sb-actrow2:hover{background:var(--surface-muted)}
+.sb-actrow2-dot{width:8px;height:8px;border-radius:50%;background:var(--primary);flex:none;margin-top:6px}
+.sb-actrow2-dot.type-approved{background:var(--success)}
+.sb-actrow2-dot.type-posted{background:var(--primary)}
+.sb-actrow2-dot.type-changes_requested{background:var(--danger)}
+.sb-actrow2-dot.type-assigned{background:var(--info)}
+.sb-actrow2-dot.type-in_review,.sb-actrow2-dot.type-qa{background:var(--warning)}
+.sb-actrow2-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+/* Name is the strongest element; action + content secondary; time the lightest. */
+.sb-actrow2-name{font-size:13.5px;font-weight:600;color:var(--text-primary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-actrow2-act{font-size:12.5px;color:var(--text-secondary);text-transform:capitalize;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-actrow2-act .ct{color:var(--text-primary);font-weight:500;text-transform:none}
+.sb-actrow2-meta{font-size:11px;color:var(--text-muted);margin-top:2px}
+
+/* --- My week: days act as clear visual separators. --- */
+.sb-week-day{padding:9px 0}
+.sb-week-lbl{color:var(--text-secondary)}
+
+/* --- Beta banner: a light, friendly notice — not a heavy block. --- */
+.sb-beta{background:var(--surface-muted);border-color:var(--border)}
+.sb-beta-txt{color:var(--text-secondary)}
+[data-theme="dark"] .sb-beta-txt{color:var(--text-secondary)}
+
+/* --- Your focus loading state: skeleton rows so the empty state never flashes
+   while tasks are still hydrating (distinct "loading" vs "zero items"). --- */
+.sb-focus-loading{padding:6px 0}
+.sb-focus-skel{display:flex;flex-direction:column;gap:7px;padding:13px 13px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
+.sb-focus-skel:last-child{border-bottom:none}
+.sb-focus-skel .sb-skel{height:13px;width:70%;border-radius:6px}
+.sb-focus-skel .sb-skel.sm{height:11px;width:45%}
+
+/* --- Thoughtful empty state: encouraging, centred, with a glyph. --- */
+.sb-empty.compact.sb-empty-glad{display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;padding:24px 16px}
+.sb-empty-emoji{font-size:30px;line-height:1;margin-bottom:5px}
+.sb-empty-glad b{font-size:14.5px;color:var(--text-primary);font-weight:600}
+.sb-empty-glad span{font-size:12.5px;color:var(--text-muted)}
+
+/* --- Premium hover: links/actions nudge their arrow; cards lift softly. --- */
+.sb-ev-link{transition:opacity var(--motion-fast) var(--ease-standard),
+  transform var(--motion-fast) var(--ease-standard)}
+@media(hover:hover){
+  .sb-ev-link:hover{transform:translateX(2px)}
+  .sb-shead .link{transition:color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard)}
+  .sb-shead .link:hover{transform:translateX(2px)}
+}
+
+/* =================================================================
+   DASHBOARD REFINEMENT (v1.1.2) — celebratory wins, actionable team
+   progress, agenda-style week, and coordinated entrance motion.
+   ================================================================= */
+
+/* --- Team progress: completion + the pipeline that needs moving. --- */
+.sb-progress .bar{position:relative}
+.sb-progress .bar .fill{transform-origin:left center;animation:barGrow .8s var(--ease-standard) both}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.sb-progstats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.sb-progstat{display:flex;flex-direction:column;align-items:flex-start;gap:1px;cursor:pointer;
+  background:var(--surface-muted);border:1px solid transparent;border-radius:var(--r-control);
+  padding:9px 11px;text-align:left;
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-progstat:hover{border-color:var(--border-strong);transform:translateY(-1px)}
+.sb-progstat .n{font-size:19px;font-weight:700;line-height:1;letter-spacing:-.01em;color:var(--text-primary)}
+.sb-progstat .l{font-size:11px;font-weight:600;color:var(--text-muted)}
+.sb-progstat.warn{background:var(--danger-muted)}
+.sb-progstat.warn .n{color:var(--danger)}
+.sb-progstat.warn .l{color:var(--danger)}
+.sb-proglink{align-self:flex-start;background:none;border:none;color:var(--primary);
+  font-size:13px;font-weight:600;cursor:pointer;padding:12px 2px 2px;
+  transition:transform var(--motion-fast) var(--ease-standard)}
+@media(hover:hover){ .sb-proglink:hover{transform:translateX(2px)} }
+
+/* --- Ministry wins, folded into Team progress: a light divided list under the
+   pipeline stats so "how is the team doing" reads as one unified story. --- */
+.sb-progwins{margin-top:16px;padding-top:16px;
+  border-top:1px solid color-mix(in srgb,var(--border) 55%,transparent);
+  display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.sb-progwin{display:flex;flex-direction:column;gap:6px;
+  background:var(--surface-muted);border-radius:var(--r-control);padding:11px 12px}
+.sb-progwin .wtop{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--text-secondary)}
+.sb-progwin .e{font-size:14px;line-height:1;flex:none}
+.sb-progwin .wn{font-size:20px;font-weight:700;color:var(--text-primary);line-height:1;
+  letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+
+/* --- My week: a lightweight agenda; the status dot carries the colour. --- */
+.sb-week-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.sb-week-t{font-size:13.5px;font-weight:600;color:var(--text-primary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-week-sub{font-size:11.5px;color:var(--text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-week-dot{width:8px;height:8px;margin-top:5px;align-self:flex-start}
+.sb-week-dot.st-planned{background:var(--violet)} .sb-week-dot.st-progress{background:var(--blue)}
+.sb-week-dot.st-review{background:var(--gold)}   .sb-week-dot.st-changes{background:var(--red)}
+.sb-week-dot.st-approved{background:var(--green)} .sb-week-dot.st-ready{background:var(--amber)}
+
+/* --- Coordinated entrance: widgets fade up once, gently staggered. --- */
+@media(min-width:900px){
+  .sb-dash > .sb-wd{animation:pageIn var(--motion-standard) var(--ease-enter) both}
+  .sb-dash > .sb-wd:nth-child(1){animation-delay:0ms}
+  .sb-dash > .sb-wd:nth-child(2){animation-delay:50ms}
+  .sb-dash > .sb-wd:nth-child(3){animation-delay:90ms}
+  .sb-dash > .sb-wd:nth-child(4){animation-delay:130ms}
+  .sb-dash > .sb-wd:nth-child(5){animation-delay:170ms}
+  .sb-dash > .sb-wd:nth-child(6){animation-delay:210ms}
+  .sb-dash > .sb-wd:nth-child(7){animation-delay:250ms}
+}
+
+/* --- Sidebar polish: icon nudges with the row on hover; the active pill
+   carries a soft shadow + a springier glide (Linear/Arc-style). --- */
+@media(min-width:900px){
+  .sb-snav button .ico{transition:transform var(--motion-fast) var(--ease-standard)}
+  .sb-snav button:hover .ico{transform:translateX(1px)}
+  .sb-snav-ind{box-shadow:0 2px 8px color-mix(in srgb,var(--primary) 22%,transparent);
+    transition:transform var(--motion-standard) cubic-bezier(.34,1.3,.5,1),
+               height var(--motion-standard) var(--ease-standard),
+               opacity var(--motion-fast) var(--ease-standard)}
+  @media (prefers-reduced-motion:reduce){ .sb-snav-ind{transition:none} }
+}
+
+/* =================================================================
+   DASHBOARD CONSOLIDATION (v1.1.2) — fewer, larger, calmer sections.
+   My Week owns a full-width agenda row; surfaces trade heavy borders for
+   soft shadows + generous padding so the board feels focused, not busy.
+   ================================================================= */
+@media(min-width:900px){
+  /* My Week — full-width agenda: days flow into columns across the row so
+     the space reads as a week view, not one lonely list with dead space. */
+  .sb-week{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
+    gap:4px 26px;align-items:start;padding:16px 18px}
+  .sb-week-day{border-bottom:none;padding:6px 0}
+  .sb-week-lbl{margin-bottom:5px}
+
+  /* Calmer surfaces: lighter hairlines + a soft shadow instead of hard boxes,
+     with roomier padding. Applied to the dashboard's larger widgets. */
+  .sb-dash .sb-progress,.sb-dash .sb-week,.sb-dash .sb-widcard,.sb-dash .sb-attnlist{
+    border-color:color-mix(in srgb,var(--border) 55%,transparent);
+    box-shadow:0 1px 2px rgba(33,27,51,.04),0 6px 20px rgba(33,27,51,.05)}
+  [data-theme="dark"] .sb-dash .sb-progress,[data-theme="dark"] .sb-dash .sb-week,
+  [data-theme="dark"] .sb-dash .sb-widcard,[data-theme="dark"] .sb-dash .sb-attnlist{
+    box-shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28)}
+  .sb-dash .sb-progress{padding:18px 18px 15px}
+  /* Event cards: lighter outline, they sit on the calmer canvas. */
+  .sb-dash .sb-ev{border-color:color-mix(in srgb,var(--border) 55%,transparent)}
+}
+
+/* =================================================================
+   DASHBOARD HIERARCHY & PERSONALITY (v1.1.2) — each section earns its
+   own read: Focus (primary/urgent) → Coming Up (actionable) → Team
+   Progress (analytical, rewarding) → Activity (quiet) → My Week (agenda).
+   ================================================================= */
+@media(min-width:900px){
+  /* Your Focus is the primary widget — a slightly larger head; the count chip
+     picks up the primary accent to draw the eye. */
+  .sb-wd.wd-focus .sb-shead-primary h2{font-size:17px;font-weight:600}
+  .sb-wd.wd-focus .sb-headcount{background:var(--primary-muted);color:var(--primary);font-weight:700}
+
+  /* Coming Up: the event title is the hero; secondary text steps back; the CTA
+     reads as integrated (no attached divider line). Apple-Calendar-calm. */
+  .sb-dash .sb-ev-name{font-size:16px;font-weight:600;line-height:1.3;-webkit-line-clamp:1}
+  .sb-dash .sb-ev-sub{font-size:12px;color:var(--text-muted);margin-top:3px}
+  .sb-dash .sb-ev-foot{border-top:none;padding-top:6px;margin-top:8px}
+  .sb-dash .sb-ev-status{font-size:11.5px}
+
+  /* Team Progress: thicker bar + a bigger completion figure = rewarding. */
+  .sb-dash .sb-progress .row{margin-bottom:14px}
+  .sb-dash .sb-progress .row b{font-size:14px}
+  .sb-dash .sb-progress .pct{font-size:21px;font-weight:700;letter-spacing:-.01em}
+  .sb-dash .sb-progress .bar{height:10px}
+
+  /* My Week: not another white card — an agenda of day columns on the canvas. */
+  .sb-dash .sb-week{background:transparent;border:none;box-shadow:none;padding:0;
+    grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+  .sb-dash .sb-week-day{background:var(--surface);border-radius:var(--r-card);
+    border:1px solid color-mix(in srgb,var(--border) 55%,transparent);padding:12px 14px}
+  .sb-dash .sb-week-lbl{color:var(--primary);margin-bottom:7px}
+  .wd-week{margin-top:4px}
+}
+
+/* =================================================================
+   FINAL POLISH (v1.1.2) — Linear/Arc-grade card, chip, and hover
+   refinement. Softer borders, roomier padding, consistent radii.
+   ================================================================= */
+@media(min-width:900px){
+  /* #3 Stats: lighter border, roomier padding, softer icon chip, more air
+     between the number and its supporting line, premium lift on hover. */
+  .sb-stat2{padding:16px 16px 15px;border-color:color-mix(in srgb,var(--border) 50%,transparent)}
+  .sb-stat2-l{margin-top:6px}
+  .sb-stat2-sub{margin-top:3px}
+  .sb-stat2:hover{transform:translateY(-2px);box-shadow:0 2px 6px rgba(33,27,51,.05),0 10px 26px rgba(33,27,51,.07)}
+  [data-theme="dark"] .sb-stat2:hover{box-shadow:0 2px 8px rgba(0,0,0,.35),0 12px 30px rgba(0,0,0,.32)}
+
+  /* #4 Coming Up: smaller "Nothing planned", a touch more prominent CTA, and a
+     gentle hover elevation so the card invites interaction. */
+  .sb-dash .sb-ev-status{font-size:11px}
+  .sb-dash .sb-ev-link{font-size:12.5px;font-weight:600}
+  .sb-dash .sb-ev{transition:background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard)}
+  .sb-dash .sb-ev:hover{transform:translateY(-1px);
+    box-shadow:0 1px 2px rgba(33,27,51,.04),0 8px 22px rgba(33,27,51,.06)}
+  [data-theme="dark"] .sb-dash .sb-ev:hover{box-shadow:0 2px 8px rgba(0,0,0,.3),0 10px 26px rgba(0,0,0,.3)}
+
+  /* #5 Your Focus: taller rows, roomier chips, animated chevron, clearer divider. */
+  .sb-dash .sb-attnlist .sb-attn{padding:13px 13px}
+  .sb-dash .sb-attnlist .sb-attn{border-bottom-color:color-mix(in srgb,var(--border) 80%,transparent)}
+  .sb-attn-sub{gap:6px 9px}
+  .sb-attn-chev{transition:transform var(--motion-fast) var(--ease-standard)}
+  @media(hover:hover){ .sb-attn:hover .sb-attn-chev{transform:translateX(2px)} }
+
+  /* #8 My Week: Today & Tomorrow read as the most urgent buckets. */
+  .sb-dash .sb-week-day:first-child .sb-week-lbl,
+  .sb-dash .sb-week-day:nth-child(2) .sb-week-lbl{color:var(--primary);font-weight:800}
+}
+
+/* =================================================================
+   LINEAR COMPONENT PASS — buttons + sidebar active state.
+   Token-driven variants matching the reference design system.
+   ================================================================= */
+
+/* --- Buttons --- */
+/* Primary: solid indigo, medium weight, a single subtle top-edge highlight
+   (the Linear button "sheen"), flat otherwise. */
+.sb-btn{font-weight:500;border-radius:var(--r-input);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10)}
+.sb-btn:hover{background:var(--primary-hover)}
+.sb-btn:active{background:var(--primary-pressed)}
+.sb-btn:disabled{box-shadow:none}
+/* Secondary (ghost): neutral surface + hairline border + neutral text —
+   NOT accent-tinted. This is Linear's default/secondary button. */
+.sb-btn.ghost{background:var(--surface);border:1px solid var(--border);
+  color:var(--text-primary);box-shadow:none}
+.sb-btn.ghost:hover{background:var(--surface-muted);border-color:var(--border-strong)}
+.sb-btn.ghost:active{background:var(--surface-muted)}
+/* Danger: coral, medium weight, same subtle top edge. */
+.sb-btn.danger{background:var(--danger);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+.sb-btn.danger:hover{background:var(--danger);filter:brightness(.95)}
+/* Compact: Linear's dense inline size (~32px). */
+.sb-btn.compact{min-height:32px;padding:6px 12px;font-size:13px;font-weight:500;box-shadow:none}
+/* Text/quiet buttons keep the tertiary treatment already defined (.sb-tertiary). */
+
+/* --- Sidebar active state (desktop) --- */
+/* A subtle tinted row with a gliding indigo left-accent bar, not a saturated
+   pill. Text brightens to primary; only the icon carries the accent. */
+@media(min-width:900px){
+  .sb-snav-ind{background:var(--surface-muted);border-radius:var(--r-control);
+    box-shadow:inset 2px 0 0 var(--primary)}
+  [data-theme="dark"] .sb-snav-ind{background:rgba(255,255,255,.05)}
+  .sb-snav button.on{color:var(--text-primary);font-weight:500;background:transparent}
+  .sb-snav button.on .ico{color:var(--primary)}
+}
+
+/* =================================================================
+   LINEAR COMPONENT PASS — chips/badges + inputs.
+   ================================================================= */
+
+/* --- Chips & badges: quiet, sentence-case, consistent geometry (no shouting
+   uppercase, lighter weight, muted tints). --- */
+.sb-status{font-weight:500;letter-spacing:0;padding:3px 9px}
+.sb-status .pip{width:6px;height:6px}
+.sb-chip,.sb-pri,.sb-rolechip,.sb-role{text-transform:none;letter-spacing:0;font-weight:600}
+.sb-chip{font-size:11px;padding:2px 8px;border-radius:6px}
+.sb-pri{font-size:11px;padding:2px 8px;border-radius:6px}
+/* Filter pills: compact, subtle border; ACTIVE = quiet tint, not a saturated fill. */
+.sb-fchip{border-radius:var(--r-control);padding:6px 11px;font-weight:500;
+  background:var(--surface);border:1px solid var(--border);color:var(--text-secondary)}
+.sb-fchip:hover{border-color:var(--border-strong);color:var(--text-primary)}
+.sb-fchip.on{background:var(--primary-muted);color:var(--primary);border-color:transparent}
+.sb-fchip.admin.on{background:var(--primary-muted);border-color:transparent}
+
+/* --- Inputs: subtle border, 8px radius, soft indigo focus ring (no hard
+   2px outline). Placeholder + disabled tuned to the reference. --- */
+.sb-field input,.sb-field select,.sb-field textarea{border-radius:var(--r-input);
+  background:var(--surface);border:1px solid var(--border);padding:10px 12px}
+[data-theme="dark"] .sb-field input,[data-theme="dark"] .sb-field select,[data-theme="dark"] .sb-field textarea{
+  background:var(--surface-muted)}
+.sb-field input:focus,.sb-field select:focus,.sb-field textarea:focus,
+.sb-urlrow input:focus,.sb-inline input:focus{outline:none;border-color:var(--primary);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 18%,transparent)}
+.sb-field input:disabled,.sb-field select:disabled,.sb-field textarea:disabled{
+  opacity:.6;cursor:not-allowed;background:var(--surface-muted)}
+input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
+/* URL / inline inputs share the same geometry + focus ring. */
+.sb-urlrow input,.sb-inline > input{border-radius:var(--r-input)}
+
+/* =================================================================
+   LINEAR COMPONENT PASS — button hierarchy + quiet beta notice.
+   ================================================================= */
+
+/* Secondary action with danger MEANING (colour as text, not a full fill) —
+   one primary per section; destructive-adjacent actions stay quiet. */
+.sb-btn.ghost.subtle-danger{color:var(--danger);border-color:var(--border);background:var(--surface)}
+.sb-btn.ghost.subtle-danger:hover{background:var(--danger-muted);border-color:transparent;color:var(--danger)}
+.sb-btn.ghost.subtle-danger:active{background:var(--danger-muted)}
+
+/* Beta notice: de-emphasised to a quiet inline strip — no boxed banner
+   competing with the page title. */
+.sb-beta{background:transparent;border:none;box-shadow:none;padding:4px 0;margin:2px 0 6px}
+.sb-beta-tag{background:var(--primary-muted);color:var(--primary);font-weight:600}
+.sb-beta-txt{color:var(--text-muted);font-size:12px}
+.sb-beta-report{background:none;border:none;color:var(--text-secondary);padding:4px 8px;font-weight:500}
+.sb-beta-report:hover{color:var(--text-primary);background:transparent}
+.sb-beta-x{color:var(--text-muted)}
+@media(min-width:900px){ .sb-beta{margin:0 0 8px} }
+
+/* =================================================================
+   LINEAR COMPONENT PASS — command palette, typography, density.
+   ================================================================= */
+
+/* --- Command palette (⌘K / "/") — Linear command-bar styling: blurred
+   scrim, elevated surface, hairline border, neutral hover, quiet labels. --- */
+.sb-modal{background:var(--overlay);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.sb-search{background:var(--surface-elevated);border:1px solid var(--border);
+  border-radius:var(--r-panel);box-shadow:var(--shadow-lg)}
+.sb-searchbar{border-bottom:1px solid var(--border);padding:13px 16px}
+.sb-searchbar input{color:var(--text-primary)}
+.sb-searchsec{text-transform:none;letter-spacing:0;font-weight:600;font-size:11px;
+  color:var(--text-muted);padding:11px 10px 4px}
+.sb-sresult{border-radius:var(--r-control)}
+.sb-sresult:hover{background:var(--surface-muted)}
+.sb-sresult .r-main{color:var(--text-primary)}
+.sb-sresult .r-sub{color:var(--text-muted)}
+.sb-kbd{background:var(--surface-muted);border:1px solid var(--border);color:var(--text-secondary)}
+
+/* --- Typography: quiet sentence-case group label + greeting eyebrow
+   (Linear uses calm, neutral small labels — no shouting uppercase/gold). --- */
+.sb-navgroup{text-transform:none;letter-spacing:.01em;font-weight:600;font-size:11.5px;color:var(--text-muted)}
+.sb-eyebrow{text-transform:none;letter-spacing:0;color:var(--text-muted);font-weight:500;opacity:1;font-size:13px}
+
+/* --- Density: tighter list rows + a calmer modal section rhythm. --- */
+.sb-attnlist .sb-attn{padding-top:11px;padding-bottom:11px}
+.sb-sheet .sb-shead{margin:18px 0 10px}
+.sb-sheet .sb-shead h2{font-size:16px;font-weight:600}
+
+/* =================================================================
+   DESIGN-REVIEW PASS — brand, rhythm, hierarchy, depth.
+   ================================================================= */
+
+/* --- Brand: typography-only wordmark (no glyph). Small IFC label + name. --- */
+.sb-sbrand{gap:0;padding:2px 8px 16px}
+.brandwm .ifc-sm{font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--gold);font-weight:700;margin-right:7px;vertical-align:2px}
+
+/* --- #2 Less whitespace above the fold: content starts higher. --- */
+@media(min-width:900px){
+  .sb-content{padding-top:12px}
+  .sb-page{padding-top:2px}
+}
+
+/* --- #3 Quieter greeting: the page title stops shouting so content is the
+   hero (lighter weight, smaller, tighter block). --- */
+@media(min-width:900px){
+  .sb-h{font-size:30px;font-weight:600;letter-spacing:-.02em}
+  .sb-page.home .sb-greet{margin-bottom:14px;line-height:1.6}
+}
+/* #15 Mobile: drop the "Good morning" eyebrow — go straight to the greeting. */
+@media(max-width:899px){ .sb-page.home .sb-eyebrow{display:none} }
+
+/* --- #4 Metric cards read as interactive (crisper hover, clear affordance). --- */
+.sb-stat2{cursor:pointer}
+.sb-stat2:hover{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 3%,var(--surface))}
+
+/* --- #5 Sidebar recedes (dark): barely lighter than the page, softer edge. --- */
+[data-theme="dark"]{--sidebar:#0A0A0C}
+[data-theme="dark"] .sb-side{border-right-color:rgba(255,255,255,.05)}
+
+/* --- #11 Card depth (dark): a 1px inner highlight + a whisper of shadow so
+   cards read as raised via contrast, not flatness. --- */
+[data-theme="dark"] .sb-stat2,
+[data-theme="dark"] .sb-dash .sb-progress,
+[data-theme="dark"] .sb-dash .sb-week-day,
+[data-theme="dark"] .sb-dash .sb-widcard,
+[data-theme="dark"] .sb-dash .sb-ev,
+[data-theme="dark"] .sb-task,
+[data-theme="dark"] .sb-attnlist{
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 1px 2px rgba(0,0,0,.35)}
+
+/* =================================================================
+   PERSONALITY PASS — avatars in focus + activity; mobile order.
+   ================================================================= */
+
+/* Focus rows: an owner avatar makes the list feel alive. */
+.sb-attn-av{flex:none;align-self:center;width:26px;height:26px;font-size:10px;border:none}
+/* Activity rows: avatar + a small type-coloured status dot (GitHub-style). */
+.sb-actrow2-av{position:relative;flex:none;width:28px;height:28px;font-size:10px;border:none;margin-top:1px}
+.sb-actrow2-av .sb-actrow2-dot{position:absolute;bottom:-1px;right:-1px;width:10px;height:10px;
+  border:2px solid var(--surface);margin:0}
+
+/* Mobile: shorter "Coming up" event cards (~less tall). */
+@media(max-width:899px){
+  .sb-ev{padding:11px 13px}
+  .sb-ev-foot{margin-top:7px;padding-top:7px}
+}
+
+/* =================================================================
+   ACTION-AFFORDANCE PASS — every card leads somewhere.
+   ================================================================= */
+
+/* Metric cards navigate on click; reveal a quiet arrow on hover so the action
+   is legible (Linear-style). The whole card is already a <button>. */
+.sb-stat2{position:relative}
+.sb-stat2::after{content:"→";position:absolute;top:14px;right:15px;
+  font-size:14px;line-height:1;color:var(--text-muted);opacity:0;transform:translateX(-3px);
+  transition:opacity var(--motion-fast) var(--ease-standard),
+             transform var(--motion-fast) var(--ease-standard),
+             color var(--motion-fast) var(--ease-standard)}
+.sb-stat2:hover::after{opacity:1;transform:translateX(0);color:var(--primary)}
+@media (prefers-reduced-motion:reduce){ .sb-stat2::after{transition:none} }
+/* Touch: no hover, so keep the arrow gently visible as the affordance. */
+@media(hover:none){ .sb-stat2::after{opacity:.5;transform:none} }
+
+/* Section-header links + event CTAs slide their arrow on hover (consistent
+   "leads to an action" motion across the dashboard). */
+@media(hover:hover){
+  .sb-shead .link,.sb-ev-link,.sb-proglink{transition:color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard)}
+  .sb-shead .link:hover,.sb-ev-link:hover,.sb-proglink:hover{color:var(--primary)}
+}
+
+/* =================================================================
+   LEADERSHIP OVERVIEW (Admin) — decision-first, Home's language.
+   ================================================================= */
+
+/* Hero head: title + top-right "New" actions menu. */
+.sb-adhead{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}
+.sb-adhead .sb-h{margin:0}
+
+/* Leadership digest — the "what matters now" summary card. */
+.sb-digest{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:16px 18px 16px 20px;box-shadow:var(--shadow-sm);position:relative;overflow:hidden}
+.sb-digest::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary)}
+.sb-digest-h{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;
+  color:var(--primary);margin-bottom:10px}
+.sb-digest-h .hi{color:var(--primary)}
+.sb-digest-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.sb-digest-list li{font-size:14px;color:var(--text-primary);line-height:1.5}
+.sb-digest-clear{font-size:14px;color:var(--text-secondary)}
+
+/* Ranked health strip — tinted only when the count matters. */
+.sb-healthbar{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 4px}
+.sb-healthchip{display:inline-flex;align-items:center;gap:7px;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r-control);padding:7px 12px;cursor:pointer;
+  transition:background-color var(--motion-fast) var(--ease-standard),
+             border-color var(--motion-fast) var(--ease-standard)}
+.sb-healthchip:hover{border-color:var(--border-strong)}
+.sb-healthchip .hn{font-size:15px;font-weight:700;color:var(--text-primary);font-variant-numeric:tabular-nums}
+.sb-healthchip .hl{font-size:12.5px;color:var(--text-secondary);font-weight:500}
+.sb-healthchip.tone-red.active{background:var(--danger-muted)}    .sb-healthchip.tone-red.active .hn{color:var(--danger)}
+.sb-healthchip.tone-amber.active{background:var(--warning-muted)} .sb-healthchip.tone-amber.active .hn{color:var(--warning)}
+.sb-healthchip.tone-blue.active{background:var(--info-muted)}     .sb-healthchip.tone-blue.active .hn{color:var(--info)}
+.sb-healthchip.tone-violet.active{background:var(--primary-muted)}.sb-healthchip.tone-violet.active .hn{color:var(--primary)}
+.sb-healthchip.tone-green.active{background:var(--success-muted)} .sb-healthchip.tone-green.active .hn{color:var(--success)}
+
+/* Decision grid — paired widgets, same rhythm as Home. */
+.sb-adash{display:flex;flex-direction:column;gap:26px;margin-top:22px}
+.sb-awd{display:flex;flex-direction:column;min-width:0}
+@media(min-width:900px){ .sb-adash{display:grid;grid-template-columns:1fr 1fr;gap:34px 24px} }
+
+/* Section-count variants: attention = danger, ready = success. */
+.sb-headcount.danger{background:var(--danger-muted);color:var(--danger)}
+.sb-headcount.ok{background:var(--success-muted);color:var(--success)}
+
+/* Team-health tiles. */
+.sb-teamhealth{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.sb-thstat{display:flex;flex-direction:column;align-items:flex-start;gap:2px;cursor:pointer;text-align:left;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:14px;
+  transition:border-color var(--motion-fast) var(--ease-standard),transform var(--motion-instant) var(--ease-standard)}
+.sb-thstat:hover{border-color:var(--border-strong);transform:translateY(-1px)}
+.sb-thstat .n{font-size:22px;font-weight:700;line-height:1;color:var(--text-primary);font-variant-numeric:tabular-nums}
+.sb-thstat .l{font-size:12px;color:var(--text-muted);font-weight:500;margin-top:3px}
+.sb-thstat.warn .n{color:var(--warning)}
+
+/* =================================================================
+   LEADERSHIP OVERVIEW v2 — compact briefing + people panel.
+   ================================================================= */
+
+/* Briefing row: summary (wider) + project health, side by side. */
+.sb-adtop{display:flex;flex-direction:column;gap:16px}
+@media(min-width:900px){ .sb-adtop{display:grid;grid-template-columns:1.6fr 1fr;gap:20px;align-items:start} }
+.sb-digest{padding:14px 16px 14px 18px;display:flex;flex-direction:column}
+.sb-digest-list{gap:5px}
+.sb-digest-list li{font-size:13.5px}
+
+/* Project health — one card, severity rows; count tints only when it matters. */
+.sb-healthcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  padding:14px 16px;box-shadow:var(--shadow-sm)}
+.sb-healthcard .sb-digest-h{color:var(--text-secondary)}
+.sb-healthrows{display:flex;flex-direction:column;gap:1px}
+.sb-healthrow{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:6px;border-radius:8px;transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-healthrow:hover{background:var(--surface-muted)}
+.sb-healthrow .hdot{width:8px;height:8px;border-radius:50%;background:var(--border-strong);flex:none}
+.sb-healthrow .hl{flex:1;min-width:0;font-size:13px;color:var(--text-secondary)}
+.sb-healthrow .hn{font-size:14px;font-weight:700;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.sb-healthrow.active .hl,.sb-healthrow.active .hn{color:var(--text-primary)}
+.sb-healthrow.tone-red.active .hdot{background:var(--danger)}
+.sb-healthrow.tone-amber.active .hdot{background:var(--warning)}
+.sb-healthrow.tone-blue.active .hdot{background:var(--info)}
+.sb-healthrow.tone-violet.active .hdot{background:var(--primary)}
+.sb-healthrow.tone-green.active .hdot{background:var(--success)}
+
+/* Team health — people ranked by workload with a tiny load bar. */
+.sb-teamlist{display:flex;flex-direction:column;padding:2px 12px}
+.sb-teamrow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:9px 2px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);
+  transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-teamrow:last-child{border-bottom:none}
+.sb-teamrow:hover{background:var(--surface-muted)}
+.sb-teamrow .sb-av{width:26px;height:26px;font-size:10px;border:none;flex:none}
+.sb-teamrow-name{font-size:13.5px;font-weight:500;color:var(--text-primary);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:0;max-width:130px}
+.sb-teambar{flex:1;height:6px;border-radius:999px;background:var(--surface-muted);overflow:hidden;min-width:40px}
+.sb-teambar i{display:block;height:100%;border-radius:999px;background:var(--primary)}
+.sb-teambar i.t-over{background:var(--warning)} .sb-teambar i.t-free{background:var(--border-strong)}
+.sb-teambar i.t-ok{background:var(--success)}
+.sb-teamrow-tag{font-size:11.5px;font-weight:600;flex:none;color:var(--text-muted);white-space:nowrap}
+.sb-teamrow-tag.t-over{color:var(--warning)} .sb-teamrow-tag.t-ok{color:var(--text-secondary)}
+
+/* =================================================================
+   MOBILE POLISH PASS — spacing, layering, overflow, sheets, login.
+   ================================================================= */
+
+/* 1 — Beta banner: real padding on mobile, aligned to page content. */
+@media(max-width:899px){ .sb-beta{padding:8px 16px;margin:12px 0 4px} }
+
+/* 2 — Notification "More": only the chips scroll; the menu escapes above the
+   list with a subtle fade+scale. */
+.sb-nfilters{overflow:visible}
+.sb-nfilters-scroll{display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0;
+  overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.sb-nfilters-scroll::-webkit-scrollbar{display:none}
+@media(max-width:899px){ .sb-nfilters{overflow-x:visible;overflow-y:visible} }
+.sb-nmore-menu{z-index:var(--z-popover);transform-origin:top right;
+  animation:menuPop var(--motion-fast) var(--ease-enter)}
+@keyframes menuPop{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:none}}
+
+/* 3 — Profile sheet: match the rest of the app exactly (current tokens). */
+.sb-drawer{border-radius:var(--r-modal) var(--r-modal) 0 0;
+  padding:10px 12px calc(16px + env(safe-area-inset-bottom))}
+.sb-drawer-user{border-bottom-color:var(--border)}
+.sb-drawer-user .rl{color:var(--text-muted)}
+.sb-drawer-item{border-radius:var(--r-control);min-height:46px;color:var(--text-primary)}
+.sb-drawer-item:hover,.sb-drawer-item:active{background:var(--surface-muted)}
+.sb-drawer-item .hi{color:var(--text-secondary)}
+.sb-drawer-item.danger,.sb-drawer-item.danger .hi{color:var(--danger)}
+.sb-drawer-state{background:var(--surface-muted);border:1px solid var(--border);color:var(--text-secondary)}
+.sb-brandfoot{border-top-color:var(--border)}
+.sb-brandfoot b{color:var(--text-primary)}
+
+/* 4 — Team Progress + stat cards: never overflow; labels truncate, equal heights. */
+.sb-progstat,.sb-progwin,.sb-stat2,.sb-thstat{min-width:0}
+.sb-progstat .l,.sb-progwin .wtop,.sb-stat2-l,.sb-stat2-sub{min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.sb-progstat .n,.sb-progwin .wn,.sb-stat2-n{font-variant-numeric:tabular-nums}
+.sb-statgrid,.sb-progstats,.sb-progwins{align-items:stretch}
+@media(max-width:400px){
+  .sb-progstat{padding:8px 9px} .sb-progstat .n{font-size:17px} .sb-progstat .l{font-size:10.5px}
+  .sb-progwin{padding:9px 10px} .sb-progwin .wn{font-size:18px}
+}
+
+/* 5 — Login / status pages: shared wordmark branding (neutral surface, indigo). */
+.sb-lwordmark{display:flex;flex-direction:column;align-items:center;line-height:1.1;
+  font-size:26px;font-weight:600;letter-spacing:-.02em;color:var(--text-primary)}
+.sb-lwordmark .ifc{font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--gold);font-weight:700;margin-bottom:5px}
+.sb-tagline{color:var(--text-secondary);font-weight:600;font-size:14px;letter-spacing:0;margin-top:12px}
+.sb-login p{color:var(--text-muted);font-size:14px;margin-top:6px}
+
+/* 6 — Bottom sheets: springier entrance (native-iOS feel), backdrop already fades. */
+.sb-sheet,.sb-drawer,.sb-notifpanel{animation:sheetSpring var(--motion-slow) cubic-bezier(.32,1.32,.5,1)}
+@keyframes sheetSpring{from{transform:translateY(20px);opacity:.5}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){ .sb-sheet,.sb-drawer,.sb-notifpanel{animation:none} }
+
+/* 9 — Touch targets: keep key mobile controls ≥44px. */
+@media(max-width:899px){
+  .sb-fchip,.sb-segbtn{min-height:40px;display:inline-flex;align-items:center}
+  .sb-ev-link,.sb-shead .link{min-height:36px;display:inline-flex;align-items:center}
+}
+
+/* 5 — Plan Content modal: tighter vertical rhythm on phones so core fields are
+   reachable without so much scrolling (spacing only — no fields removed). */
+@media(max-width:899px){
+  .sb-sheet .bd{padding-top:12px}
+  .sb-sheet .bd .sb-field{margin-bottom:10px}
+  .sb-sheet .bd .sb-sub{margin-bottom:10px}
+  .sb-sheet .bd .sb-shead{margin:16px 0 8px}
+}
+
+/* =================================================================
+   NAV TRANSITIONS + DRAG SHEETS + OVERFLOW GUARD.
+   ================================================================= */
+
+/* 7 — Inter-page transition: a brief skeleton, then the page cross-fades in
+   (never a blank flash). */
+.sb-pageskel{padding-top:8px}
+.sb-skelgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:20px}
+@media(max-width:559px){ .sb-skelgrid{grid-template-columns:1fr} }
+.sb-skelgrid .sb-skel{border-radius:var(--r-card)}
+.sb-pageshow{animation:pageFade var(--motion-standard) var(--ease-enter)}
+@keyframes pageFade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.sb-pagehide{display:none}
+@media (prefers-reduced-motion:reduce){ .sb-pageshow{animation:none} }
+
+/* 8 — Bottom-sheet grab handle (mobile) + drag affordance. */
+.sb-grab{display:flex;justify-content:center;align-items:center;padding:9px 0 5px;
+  cursor:grab;touch-action:none;flex:none}
+.sb-grab span{width:38px;height:4px;border-radius:999px;background:var(--border-strong)}
+.sb-grab:active{cursor:grabbing}
+@media(min-width:900px){ .sb-grab{display:none} }
+
+/* Workflow (and every page): never scroll the page sideways. */
+.sb-content{overflow-x:hidden}
+
+/* Plan Content (and any sheet): flex fields must be allowed to shrink, and the
+   body never scrolls sideways — fixes horizontal overflow / left-clipping. */
+.sb-sheet .bd{overflow-x:hidden}
+.sb-btnrow{min-width:0}
+.sb-btnrow > *,.sb-field,.sb-inline > *{min-width:0}
+.sb-field input,.sb-field select,.sb-field textarea{max-width:100%}
+
+/* Required-field indicator on form labels. */
+.sb-req{color:var(--danger);font-weight:700;margin-left:2px}
+
+/* Workflow toolbar: group the controls (Filters · View · Sort) together on the
+   left instead of shoving Sort to the far edge — aligned, not floating. */
+.sb-filterbar{flex-wrap:wrap;row-gap:8px}
+.sb-filterbar .sb-sortlbl{margin-left:0}
+@media(min-width:900px){ .sb-filterbar .sb-sortlbl{margin-left:auto} }
+
+/* Notification filters: a right-edge fade makes the horizontal scroll obvious
+   (and the last chip fades out intentionally instead of looking cut off). */
+.sb-nfilters-scroll{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent);
+  mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent)}
+
+/* Ministry-win chips (Team Progress): let the label wrap instead of clipping —
+   "Completed" / "Contributions" no longer get cut off on narrow phones. */
+.sb-progwin .wtop{display:block;white-space:normal;overflow:visible;text-overflow:clip;
+  line-height:1.25;min-width:0}
+.sb-progwin .wtop .e{display:inline-block;vertical-align:-1px;margin-right:5px}
+
+/* Win chips: inline emoji+label on desktop (fits); on phones stack them so a
+   long label ("Contributions") sits on its own full-width line — no orphaned
+   emoji, all three chips consistent. */
+.sb-progwin .wtop{display:flex;align-items:center;gap:6px;white-space:normal;line-height:1.2;min-width:0}
+.sb-progwin .wtop .e{flex:none;margin:0}
+@media(max-width:899px){
+  .sb-progwin .wtop{flex-direction:column;align-items:flex-start;gap:3px}
+}
+
+/* Win chips: number on TOP (to match the "Awaiting review / Ready to post /
+   Overdue" tiles above), then emoji, then label. */
+.sb-progwin{gap:4px}
+.sb-progwin .wn{order:-1;margin-bottom:2px}
+
+/* Team progress: supporting statistics (not KPI boxes). A calm pipeline list,
+   a divider, then a right-aligned wins list. Very Linear/Notion. */
+.sb-statlist{display:flex;flex-direction:column;margin-top:14px}
+.sb-statrow{display:flex;align-items:baseline;gap:9px;width:100%;text-align:left;background:none;border:none;
+  cursor:pointer;padding:7px 4px;border-radius:8px;
+  transition:background-color var(--motion-fast) var(--ease-standard)}
+.sb-statrow:hover{background:var(--surface-muted)}
+.sb-statrow .v{font-size:15px;font-weight:700;color:var(--text-primary);
+  font-variant-numeric:tabular-nums;min-width:16px}
+.sb-statrow .k{font-size:13.5px;color:var(--text-secondary)}
+.sb-statrow.warn .v,.sb-statrow.warn .k{color:var(--danger)}
+/* Wins list: emoji + label … number (right). */
+.sb-statlist-wins{margin-top:12px;padding-top:12px;
+  border-top:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
+.sb-winrow{display:flex;align-items:center;gap:9px;padding:7px 4px}
+.sb-winrow .e{font-size:15px;line-height:1;flex:none}
+.sb-winrow .k{flex:1;min-width:0;font-size:13.5px;color:var(--text-secondary)}
+.sb-winrow .v{font-size:15px;font-weight:700;color:var(--text-primary);
+  font-variant-numeric:tabular-nums;flex:none}
+
+/* =================================================================
+   KPI CARDS — reusable dashboard metric cards. 2×2 on phones/tablet,
+   a single row on desktop. Cards only "light up" when value > 0.
+   ================================================================= */
+.sb-kpigrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0 6px}
+@media(min-width:900px){ .sb-kpigrid{grid-template-columns:repeat(4,1fr)} }
+.sb-kpi{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  padding:18px 12px;min-height:88px;border-radius:var(--r-card);text-align:center;min-width:0;
+  border:1px solid var(--border);background:var(--surface);cursor:pointer;width:100%;
+  transition:background-color var(--motion-standard) var(--ease-standard),
+             border-color var(--motion-standard) var(--ease-standard),
+             transform var(--motion-instant) var(--ease-standard)}
+.sb-kpi:hover{border-color:var(--border-strong)}
+.sb-kpi:active{transform:scale(.99)}
+.sb-kpi-n{font-size:30px;font-weight:700;line-height:1;letter-spacing:-.02em;
+  color:var(--text-muted);font-variant-numeric:tabular-nums;
+  transition:color var(--motion-standard) var(--ease-standard)}
+.sb-kpi-l{font-size:12.5px;font-weight:500;color:var(--text-secondary)}
+/* Smart coloring: only tint the card + colour the number when value > 0.
+   (Base surface stays as the solid fallback if color-mix is unsupported.) */
+.sb-kpi.tone-blue.on{background:color-mix(in srgb,var(--info) 7%,var(--surface));border-color:color-mix(in srgb,var(--info) 24%,var(--border))}
+.sb-kpi.tone-blue.on .sb-kpi-n{color:var(--info)}
+.sb-kpi.tone-amber.on{background:color-mix(in srgb,var(--warning) 8%,var(--surface));border-color:color-mix(in srgb,var(--warning) 26%,var(--border))}
+.sb-kpi.tone-amber.on .sb-kpi-n{color:var(--warning)}
+.sb-kpi.tone-red.on{background:color-mix(in srgb,var(--danger) 7%,var(--surface));border-color:color-mix(in srgb,var(--danger) 24%,var(--border))}
+.sb-kpi.tone-red.on .sb-kpi-n{color:var(--danger)}
+.sb-kpi.tone-green.on{background:color-mix(in srgb,var(--success) 7%,var(--surface));border-color:color-mix(in srgb,var(--success) 24%,var(--border))}
+.sb-kpi.tone-green.on .sb-kpi-n{color:var(--success)}

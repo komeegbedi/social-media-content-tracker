@@ -37,11 +37,12 @@ service cloud.firestore {
         && request.resource.data.get('lead', false) == false;
 
       // Admins edit profiles (approvals, roles, skills, flags, removal).
-      // Members may self-edit ONLY their notification preferences — nothing
-      // else (changing their own skills/flags could game auto-assignment).
+      // Members may self-edit ONLY their notification preferences and appearance
+      // preference — nothing else (changing their own skills/flags could game
+      // auto-assignment).
       allow update: if isAdmin()
         || (signedIn() && request.auth.uid == uid
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['notifPrefs']));
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['notifPrefs', 'appearance']));
       allow delete: if isAdmin();
 
       // Web-push device tokens: a user manages only their own.
