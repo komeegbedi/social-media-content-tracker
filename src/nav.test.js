@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   SCREENS, pathForScreen, parseLocation, parseOverlay, migrate, withParams,
   openComposeNew, openComposeEdit, openPanel, closeOverlays, fallbackPath,
-  titleFor, hasOverlay, PARAM,
+  titleFor, hasOverlay, PARAM, notificationDestination,
 } from "./nav.js";
 
 test("every screen has a canonical path and round-trips", () => {
@@ -136,4 +136,52 @@ test("document titles reflect screen and overlay", () => {
   assert.match(titleFor(parseLocation("/", "?edit=t1")), /^Edit content ·/);
   assert.match(titleFor(parseLocation("/", "?panel=notifications")), /^Notifications ·/);
   assert.match(titleFor(parseLocation("/content/x", ""), "Sunday Reel"), /^Sunday Reel ·/);
+});
+
+test("notificationDestination deep-links every type to the exact thing it refers to", () => {
+  // Content notifications open the content itself.
+  assert.deepEqual(notificationDestination({ type: "assigned", taskId: "t1" }),
+    { pathname: "/content/t1", search: "" });
+  assert.deepEqual(notificationDestination({ type: "reminder", taskId: "t1" }),
+    { pathname: "/content/t1", search: "" });
+  assert.deepEqual(notificationDestination({ type: "ready", taskId: "t1" }),
+    { pathname: "/content/t1", search: "" });
+
+  // Review request → the content, focused on the QA review panel.
+  assert.deepEqual(notificationDestination({ type: "qa", taskId: "t2" }),
+    { pathname: "/content/t2", search: "?focus=review" });
+
+  // Changes/mention → the content, focused on Discussion (mention carries the comment).
+  assert.deepEqual(notificationDestination({ type: "changes", taskId: "t3" }),
+    { pathname: "/content/t3", search: "?focus=comments" });
+  assert.deepEqual(notificationDestination({ type: "mention", taskId: "t3", commentId: "c9" }),
+    { pathname: "/content/t3", search: "?focus=comments&comment=c9" });
+
+  // Event → the workflow scoped to that occurrence.
+  assert.deepEqual(notificationDestination({ type: "reminder", eventOccurrenceId: "xmas_2026" }),
+    { pathname: "/workflow", search: "?event=xmas_2026" });
+
+  // Summary → the exact follow-up items, never a dashboard.
+  assert.deepEqual(notificationDestination({ type: "leadership", body: "4 overdue · 1 blocked" }),
+    { pathname: "/workflow", search: "?filter=attention" });
+
+  // Weekly check-in → My Day; account approved → Home (Home IS the point here).
+  assert.deepEqual(notificationDestination({ type: "weeklyTaskCheck" }), { pathname: "/my-day", search: "" });
+  assert.deepEqual(notificationDestination({ type: "account_approved" }), { pathname: "/", search: "" });
+
+  // Never crashes; unknown falls back to Home.
+  assert.deepEqual(notificationDestination(null), { pathname: "/", search: "" });
+  assert.deepEqual(notificationDestination({ type: "mystery" }), { pathname: "/", search: "" });
+});
+
+test("a deep-link with focus/comment parses back into the same intent", () => {
+  const s = parseLocation("/content/t3", "?focus=comments&comment=c9");
+  assert.equal(s.screen, "content");
+  assert.equal(s.contentId, "t3");
+  assert.equal(s.focus, "comments");
+  assert.equal(s.comment, "c9");
+  // An unknown focus value is ignored, not trusted.
+  assert.equal(parseLocation("/content/t3", "?focus=bogus").focus, null);
+  // Workflow attention filter round-trips.
+  assert.equal(parseLocation("/workflow", "?filter=attention").filter, "attention");
 });

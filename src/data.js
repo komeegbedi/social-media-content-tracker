@@ -1177,11 +1177,28 @@ export const BOARD_FILTERS = [
   { id: "828",      label: "828",            test: (t) => t.location === "828" || t.location === "Both" },
   { id: "high",     label: "High priority",  test: (t) => t.priority === "High" },
   { id: "overdue",  label: "Overdue",        test: (t) => t.status !== "Posted" && (daysTo(t.postDate) ?? 99) < 0 },
+  // Everything a lead needs to follow up on, in one filter — the destination
+  // for the "Team follow-up needed" summary notification (see needsAttention).
+  { id: "attention", label: "Needs attention", test: (t) => needsAttention(t) },
   { id: "review",   label: "In Review",      test: (t) => t.status === "In Review" },
   { id: "ready",    label: "Ready to Post",  test: (t) => t.status === "Ready to Post" },
   { id: "approved", label: "Approved",       test: (t) => t.status === "Approved" },
   { id: "archive",  label: "Archive",        test: (t) => t.status === "Posted" },
 ];
+
+/* A task a lead should follow up on: active and either overdue, blocked,
+   crew-less, owner-less, or waiting on review. Mirrors the counts in the
+   server's leadership digest so the "Team follow-up needed" notification and
+   its destination filter show the SAME set of items. */
+export function needsAttention(t) {
+  if (!t || t.status === "Posted") return false;
+  const overdue = (daysTo(t.postDate) ?? 99) < 0;
+  const blocked = !!t.blockedOn;
+  const noCrew = !t.support || t.support.length === 0;
+  const noOwner = !t.owner || t.owner === "Pending";
+  const awaitingReview = t.status === "In Review";
+  return overdue || blocked || noCrew || noOwner || awaitingReview;
+}
 
 export function applyBoardFilter(tasks, filterId, me) {
   const f = BOARD_FILTERS.find((x) => x.id === filterId) || BOARD_FILTERS[0];

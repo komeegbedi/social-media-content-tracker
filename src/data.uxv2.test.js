@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   isValidUrl, userDepartments, isAvailable,
   soloCrewRole, soloCrewFor, soloCrewVerb, autoAssign,
+  needsAttention, applyBoardFilter,
 } from "./data.js";
 
 test("isValidUrl accepts http(s) URLs, rejects plain text", () => {
@@ -56,4 +57,25 @@ test("autoAssign never picks an unavailable person", () => {
   const names = out.map((s) => s.name);
   assert.ok(!names.includes("Shooter"), "unavailable Shooter must be excluded");
   assert.ok(names.includes("Editor"), "available Editor should be assigned");
+});
+
+test("needsAttention / attention filter matches the leadership-digest criteria", () => {
+  const past = "2000-01-01";      // definitely overdue
+  const future = "2999-01-01";    // definitely not
+  const healthy = { status: "In Progress", postDate: future, owner: "Ada", support: [{ name: "Ben" }] };
+  assert.equal(needsAttention(healthy), false);
+
+  assert.equal(needsAttention({ ...healthy, postDate: past }), true);                 // overdue
+  assert.equal(needsAttention({ ...healthy, blockedOn: "waiting on assets" }), true); // blocked
+  assert.equal(needsAttention({ ...healthy, support: [] }), true);                    // no crew
+  assert.equal(needsAttention({ ...healthy, owner: "Pending" }), true);               // no owner
+  assert.equal(needsAttention({ ...healthy, status: "In Review" }), true);            // awaiting review
+  // Posted work is never "needs attention", even if it was once overdue.
+  assert.equal(needsAttention({ status: "Posted", postDate: past, support: [] }), false);
+
+  // The board filter delegates to it.
+  const tasks = [healthy, { ...healthy, id: "x", postDate: past }];
+  const out = applyBoardFilter(tasks, "attention");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].postDate, past);
 });
