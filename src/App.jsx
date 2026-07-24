@@ -30,7 +30,8 @@ import {
   DEPARTMENTS, roleChips, userActiveTasks, PEOPLE_FILTERS, applyPeopleFilter, groupPeople,
   crewRoleLabel, pendingCrewLabel, CREW_ROLES, occurrenceContentCount, occurrenceTasks,
   DEFAULT_REMINDERS, REMINDER_CHANNELS, REMINDER_RECIPIENTS, MAX_REMINDERS, isValidEmail,
-  isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, isShootType, workloadBadge,
+  isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, loadSummary, crewReason, sameCrew, dateIssues, todayStr, isShootType,
+  personLoad, responsibilityTier, staleFlags, orderedCrew,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
@@ -43,7 +44,7 @@ import {
   BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, SparklesIcon, EyeIcon, EyeSlashIcon,
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
   InformationCircleIcon, ClipboardIcon, ArrowTopRightOnSquareIcon, CheckIcon, ClipboardDocumentIcon,
-  ComputerDesktopIcon,
+  ComputerDesktopIcon, DocumentTextIcon,
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
@@ -1503,11 +1504,11 @@ function Board({ profile, isAdmin }) {
   const autoAll = async () => {
     const targets = tasks.filter(t => !(t.support && t.support.length) && t.status !== "Posted");
     await withFeedback(Promise.all(targets.map(t =>
-      updateDoc(doc(db, "tasks", t.id), { support: autoAssign(t, users), updatedAt: serverTimestamp() }))),
+      updateDoc(doc(db, "tasks", t.id), { support: autoAssign(t, users, tasks), updatedAt: serverTimestamp() }))),
       `✓ Auto-assigned crew to ${targets.length} task${targets.length!==1?"s":""}`, "Auto-assigning crew…");
   };
   const autoOne = (task) => withFeedback(
-    updateDoc(doc(db, "tasks", task.id), { support: autoAssign(task, users), updatedAt: serverTimestamp() }),
+    updateDoc(doc(db, "tasks", task.id), { support: autoAssign(task, users, tasks), updatedAt: serverTimestamp() }),
     "✓ Crew auto-assigned", "Assigning crew…");
 
   /* ---- user writes ---- */
@@ -1663,7 +1664,9 @@ function Board({ profile, isAdmin }) {
         </div>
       </div>
 
-      {isAdmin && tab!=="admin" && tab!=="home" && (
+      {/* Admin has its own "New content" button; every other tab — Home
+          included — needs the FAB, since the sidebar one is desktop-only. */}
+      {isAdmin && tab!=="admin" && (
         <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content"><PlusIcon className="hi hi-nav" aria-hidden="true"/></button>
       )}
 
@@ -1738,10 +1741,10 @@ function Board({ profile, isAdmin }) {
           onEdit={()=>{ setOpenId(null); setEditTask(openTask); }} />
       )}
       {editTask && (
-        <TaskEditor task={editTask==="new"?null:editTask} prefill={editPrefill} users={users}
+        <TaskEditor task={editTask==="new"?null:editTask} prefill={editPrefill} users={users} allTasks={tasks}
           defaultReminders={notifSettings?.defaultReminders}
           onClose={()=>{ setEditTask(null); setEditPrefill(null); }}
-          onSave={(t)=>{ setEditPrefill(null); return saveTask(t); }} onAuto={(t)=>autoAssign(t, users)} />
+          onSave={(t)=>{ setEditPrefill(null); return saveTask(t); }} onAuto={(t)=>autoAssign(t, users, tasks)} />
       )}
       {editUser && (
         <UserEditor user={editUser} onClose={()=>setEditUser(null)}
@@ -2196,45 +2199,144 @@ function Mine({ tasks, me, openTask }) {
 /* ===================================================================
    TEAM
    =================================================================== */
-function Team({ tasks, users }) {
-  const cap = useMemo(()=>computeCapacity(tasks,users),[tasks,users]);
-  const total = Object.values(cap).reduce((s,c)=>s+c.total,0) || 1;
-  const max = Math.max(1, ...Object.values(cap).map(c=>c.total));
-  const rows = users.map(u=>({u,c:cap[u.name]||{shoot:0,edit:0,coordinate:0,design:0,shadow:0,total:0}}))
-    .sort((a,b)=>b.c.total-a.c.total);
-  const legend = [["seg-shoot","Shooting"],["seg-edit","Editing"],["seg-coordinate","Getting People"],["seg-design","Design"],["seg-shadow","Shadowing"]];
+/* Bucket label + timeline order for the breakdown. */
+// Timeline windows for the expanded breakdown (decision-focused wording).
+const LOAD_BUCKETS = [
+  ["thisWeek", "Due this week"], ["nextWeek", "Due next week"],
+  ["later", "Later"], ["unscheduled", "No date"],
+];
 
+// The one status worth showing — and only when it changes the decision.
+// Light/Balanced show no chip (the meter + counts already say enough).
+function capacityStatus(u, load) {
+  if (!isAvailable(u)) return { label: "Unavailable", tone: "neutral" };
+  if (load.activePoints <= 0) return { label: "Available", tone: "green" };
+  if (load.band.key === "high") return { label: "Near capacity", tone: "red" };
+  if (load.band.key === "busy") return { label: "Busy", tone: "amber" };
+  return null;
+}
+// Coarse 0–4 level for the segmented "Current load" meter (communicates an
+// estimate/level, not a false-precise percentage).
+const BAND_LEVEL = { unavail: 0, available: 0, light: 1, balanced: 2, busy: 3, high: 4 };
+const STALE_REASON = {
+  "shoot-passed-still-planned": "Shoot date passed — still Planned",
+  "post-passed-not-posted": "Post date passed — not Posted",
+};
+// Compact due-date label for a responsibility.
+function respDue(dateStr) {
+  const dd = dateStr ? daysTo(dateStr) : null;
+  if (dd == null) return "No date";
+  if (dd < 0) return "Overdue";
+  if (dd === 0) return "Due today";
+  if (dd === 1) return "Due tomorrow";
+  if (dd <= 6) return "Due " + new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, { weekday: "short" });
+  return "Due " + fmt(dateStr);
+}
+
+/* One person's capacity card, built to answer "can I safely assign more to this
+   person?" It leads with deadline concentration (N due this week), demotes the
+   load to a coarse band meter, and shows the dated timeline when expanded.
+   Stateless re: expansion — `open`/`onToggle` come from the parent. */
+function CapCard({ u, load, tasks, open, onToggle }) {
+  const dept = userDepartments(u).join(" · ") || (roleChips(u)[0] || "");
+  const status = capacityStatus(u, load);
+  const level = BAND_LEVEL[load.band.key] ?? 0;
+  const tone = load.band.tone;
+  const dueThisWeek = load.buckets.thisWeek.length;
+  const inProgress = load.activeCount;
+  const staleCount = new Set(load.items
+    .filter(i => staleFlags(tasks.find(t => t.id === i.taskId)).length > 0)
+    .map(i => i.taskId)).size;
+  return (
+    <div className={"sb-cap"+(open?" open":"")}>
+      <button className="sb-cap-hd sb-cap-toggle" onClick={onToggle} aria-expanded={open}>
+        <span className="sb-av sb-cap-av" aria-hidden="true">{initials(u.name)}</span>
+        <div className="sb-cap-id">
+          <span className="sb-cap-name" title={u.name}>{u.name}</span>
+          {dept && <span className="sb-cap-dept" title={dept}>{dept}</span>}
+        </div>
+        {status && <span className={"sb-wlbadge tone-"+status.tone}><i className="sb-wl-dot" aria-hidden="true"/>{status.label}</span>}
+        <ChevronDownIcon className={"hi sb-cap-chev"+(open?" up":"")} aria-hidden="true"/>
+      </button>
+
+      {/* Headline: deadline concentration first; lifecycle count second (clearly
+          separated so "5 due · 3 active" never reads as a contradiction). */}
+      <div className="sb-cap-headline">
+        {!isAvailable(u) ? <span className="sb-cap-hl-muted">Marked unavailable</span>
+          : dueThisWeek > 0
+          ? <><b>{dueThisWeek} due this week</b>{inProgress > 0 && <span className="sb-cap-hl-muted"> · {inProgress} active now</span>}</>
+          : inProgress > 0
+          ? <b>{inProgress} active now</b>
+          : <span className="sb-cap-hl-muted">Available — nothing scheduled</span>}
+      </div>
+
+      <div className="sb-cap-caplabel">Current load</div>
+      <div className="sb-capmeter" role="img" aria-label={`Current load: ${status ? status.label : load.band.label}`}>
+        {[1,2,3,4].map(n => <i key={n} className={"sb-capseg"+(isAvailable(u) && n <= level ? " on tone-"+tone : "")}/>)}
+      </div>
+
+      {staleCount > 0 && (
+        <button type="button" className="sb-cap-warn" onClick={()=>{ if(!open) onToggle(); }}>
+          <ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/>
+          <span><b>Needs attention</b> — {staleCount} status{staleCount!==1?"es":""} may be outdated</span>
+          <span className="sb-cap-warn-cta">Review</span>
+        </button>
+      )}
+
+      <div className="sb-cap-detailwrap" aria-hidden={!open}>
+        <div className="sb-cap-detail">
+          {load.items.length === 0
+            ? <div className="sb-cap-empty">No production responsibilities scheduled.
+                <span>{isAvailable(u) ? "Available for new work." : "Marked unavailable."}</span></div>
+            : LOAD_BUCKETS.map(([key,label]) => {
+                const items = load.buckets[key];
+                if (!items.length) return null;
+                return (
+                  <div className="sb-cap-bucket" key={key}>
+                    <div className="sb-cap-bucket-h">{label}</div>
+                    {items.map((i) => {
+                      const flags = staleFlags(tasks.find(t => t.id === i.taskId));
+                      return (
+                        <div className={"sb-cap-resp"+(flags.length?" stale":"")} key={i.taskId+"-"+i.role}>
+                          <span className={"sb-cap-resp-dot tier-"+responsibilityTier(i.weight).toLowerCase()} aria-hidden="true"/>
+                          <div className="sb-cap-resp-body">
+                            <span className="sb-cap-resp-t" title={i.title}>{i.title}</span>
+                            <span className="sb-cap-resp-r">{i.role==="owner"?"Owner":roleLabel(i.role)}
+                              {i.weight>=4 && <span className="sb-cap-resp-tier"> · Heavy</span>}
+                              <span className="sb-cap-resp-due"> · {respDue(i.date)}</span></span>
+                            {flags.length>0 && <span className="sb-cap-resp-stale">{STALE_REASON[flags[0]] || "Status may be outdated"}</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Team({ tasks, users }) {
+  const rows = useMemo(() => users
+    .map(u => ({ u, load: personLoad(u, tasks) }))
+    .sort((a,b) => b.load.activePoints - a.load.activePoints), [users, tasks]);
+  // Single-open accordion, tracked by stable user id in the parent (no per-card
+  // or shared stale state) — expanding one card can never desync another.
+  const [openId, setOpenId] = useState(null);
   return (
     <div className="sb-page">
       <div className="sb-h">Team load</div>
-      <div className="sb-sub">Active tasks per person (posted work excluded). Spot overload at a glance.</div>
-      <div className="sb-caplegend" style={{marginBottom:16}}>
-        {legend.map(([cls,lbl])=>(<span key={cls}><i className={cls}></i>{lbl}</span>))}
-      </div>
+      <div className="sb-sub">See who has work concentrated around upcoming deadlines. Load reflects assigned
+        production responsibilities, not task count.{" "}
+        <span className="sb-infotip" tabIndex={0} role="note"
+          title="Shared QA and posting work isn't assigned to individuals yet.">ⓘ</span></div>
       <div className="sb-caplist">
-        {rows.map(({u,c}) => {
-          const pct = ((c.total/total)*100).toFixed(0);
-          const badge = workloadBadge(u, c.total);
-          const dept = userDepartments(u).join(" · ");
-          return (
-            <div className="sb-cap" key={u.id}>
-              <div className="sb-cap-hd">
-                <span className="sb-av sb-cap-av" aria-hidden="true">{initials(u.name)}</span>
-                <div className="sb-cap-id">
-                  <span className="sb-cap-name" title={u.name}>{u.name}</span>
-                  {dept && <span className="sb-cap-dept" title={dept}>{dept}</span>}
-                </div>
-              </div>
-              <span key={badge.key} className={"sb-wlbadge tone-"+badge.tone}>
-                <i className="sb-wl-dot" aria-hidden="true"/>{badge.label}</span>
-              <div className="sb-cap-metrics">{c.total} active task{c.total!==1?"s":""} • {pct}% of team load</div>
-              <div className="sb-capbar" role="img" aria-label={`${c.total} active task${c.total!==1?"s":""}`}>
-                {["shoot","edit","coordinate","design","shadow"].map(r =>
-                  c[r]>0 && <i key={r} className={"seg-"+r} style={{width:`${(c[r]/max)*100}%`}}/>)}
-              </div>
-            </div>
-          );
-        })}
+        {rows.map(({u,load}) => (
+          <CapCard key={u.id} u={u} load={load} tasks={tasks}
+            open={openId===u.id} onToggle={()=>setOpenId(id => id===u.id ? null : u.id)} />
+        ))}
       </div>
     </div>
   );
@@ -2513,7 +2615,15 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
           <div className="sb-shead"><h2>Recent wins</h2></div>
           {recents.length===0
             ? <div className="sb-empty">Nothing posted yet. Your first win is coming!</div>
-            : <div className="sb-recent">{recents.map((r,i)=>(<div className="sb-recent-row" key={i}><CheckCircleIcon className="hi hi-sm" aria-hidden="true" style={{color:"var(--success)",verticalAlign:"-4px",marginRight:6}}/>{r.text}</div>))}</div>}
+            : <div className="sb-recent">{recents.map((r)=>(
+                <div className="sb-recent-row" key={r.id}>
+                  <span className="sb-recent-ic" aria-hidden="true"><CheckCircleIcon className="hi"/></span>
+                  <span className="sb-recent-txt">
+                    <span className="sb-recent-title">{r.title}</span>
+                    <span className="sb-recent-action">{r.action}</span>
+                  </span>
+                </div>
+              ))}</div>}
         </section>
 
       </div>
@@ -2749,7 +2859,7 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
               <input type="date" value={f.endDate||""} onChange={e=>set("endDate",e.target.value)} /></div>
           </div>
           <div className="sb-sub" style={{fontSize:12}}>The pattern (weekday, day of month, nth position) comes from the anchor date; future dates are calculated from it. Changes apply to future occurrences only — linked content is never changed.</div>
-          {preview.length>0 && <div className="sb-remsum" style={{marginBottom:10}}><div className="bd">
+          {preview.length>0 && <div className="sb-remsum sb-remcard" style={{marginBottom:10}}><div className="bd">
             <b>Next dates</b><span>{preview.join(" · ")}</span></div></div>}
           <Toggle label="Series is active" v={f.active!==false} on={()=>set("active",f.active===false)} />
           <Toggle label="Show on Home" v={f.showOnHome!==false} on={()=>set("showOnHome",f.showOnHome===false)} />
@@ -3877,20 +3987,27 @@ function TaskDetail({ task, me, isAdmin, isQA, onClose, onStatus, onAction, onAp
               : <Detail k="Reference" v={task.link} />)}
           </div>
 
-          <div className="sb-shead" style={{marginTop:18}}><h2>Crew</h2></div>
+          <div className="sb-shead" style={{marginTop:18}}><h2>Production team</h2></div>
           {(task.support||[]).length===0
-            ? <div className="sb-empty" style={{padding:16}}>No support crew yet.</div>
-            : (task.support||[]).map((s,i)=>{
-              const pending = s.name==="Pending";
-              return (
-              <div className="sb-cmt" key={i} style={{display:"flex",alignItems:"center",gap:10}}>
-                <span className="sb-av">{pending ? "?" : initials(s.name)}</span>
-                {pending
-                  ? <span><b>{pendingCrewLabel(s)}</b>{s.suggested && <span style={{color:"var(--muted)"}}> · suggested: {s.suggested}</span>}</span>
-                  : <span><b>{s.name}</b> · <span style={{color:"var(--muted)"}}>{crewRoleLabel(s)}{s.loc?` · ${s.loc}`:""}</span></span>}
-              </div>
-              );
-            })}
+            ? <div className="sb-empty" style={{padding:16}}>No production team assigned yet.</div>
+            : <div className="sb-crewlist">
+                {orderedCrew(task.support).map(({s,i})=>{
+                  const pending = s.name==="Pending";
+                  return (
+                    <div className="sb-crewrow" key={(s.name||"pending")+"-"+i}>
+                      <span className="sb-av sb-crew-av" aria-hidden="true">{pending ? "?" : initials(s.name)}</span>
+                      <div className="sb-crew-main">
+                        <span className="sb-crew-name">{pending ? pendingCrewLabel(s) : s.name}</span>
+                        <div className="sb-crew-meta">
+                          <span className="sb-crew-rolestatic">{crewRoleLabel(s)}</span>
+                          {s.loc && <span className="sb-crew-loc">{s.loc}</span>}
+                          {pending && s.suggested && <span className="sb-crew-loc">suggested: {s.suggested}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>}
 
           {/* Activity timeline — created / status changes / QA / approvals,
               merged with comments, newest first. Approval events are tinted. */}
@@ -4049,7 +4166,8 @@ function ReminderSummary({ reminders, defaults, postDate, onCustomize }) {
         <b>{isDefault ? "Using team default" : "Custom schedule"} · {enabled.length} reminder{enabled.length!==1?"s":""}</b>
         <span>{enabled.length ? phrases.join(", ") : "Reminders are off for this content item."}</span>
       </div>
-      <button type="button" className="sb-btn ghost compact" onClick={onCustomize}>
+      <button type="button" className="sb-secaction" onClick={onCustomize}>
+        <Cog6ToothIcon className="hi hi-sm" aria-hidden="true"/>
         {enabled.length ? "Customize reminders" : "Enable reminders"}</button>
     </div>
   );
@@ -4106,8 +4224,11 @@ function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
                       <span className={"sb-chev"+(expanded?" open":"")}><ChevronRightIcon className="hi hi-sm" aria-hidden="true"/></span>
                     </button>
                     {invalid && <div className="tl-err" role="alert">Choose at least one channel and one recipient.</div>}
-                    {expanded && (
-                      <div className="tl-adv">
+                    {/* Always mounted so it can animate BOTH ways; `inert`
+                        keeps the collapsed controls out of the tab order. */}
+                    <div className={"tl-advwrap"+(expanded?" open":"")}>
+                      <div className="tl-adv" inert={expanded?undefined:""} aria-hidden={!expanded}>
+                      <div className="tl-advin">
                         <div className="tl-time">
                           <input type="number" min="0" max="60" value={r.offset} aria-label="Days"
                             onChange={e=>upd(r.id,{offset:Math.max(0,Math.min(60,Number(e.target.value)||0))})}/>
@@ -4117,23 +4238,27 @@ function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
                             <option value="before">before due</option><option value="after">after due</option>
                           </select>
                         </div>
-                        <div className="tl-lbl">Delivery options</div>
+                        {/* Two different questions — they were sharing one
+                            "Delivery options" label and reading as one list. */}
+                        <div className="tl-lbl">How to notify</div>
                         <div className="chips">
                           {REMINDER_CHANNELS.map(c => <button type="button" key={c}
                             className={"sb-rchip"+((r.channels||[]).includes(c)?" on":"")}
                             aria-pressed={(r.channels||[]).includes(c)}
                             onClick={()=>toggleArr(r.id,"channels",c)}>{CH_LABEL[c]||c}</button>)}
                         </div>
+                        <div className="tl-lbl">Who to notify</div>
                         <div className="chips">
                           {REMINDER_RECIPIENTS.map(c => <button type="button" key={c}
                             className={"sb-rchip"+((r.recipients||[]).includes(c)?" on":"")}
                             aria-pressed={(r.recipients||[]).includes(c)}
                             onClick={()=>toggleArr(r.id,"recipients",c)}>{RCP_LABEL[c]||c}</button>)}
                         </div>
-                        <button type="button" className="link danger" onClick={()=>{ onChange(rem.filter(x=>x.id!==r.id)); setOpenId(null); }}>
-                          Remove this reminder</button>
+                        <button type="button" className="tl-remove" onClick={()=>{ onChange(rem.filter(x=>x.id!==r.id)); setOpenId(null); }}>
+                          <XMarkIcon className="hi hi-sm" aria-hidden="true"/> Remove this reminder</button>
                       </div>
-                    )}
+                      </div>
+                    </div>
                   </div>
                   <button type="button" className={"sb-sw"+(!off?" on":"")} role="switch" aria-checked={!off}
                     aria-label={`Reminder ${remPhrase(r)} enabled`}
@@ -4156,7 +4281,7 @@ function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
   );
 }
 
-function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, onAuto }) {
+function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose, onSave, onAuto }) {
   const [f, setF] = useState(() => {
     // Edit the RAW stored title (not the Title-Cased display value), and never
     // carry the display-only `_rawTitle` field into the saved document.
@@ -4185,6 +4310,8 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
   const [remOpen, setRemOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [crewWarn, setCrewWarn] = useState(false);
+  const [autoFeedback, setAutoFeedback] = useState(null);   // { kind:"err"|"ok"|"info", msg, crew? }
+  const [showWhy, setShowWhy] = useState(false);
   const remDefaults = (defaultReminders && defaultReminders.length) ? defaultReminders : DEFAULT_REMINDERS;
   const hasOwner = f.owner && f.owner !== "Pending";
   // #1 — only AVAILABLE people can be chosen as owner, but keep an already-set
@@ -4198,6 +4325,37 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
     return avail;
   }, [users, f.owner]);
   // #5 — one clear reason the form can't be saved yet (empty when it's valid).
+  /* Floors for the native date pickers. Normally today (and, for the post
+     date, the shoot date). When editing a task whose date already sits in the
+     past, that date becomes the floor instead — otherwise the browser marks
+     the saved value invalid and the field can't be reopened. */
+  const t0 = todayStr();
+  const dateMsg = dateIssues(f, task);
+  const minShoot = task?.shootDate && task.shootDate < t0 ? task.shootDate : t0;
+  const minPost = (() => {
+    const floor = isShoot && f.shootDate && f.shootDate > t0 ? f.shootDate : t0;
+    return task?.postDate && task.postDate < floor ? task.postDate : floor;
+  })();
+
+  // Who the last recommendation put forward — used to mark those rows, and
+  // retired the moment the user edits the team by hand. A recommendation the
+  // user has already overruled is stale, and stale advice is worse than none.
+  const recommendedNames = useMemo(
+    () => new Set(autoFeedback?.kind === "ok" ? (autoFeedback.crew || []).map(c => c.name) : []),
+    [autoFeedback]);
+  const editCrew = (next) => { set("support", next); setAutoFeedback(null); setShowWhy(false); };
+
+  // Footer read-out of the team as it stands, so nobody commits blind.
+  const crewSummary = useMemo(() => {
+    const crew = (f.support || []).filter(c => c && c.name && c.name !== "Pending");
+    if (!crew.length) return null;
+    const strained = crew.filter(c => {
+      const p = users.find(u => u.name === c.name);
+      const b = p && loadSummary(p, allTasks || []).band.key;
+      return b === "busy" || b === "high";
+    }).length;
+    return { text: `${crew.length} crew selected`, strained };
+  }, [f.support, users, allTasks]);
   const validationMsg =
     !f.title.trim() ? "Add a content title."
     : !f.type ? "Select a content type."
@@ -4205,9 +4363,53 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
     : (isShoot && !f.location) ? "Select a location."
     : (isShoot && !f.shootDate) ? "Set a shoot date."
     : !f.postDate ? "Set a post date."
+    : dateMsg ? dateMsg
     : (f.link && !isValidUrl(f.link)) ? "The reference link isn't a valid URL."
     : "";
   const valid = !validationMsg;
+  // Auto-assign needs the details that make an assignment correct (type, owner,
+  // and — for shoot-based content — a location + shoot date), plus a post date.
+  // Without them, don't guess (e.g. assume graphics) — tell the user what's missing.
+  const autoAssignMsg =
+    !f.type ? "Select a content type before auto-assigning."
+    : !f.owner ? "Select an owner before auto-assigning."
+    : (isShoot && !f.location) ? "Select a location before auto-assigning."
+    : (isShoot && !f.shootDate) ? "Set a shoot date before auto-assigning."
+    : !f.postDate ? "Set a post date before auto-assigning."
+    : "";
+  const tryAutoAssign = () => {
+    setShowWhy(false);
+    if (autoAssignMsg) { setAutoFeedback({ kind: "err", msg: autoAssignMsg }); return; }
+    const crew = onAuto(f);
+    const current = (f.support || []).filter(c => c && c.name);
+    // Re-running on unchanged inputs returns the same team. Say so, and leave
+    // the crew untouched — a button that appears to do nothing reads as broken.
+    if (crew.length && sameCrew(crew, current)) {
+      setAutoFeedback({ kind: "ok", crew,
+        msg: "Already the best available crew for this content — nothing to change." });
+      return;
+    }
+    set("support", crew);
+    if (crew.length) {
+      setAutoFeedback({ kind: "ok", crew, msg: current.length
+        ? "Team updated — re-matched on role, availability and upcoming responsibilities."
+        : "Recommended based on role, availability and upcoming responsibilities." });
+    } else if (current.length) {
+      // Never silently wipe a team the user built by hand.
+      set("support", current);
+      setAutoFeedback({ kind: "info",
+        msg: "No better match available right now — keeping your current team." });
+    } else {
+      // Explain the no-op so it never looks like a silent failure.
+      const ownerU = users.find(u => u.name === f.owner);
+      const ownerDesigns = !isShoot && ownerU && (ownerU.skills || []).includes("design");
+      setAutoFeedback({ kind: "info", msg: ownerDesigns
+        ? `${(f.owner || "").split(" ")[0]} can design this — no extra crew needed.`
+        : "No available team member matched this content. Add crew manually below." });
+    }
+  };
+  // Clear a blocking error once the missing details are filled in.
+  useEffect(() => { if (autoFeedback?.kind === "err" && !autoAssignMsg) setAutoFeedback(null); }, [autoAssignMsg, autoFeedback]);
   // Dirty = the form differs from the snapshot taken on first render. Compared
   // by value, so focus/blur/formatting don't trip it; a successful save closes
   // the editor (unmount) before this could warn.
@@ -4224,7 +4426,7 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
   const trySave = () => {
     setAttempted(true);
     if (!valid) return;   // keep the button enabled; the footer shows the reason
-    // #2 — no support crew → confirm the owner will work alone before saving.
+    // #2 — no production team → confirm the owner will work alone before saving.
     if ((f.support || []).length === 0 && hasOwner) { setCrewWarn(true); return; }
     doSave(false);
   };
@@ -4233,10 +4435,13 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
     <div className="sb-scrim" onClick={requestClose}>
       <div className="sb-sheet" onClick={e=>e.stopPropagation()} style={drag.sheetStyle}>
         <div className="sb-grab" {...drag.handleProps}><span/></div>
-        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{task?"Edit content":"Plan content"}</b>
-          <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
-        <div className="bd">
+        <div className="hd"><b className="sb-serif sb-sheettitle">{task?"Edit content":"Plan content"}</b>
+          <button className="sb-x" onClick={requestClose} aria-label={task?"Close editor":"Close planner"}>
+            <XMarkIcon className="hi" aria-hidden="true" /></button></div>
+        <div className="bd sb-bd-sections">
           <div className="sb-sub" style={{marginTop:0}}>Plan a piece of content. The team adds the deliverable links later, when it's ready for QA.</div>
+          <section className="sb-sec">
+          <div className="sb-shead sb-sechead"><h2><DocumentTextIcon className="hi" aria-hidden="true"/>Content</h2></div>
           <div className="sb-field"><label>Content title<span className="sb-req" aria-hidden="true">*</span></label>
             <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Sunday welcome reel" /></div>
           <div className="sb-formrow">
@@ -4266,56 +4471,84 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
             <textarea rows={4} value={f.brief||""} onChange={e=>set("brief",e.target.value)}
               placeholder="Objectives, key message, references, notes, links, or anything the team should know." /></div>
           <div className="sb-formrow">
+            {/* `min` steers the native picker; dateIssues() is the real gate,
+                and it never blocks a past date that was already saved. */}
             <div className="sb-field"><label>Shoot date{isShoot && <span className="sb-req" aria-hidden="true">*</span>}</label>
-              <input type="date" value={f.shootDate||""} disabled={!isShoot} onChange={e=>set("shootDate",e.target.value)}
+              <input type="date" value={f.shootDate||""} disabled={!isShoot} min={minShoot}
+                aria-invalid={!!dateMsg || undefined}
+                onChange={e=>set("shootDate",e.target.value)}
                 title={!isShoot?"Shoot date applies to shoot-based content only":undefined} /></div>
             <div className="sb-field"><label>Post date<span className="sb-req" aria-hidden="true">*</span></label>
-              <input type="date" value={f.postDate} onChange={e=>set("postDate",e.target.value)} /></div>
+              <input type="date" value={f.postDate} min={minPost}
+                aria-invalid={!!dateMsg || undefined}
+                aria-describedby={dateMsg ? "sb-dateerr" : undefined}
+                onChange={e=>set("postDate",e.target.value)} /></div>
           </div>
+          {/* `min` is only a hint to the picker — iOS lets you spin past it —
+              so the conflict is reported the moment it exists, not at save. */}
+          {dateMsg && <div className="sb-fielderr" id="sb-dateerr" role="alert"
+            style={{marginTop:-4,marginBottom:13}}>{dateMsg}</div>}
           <div className="sb-field" style={{maxWidth:200}}><label>Priority</label>
             <select value={f.priority||"Medium"} onChange={e=>set("priority",e.target.value)}>{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></div>
           <div className="sb-field"><label>Related event (optional)</label>
             <input value={f.relatedEvent} onChange={e=>set("relatedEvent",e.target.value)} placeholder="e.g. Easter Service" /></div>
-          <div className="sb-field"><label>Reference link (optional)</label>
+          <div className="sb-field" style={{marginBottom:0}}><label>Reference link (optional)</label>
             <UrlInput value={f.link} ariaLabel="Reference link"
               placeholder="https://…  (idea / inspiration / reference)"
               onChange={v=>set("link",v)} /></div>
+          </section>
 
-          <div className="sb-shead"><h2>Support crew</h2>
-            <button className="link" onClick={()=>set("support", onAuto(f))}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign</button></div>
+          <section className="sb-sec">
+          <div className="sb-shead sb-sechead"><h2><UserGroupIcon className="hi" aria-hidden="true"/>Production team</h2>
+            <button type="button" className="link" onClick={tryAutoAssign}><BoltIcon className="hi hi-sm" aria-hidden="true"/>
+              {(f.support||[]).length ? " Recommend again" : " Auto-assign"}</button></div>
+          {autoFeedback && (autoFeedback.kind === "err"
+            ? <div className="sb-fielderr" role="alert" style={{marginBottom:8}}>{autoFeedback.msg}</div>
+            : <div className={"sb-autofb"+(autoFeedback.kind==="ok"?" ok":"")} role="status">
+                <span>{autoFeedback.msg}</span>
+                {autoFeedback.kind==="ok" && autoFeedback.crew?.length>0 &&
+                  <button type="button" className={"sb-whybtn"+(showWhy?" open":"")}
+                    aria-expanded={showWhy} onClick={()=>setShowWhy(v=>!v)}>
+                    {showWhy ? "Hide explanation" : "Why these people?"}
+                    <ChevronDownIcon className="hi sb-whybtn-chev" aria-hidden="true"/></button>}
+              </div>)}
           {(f.support||[]).length===0
-            ? <div className="sb-sub">Select support crew (optional) — tap Auto-assign or add below.</div>
-            : (f.support||[]).map((s,i)=>{
-              const pending = s.name==="Pending";
-              const m = pending && s.suggested ? matchUser(s.suggested, users) : null;
-              return (
-              <div className="sb-cmt" key={i} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span className="sb-av">{pending ? "?" : initials(s.name)}</span>
-                <span style={{flex:1,minWidth:0}}>
-                  {pending
-                    ? <><b>{pendingCrewLabel(s)}</b>{s.suggested && <span style={{color:"var(--muted)"}}> · suggested: {s.suggested}</span>}</>
-                    : <><b>{s.name}</b> · <span style={{color:"var(--muted)"}}>{crewRoleLabel(s)}{s.loc?` · ${s.loc}`:""}</span></>}
-                </span>
-                {m && <button type="button" className="sb-btn ghost compact"
-                  onClick={()=>set("support", f.support.map((x,j)=> j===i ? { name:m.name, role:x.role, ...(x.loc?{loc:x.loc}:{}) } : x))}>
-                  Assign {m.name.split(" ")[0]} →</button>}
-                <button className="sb-x" onClick={()=>set("support",f.support.filter((_,j)=>j!==i))}><XMarkIcon className="hi" aria-hidden="true" /></button>
-              </div>
-              );
-            })}
-          <AddCrew users={users} onAdd={(c)=>set("support",[...(f.support||[]),c])} />
+            ? <div className="sb-crewempty">No one on the production team yet — auto-assign or add someone below.</div>
+            : <div className="sb-crewlist">
+                {orderedCrew(f.support).map(({s,i}, pos) => (
+                  <CrewRow key={(s.name||"pending")+"-"+i} s={s} idx={i} pos={pos} users={users} allTasks={allTasks}
+                    showLoc={f.location==="Both"} recommended={recommendedNames.has(s.name)}
+                    reason={showWhy && recommendedNames.has(s.name)
+                      ? crewReason(s, users, allTasks||[]) : null}
+                    onRole={(idx,role)=>editCrew(f.support.map((x,j)=> j===idx ? {...x, role} : x))}
+                    onRemove={(idx)=>editCrew(f.support.filter((_,j)=>j!==idx))}
+                    onAssignSuggested={(idx,name)=>editCrew(f.support.map((x,j)=> j===idx ? { name, role:x.role, ...(x.loc?{loc:x.loc}:{}) } : x))} />
+                ))}
+              </div>}
+          <AddCrew users={users} allTasks={allTasks} onAdd={(c)=>editCrew([...(f.support||[]),c])} />
+          </section>
 
-          <div className="sb-field" style={{marginTop:18}}>
-            <label>Reminders</label>
+          <section className="sb-sec">
+          <div className="sb-shead sb-sechead"><h2><BellAlertIcon className="hi" aria-hidden="true"/>Notifications</h2></div>
+          <div className="sb-field" style={{marginBottom:0}}>
             <ReminderSummary reminders={f.reminders} defaults={remDefaults}
               postDate={f.postDate} onCustomize={()=>setRemOpen(true)} />
           </div>
+          </section>
           {remOpen && <ReminderSheet reminders={f.reminders} defaults={remDefaults}
             postDate={f.postDate} onChange={(r)=>set("reminders",r)} onClose={()=>setRemOpen(false)} />}
         </div>
         {/* #7 — sticky footer: an optional validation message (only after a save
             attempt, and only while invalid) above a full-width Save button. */}
         <div className="sb-sheetfoot">
+          {/* Reassurance before committing: who is on the hook, and whether any
+              of them is already stretched. Silent when there is nothing to warn about. */}
+          {crewSummary && <div className="sb-footcrew">
+            <span>{crewSummary.text}</span>
+            {/* `strained` is a COUNT: `{0 && …}` renders a bare "0" in JSX. */}
+            {crewSummary.strained > 0 &&
+              <span className="sb-footcrew-warn">{crewSummary.strained} already busy</span>}
+          </div>}
           {attempted && validationMsg &&
             <div className="sb-footmsg" role="alert">{validationMsg}</div>}
           <button className="sb-btn sb-footbtn" disabled={saving || (task && !isDirty)} onClick={trySave}>
@@ -4324,7 +4557,7 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
       </div>
     </div>
     {crewWarn && <ConfirmDialog
-      title="No support crew assigned"
+      title="No production team assigned"
       body={`${f.owner} will be responsible for ${soloCrewVerb(f.type)} alone.`}
       confirmLabel="Continue" cancelLabel="Go back" tone="warning" danger={false}
       busyLabel="Saving…" onConfirm={()=>doSave(true)} onClose={()=>setCrewWarn(false)} />}
@@ -4332,34 +4565,89 @@ function TaskEditor({ task, prefill, users, defaultReminders, onClose, onSave, o
     </Portal>
   );
 }
-function AddCrew({ users, onAdd }) {
-  // #4 — can't manually assign someone who's marked unavailable.
-  const assignable = (users || []).filter(isAvailable);
-  // #3 — nothing pre-selected: the user intentionally picks a member AND a role.
-  const [n,setN] = useState(""); const [r,setR] = useState("");
-  const [label,setLabel] = useState("");
-  const isOther = r === "other";
-  const canAdd = !!n && !!r && (!isOther || label.trim());   // both required; "Other" also needs a label
-  const add = () => {
-    onAdd(isOther ? { name:n, role:"other", label:label.trim() } : { name:n, role:r });
-    setN(""); setR(""); setLabel("");
-  };
+/* One person on the production team. The PERSON leads, the role is an inline-
+   editable chip (no remove-and-re-add to change it), workload is a quiet badge,
+   and removing is a small trailing action — never the dominant element. */
+function CrewRow({ s, idx, pos = 0, users, allTasks, showLoc, recommended, reason, onRole, onRemove, onAssignSuggested }) {
+  const pending = s.name === "Pending";
+  const m = pending && s.suggested ? matchUser(s.suggested, users) : null;
+  const person = users.find(u => u.name === s.name);
+  // Only the ends of the scale earn a coloured chip; everyone gets one short line.
+  const sum = person ? loadSummary(person, allTasks || []) : null;
   return (
-    <div style={{marginTop:8}}>
-      <div className="sb-formrow sb-addcrew">
-        <div className="sb-field"><label>Crew member</label>
-          <select value={n} onChange={e=>setN(e.target.value)}>
-            <option value="" disabled>Select team member</option>
-            {assignable.map(u=><option key={u.id}>{u.name}</option>)}</select></div>
-        <div className="sb-field"><label>Role</label>
-          <select value={r} onChange={e=>setR(e.target.value)}>
-            <option value="" disabled>Select role</option>
-            {CREW_ROLES.map(x=><option key={x} value={x}>{roleLabel(x)}</option>)}</select></div>
+    <div className="sb-crewrow" style={{ "--i": pos }}>
+      <span className="sb-av sb-crew-av" aria-hidden="true">{pending ? "?" : initials(s.name)}</span>
+      <div className="sb-crew-main">
+        <span className="sb-crew-name">{pending ? pendingCrewLabel(s) : s.name}</span>
+        <div className="sb-crew-meta">
+          <span className="sb-crew-rolechip">
+            <select className="sb-crew-role" value={s.role || "other"}
+              aria-label={`Responsibility for ${pending ? "this slot" : s.name}`}
+              onChange={(e)=>onRole(idx, e.target.value)}>
+              {CREW_ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
+            </select>
+            <ChevronDownIcon className="hi sb-crew-rolechev" aria-hidden="true"/>
+          </span>
+          {/* One status at most. When the whole group is system-picked, saying
+              "Recommended" on every row is noise — only a notable band earns a chip. */}
+          {sum?.notable && <span className={"sb-crew-load tone-"+sum.band.tone}>{sum.band.label}</span>}
+          {/* Campus only earns space when the task actually spans both. */}
+          {showLoc && s.loc && <span className="sb-crew-loc">{s.loc}</span>}
+          {pending && s.suggested && <span className="sb-crew-loc">suggested: {s.suggested}</span>}
+        </div>
+        {/* The explanation lives with the person it's about, not in a panel
+            that lists everybody a second time. */}
+        {reason && <span className="sb-crew-why">
+          <CheckIcon className="hi hi-sm" aria-hidden="true"/>{reason}</span>}
       </div>
+      {m && <button type="button" className="sb-btn ghost compact sb-crew-assign"
+        onClick={()=>onAssignSuggested(idx, m.name)}>Assign {m.name.split(" ")[0]}</button>}
+      <button type="button" className="sb-crew-x" onClick={()=>onRemove(idx)}
+        aria-label={`Remove ${pending ? "this slot" : s.name} from the production team`}>
+        <XMarkIcon className="hi hi-sm" aria-hidden="true"/></button>
+    </div>
+  );
+}
+
+/* Guided add flow: one "Add crew member" affordance that reveals person →
+   responsibility → confirm, instead of two always-visible dropdowns. */
+function AddCrew({ users, allTasks, onAdd }) {
+  const assignable = (users || []).filter(isAvailable);   // never assign unavailable people
+  const [open, setOpen] = useState(false);
+  const [n,setN] = useState(""); const [r,setR] = useState(""); const [label,setLabel] = useState("");
+  const isOther = r === "other";
+  const canAdd = !!n && !!r && (!isOther || label.trim());
+  const picked = assignable.find(u => u.name === n);
+  const pickedLoad = useMemo(() => picked ? loadSummary(picked, allTasks || []) : null, [picked, allTasks]);
+  const reset = () => { setN(""); setR(""); setLabel(""); setOpen(false); };
+  const add = () => { onAdd(isOther ? { name:n, role:"other", label:label.trim() } : { name:n, role:r }); reset(); };
+  if (!open) return (
+    <button type="button" className="sb-addcrew-btn" onClick={()=>setOpen(true)}>
+      <PlusIcon className="hi hi-sm" aria-hidden="true"/> Add crew member</button>
+  );
+  return (
+    <div className="sb-addcrew-panel">
+      <div className="sb-field"><label>Who's joining?</label>
+        <select value={n} autoFocus onChange={e=>setN(e.target.value)}>
+          <option value="" disabled>Select team member</option>
+          {assignable.map(u=><option key={u.id}>{u.name}</option>)}</select></div>
+      {/* Consequence of this choice, stated before it is made — a nudge, not a
+          blocking dialog, so adding a busy person stays a one-tap decision. */}
+      {pickedLoad && <div className={"sb-crewhint"+(pickedLoad.notable?" notable":"")}>
+        {pickedLoad.notable &&
+          <span className={"sb-wlbadge tone-"+pickedLoad.band.tone}><i className="sb-wl-dot" aria-hidden="true"/>{pickedLoad.band.label}</span>}
+        <span>{picked.name.split(" ")[0]} · {pickedLoad.detail}</span>
+      </div>}
+      {n && <div className="sb-field" style={{marginTop:10}}><label>What's their responsibility?</label>
+        <select value={r} onChange={e=>setR(e.target.value)}>
+          <option value="" disabled>Select responsibility</option>
+          {CREW_ROLES.map(x=><option key={x} value={x}>{roleLabel(x)}</option>)}</select></div>}
       {isOther && <input value={label} onChange={e=>setLabel(e.target.value)} className="sb-addcrew-label"
-        placeholder="Custom task, e.g. Caption Writing, Voiceover, Lighting" />}
-      <button className="sb-btn ghost compact" style={{marginTop:8}} disabled={!canAdd} onClick={add}>
-        <PlusIcon className="hi hi-sm" aria-hidden="true"/> Add crew</button>
+        placeholder="Custom task, e.g. Voiceover, Lighting" />}
+      <div className="sb-btnrow" style={{marginTop:12}}>
+        <button type="button" className="sb-btn ghost compact" onClick={reset}>Cancel</button>
+        <button type="button" className="sb-btn compact" disabled={!canAdd} onClick={add}>Add to team</button>
+      </div>
     </div>
   );
 }

@@ -334,15 +334,45 @@ v1.1.2 is a **mobile-first design refresh** — visual/interaction only; all v1.
 
 ---
 
+## Team Load & Capacity (v1.2)
+
+The Team Load screen measures **the effort of a person's current responsibility — not how many task rows contain their name.** Eight coordination pings should not outweigh three video edits, so load is effort-weighted, phase-aware, and normalized to each person's availability. The engine is pure and lives in [src/data.js](src/data.js) (`CAPACITY_MODEL` + helpers), unit-tested in [src/data.capacity.test.js](src/data.capacity.test.js).
+
+**How a person's load is computed**
+
+1. **Role weights (internal, versioned — not user-editable in v1).** Each responsibility carries effort points: `owner 2 · shoot 3 · edit 5 · design 4 · coordinate 1 · shadow 0.5 · other 1`.
+2. **Phase-aware activation, derived from workflow status** (never a manual per-assignment status). A responsibility is `active` (full weight), `upcoming` (½), or `done` (0): the coordinator is active only while *Planned*; shoot/edit/design during production (*In Progress* / *Changes Requested*); editing clears at *In Review*; the owner spans the task until *Posted*. Move the card and the load turns on/off by itself.
+3. **Timeline placement.** Each responsibility sits on the date most relevant to its role (shoot-side → shoot date; edit/owner → post date), bucketed into **This week / Next week / In 2–3 weeks / No date** — so a task due in two months doesn't make someone look busy today.
+4. **Capacity band.** Weekly capacity comes from availability (`Full 20 · Limited 10 · Unavailable 0`); the card shows a coarse **band** (Available / Light / Balanced / Busy / High workload) from *active* load ÷ capacity — never a false-precise percentage.
+
+**What it powers (same engine everywhere)**
+
+- **Team Load cards** — a decision-focused roster that leads with **deadline concentration** (`N due this week · M active now`), a coarse **"Current load" band meter** (a level, not a false-precise %), a status chip only when it's meaningful, an actionable stale-status warning, and a single-open, dated **breakdown** (Due this week / next week / Later) — one column on mobile, a centred two-column grid on desktop where an expanded card spans the full width.
+- **Auto-assignment** — `autoAssign` filters eligible people (skill · location · availability) **first**, then balances by real weighted active load across the whole board, so the genuinely-lightest qualified person wins (not merely whoever has fewer rows).
+- **Assign-time hint** — picking a crew member in the task editor shows their current band + active/upcoming + any heavy work already due that week, *before* you add them.
+
+**Deliberately out of scope in v1** (see roadmap): the complexity multiplier, admin-tunable weights, per-week capacity percentages, per-person throughput/cycle-time learning, and QA/posting attribution. QA and posting are shared queues, so the screen is labelled **Creative/production load** and does not pin that work to individuals. A lightweight **stale-status** flag (shoot date passed but still Planned; post date passed but not Posted) surfaces when the board's status may be out of date, since the whole model depends on status hygiene.
+
+---
+
+## Appearance
+
+A three-way **appearance preference** — **Match system · Light · Dark** — under Profile → Appearance ([src/theme.js](src/theme.js)). "Match system" follows the OS live via `matchMedia` (updates instantly, no refresh) and detaches the listener when a fixed mode is chosen. The **choice** (not the resolved theme) is persisted to `localStorage` for a flash-free boot (a synchronous `<html data-theme>` script in `index.html`) and mirrored to `users/{uid}.appearance` so it follows the user across devices.
+
+---
+
 ## Future Roadmap
 
-- Finish **push + email** delivery for notifications (in-app center + backend are done); notification retention cleanup + App Check.
-- **Department-lead** dashboards and a dedicated **Events calendar** page (admin event CRUD + Firestore `eventSeries` already ship; next is a calendar view + event content templates).
-- **Preferred names / nicknames** stored on the profile (the import-side matcher is the first half).
+**Notifications & delivery** — in-app center, backend triggers, hourly reminder dispatcher, web push, and Resend email are all shipped; push now includes new-registration alerts to admins. Remaining: verify push/email on the deployed site (see the Cloud Run invoker note in *Troubleshooting*), notification retention cleanup polish.
+
+**Capacity engine (v2)** — evolve the v1.2 model without rebuilding it: a **content-complexity multiplier** (Simple ×0.75 / Standard / Complex ×1.5), **owner/editing as time-spans** rather than single-date points, **explicit QA/poster assignment** so that work can be attributed, an **owner-tunable + versioned** weight table (never per-admin free-for-all), and — carefully — **stage-level cycle-time** learning ("editing sits 11 days on average") to reveal bottlenecks *without ever ranking individuals*.
+
+**Product**
+- **Department-lead** dashboards and a dedicated **Events calendar** page (admin event CRUD + `eventSeries` already ship; next is a calendar view + event content templates).
+- **Preferred names / nicknames** on the profile (the import-side matcher is the first half).
 - **Passwordless auth** (magic link / email code / passkeys) to ease volunteer onboarding.
-- **Analytics / content performance** tracking (IG / Facebook / YouTube).
-- **Integrations** — Google Drive, calendar sync.
-- Continued **mobile** refinement; recurring content templates; AI caption suggestions.
+- **Analytics / content performance** (IG / Facebook / YouTube); **integrations** — Google Drive, calendar sync.
+- Route-level **code-splitting**; recurring content templates; AI caption suggestions.
 
 ---
 
@@ -532,7 +562,8 @@ The project has no lint/type-check tooling (plain JSX, no TypeScript). The comma
 | Command | What it checks |
 | --- | --- |
 | `npm run build` | Frontend production build (Vite) |
-| `node --test src/events.test.js` | Recurrence-engine unit tests (last-day, last-Friday, 3rd-Friday every-other-month from Aug 21 2026, leap Feb, boundaries, exceptions/dedupe) |
+| `node --test src/*.test.js` | All frontend unit tests (**67**): recurrence engine (`events.test.js`), content Title-Case (`data.title.test.js`), task-UX helpers (`data.uxv2.test.js`), the **capacity engine** (`data.capacity.test.js` — role weights, phase activation, timeline buckets, `personLoad`, bands, stale flags, board-aware auto-assign), and **appearance/theme** resolution + live system-theme change (`theme.test.js`) |
+| `node --test functions/emailService.test.js` | Email recipient normalize/validate + provider-error classification |
 | `node --check functions/*.js` | Cloud Functions syntax (no build step — CommonJS) |
 | `npm --prefix functions ls --depth=0` | Functions dependency validation |
 
@@ -557,8 +588,9 @@ The project has no lint/type-check tooling (plain JSX, no TypeScript). The comma
 | **Reminder not generated** | Reminders only materialize for tasks with a `postDate`, aren't in the past, and aren't Posted/archived. Check the task's `reminders` (or the default schedule). |
 | **Recurring occurrence missing** | Verify the series rule + `start`/`everyX`/`anchor` in `src/events.js`; the engine skips off-phase months and dates before `start`. |
 | **Firestore index errors** | Deploy `firestore.indexes.json`. The composite indexes are `notifications(uid, createdAt desc)` and `reminderInstances(status, fireAt)`. |
-| **Emulator connection issues** | Confirm `VITE_USE_EMULATOR=true` and ports 8080/9099/5001/8085/4000 are free (`pkill -9 -f firebase`). |
+| **Emulator connection issues** | Confirm `VITE_USE_EMULATOR=true` and ports 8080/9099/5001/8085/4000 are free (`pkill -9 -f firebase`). If seeding fails with `2 UNKNOWN`, the Firestore emulator likely ran out of Java heap after a long session — restart it (optionally `JAVA_TOOL_OPTIONS=-Xmx2048m`). |
 | **Missing Cloud Function secret access** | On deploy, grant the function access to `RESEND_API_KEY`, or re-run the access grant in the console. |
+| **Test-email returns `internal` on the deployed site** | The 2nd-gen callable's Cloud Run service isn't allowing unauthenticated invocation, so the request is blocked *before the function runs* ("Empty Authorization header value" in the logs). Callables do their own auth, so grant the invoker role: `gcloud run services add-iam-policy-binding sendtestemail --region=northamerica-northeast1 --member=allUsers --role=roles/run.invoker` (or Cloud Run → *Allow unauthenticated*). If an org policy blocks `allUsers`, add an exception first. The frontend now maps real failures to clear messages instead of `internal`. |
 
 ---
 

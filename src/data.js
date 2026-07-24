@@ -104,7 +104,7 @@ export const roleLabel = (r) =>
      design:"Graphic Design", shadow:"Shadowing", other:"Other",
      contentlead:"Content Lead", leaddesign:"Lead Designer" }[r] || r);
 
-// When a piece of content is saved with NO support crew, the owner takes on the
+// When a piece of content is saved with NO production team, the owner takes on the
 // lead role themselves. Graphics (Poster) → Lead Designer; everything else
 // (Reel/Video, Photography) → Content Lead. Used by the "produce it alone?"
 // confirmation to add the owner as the sole crew member.
@@ -121,6 +121,21 @@ export const soloCrewVerb = (type) =>
 
 // The crew task picker; "other" carries a free-text custom label on the entry.
 export const CREW_ROLES = ["shoot", "edit", "coordinate", "design", "shadow", "other"];
+
+// Production order for DISPLAYING a task's team (owner is rendered separately,
+// above these). Used everywhere a crew list is shown so the order is consistent.
+export const CREW_ORDER = ["shoot", "edit", "design", "coordinate", "shadow", "other"];
+export const crewOrderIndex = (role) => {
+  const i = CREW_ORDER.indexOf(role);
+  return i < 0 ? CREW_ORDER.length : i;
+};
+// Sort crew into production order while preserving each entry's ORIGINAL index
+// (callers mutate by index, so identity must survive the sort).
+export function orderedCrew(support) {
+  return (support || [])
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => crewOrderIndex(a.s && a.s.role) - crewOrderIndex(b.s && b.s.role));
+}
 
 // Human label for a support-crew entry — shows the custom label for "Other".
 export function crewRoleLabel(s) {
@@ -226,6 +241,54 @@ export const fmt = (s) => { if(!s) return "-"; const d=new Date(s+"T00:00:00");
   return d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); };
 export const daysTo = (s) => { if(!s) return null; const d=new Date(s+"T00:00:00");
   return Math.round((d-today())/86400000); };
+
+/* ---- date validation ------------------------------------------------------
+   Rules the planner enforces before a piece of content can be saved. Pure and
+   timezone-safe: `iso()` goes through UTC, which lands on the wrong day for
+   anyone east of Greenwich, so scheduling compares local calendar days. */
+export const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+};
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// A real calendar day — rejects "2026-02-31", which Date() silently rolls over.
+export const isRealDate = (s) => {
+  if (!DATE_RE.test(s || "")) return false;
+  const [y, m, day] = s.split("-").map(Number);
+  const d = new Date(y, m - 1, day);
+  return d.getFullYear() === y && d.getMonth() === m - 1 && d.getDate() === day;
+};
+// Years beyond this are almost certainly a typo ("2206") rather than a plan.
+const MAX_YEARS_AHEAD = 3;
+
+/* Returns the first blocking problem with a form's dates, or "".
+   `original` is the task as last saved: a date that was ALREADY in the past
+   when the editor opened must not block unrelated edits — only dates the user
+   actually sets or changes are held to "not before today". */
+export function dateIssues(form, original) {
+  const f = form || {}, o = original || {};
+  const shoot = f.shootDate || "", post = f.postDate || "";
+  const isShoot = isShootType(f.type);
+
+  for (const [val, label] of [[shoot, "Shoot date"], [post, "Post date"]]) {
+    if (val && !isRealDate(val)) return `${label} isn't a real date.`;
+  }
+  // Shoot date only applies to shoot-based content.
+  if (isShoot && shoot && post && post < shoot)
+    return "Post date must be on or after the shoot date.";
+
+  const t = todayStr();
+  if (shoot && isShoot && shoot !== o.shootDate && shoot < t)
+    return "Shoot date can't be in the past.";
+  if (post && post !== o.postDate && post < t)
+    return "Post date can't be in the past.";
+
+  const maxYear = new Date().getFullYear() + MAX_YEARS_AHEAD;
+  for (const [val, label] of [[shoot, "shoot date"], [post, "post date"]]) {
+    if (val && Number(val.slice(0, 4)) > maxYear) return `Check the year on the ${label}.`;
+  }
+  return "";
+}
 /* ===================================================================
    Content-title formatting — proper Title Case for CONTENT / TASK titles
    only (never names, emails, URLs, file names, descriptions, comments,
@@ -272,24 +335,29 @@ export function formatContentTitle(title) {
   return toks.map((t, i) => /\S/.test(t) ? titleCaseWord(t, i === first, i === last) : t).join("");
 }
 
-/* ---- auto-assign (mirrors the Apps Script rules) ---- */
-export function autoAssign(task, users) {
+/* ---- auto-assign (eligibility first, then balance by real weighted load) ----
+   `allTasks` (optional) lets the balancer seed each candidate's CURRENT active
+   capacity points, so it hands work to whoever is genuinely lightest across the
+   whole board — not merely whoever has fewer rows on this one task. */
+export function autoAssign(task, users, allTasks = []) {
+  if (!task || !task.type) return [];   // no type chosen → nothing to assign (don't assume graphics)
   users = (users || []).filter(isAvailable); // #4: never auto-assign unavailable people
-  if (!isShootType(task.type)) {   // Poster (graphics) → a designer
-    const ownerU = users.find(u => u.name===task.owner);
-    const ownerIsDesigner = ownerU && (ownerU.skills||[]).includes("design");
-    if (ownerIsDesigner && task.owner!=="David") {
-      const david = users.find(u=>u.name==="David");
-      return david ? [{name:"David",role:"design"}] : [];
-    }
-    if (!ownerIsDesigner) {
-      const d = users.find(u=>u.name==="David") || users.find(u=>(u.skills||[]).includes("design"));
-      return d ? [{name:d.name,role:"design"}] : [];
-    }
-    return [];
+  if (!isShootType(task.type)) {   // Poster / graphics → needs one designer
+    const ownerU = users.find(u => u.name === task.owner);
+    // If the owner is a designer, they design it themselves — no extra crew.
+    if (ownerU && (ownerU.skills || []).includes("design")) return [];
+    // Otherwise pick the lightest AVAILABLE designer who isn't the owner.
+    const other = (allTasks || []).filter(t => t.id !== task.id);
+    const designers = users
+      .filter(u => u.name !== task.owner && (u.skills || []).includes("design"))
+      .sort((a, b) => personLoad(a, other).activePoints - personLoad(b, other).activePoints);
+    return designers.length ? [{ name: designers[0].name, role: "design" }] : [];
   }
   const locs = task.location==="Both" ? ["479","828"] : [task.location];
-  const out = []; const load = {}; users.forEach(u=>load[u.name]=0);
+  // Seed each candidate's balance with their current active capacity points
+  // (from every OTHER live task), so the lightest person wins.
+  const out = []; const load = {};
+  users.forEach(u => { load[u.name] = personLoad(u, (allTasks || []).filter(t => t.id !== task.id)).activePoints; });
   locs.forEach(loc => {
     const used = new Set([task.owner]);
     const pick = (role) => {
@@ -306,7 +374,7 @@ export function autoAssign(task, users) {
       const norm = cands.filter(u=>!u.deprioritize), dep = cands.filter(u=>u.deprioritize);
       norm.sort((a,b)=>load[a.name]-load[b.name]); dep.sort((a,b)=>load[a.name]-load[b.name]);
       const chosen = [...norm,...dep][0];
-      if (chosen){ used.add(chosen.name); load[chosen.name]++; return chosen.name; }
+      if (chosen){ used.add(chosen.name); load[chosen.name] += responsibilityWeight(role); return chosen.name; }
       return null;
     };
     const sh=pick("shoot"); if(sh) out.push({name:sh,role:"shoot",loc});
@@ -798,15 +866,213 @@ export function roleChips(user) {
   return chips;
 }
 
-// Workload badge for the Team Load cards (presentation only — thresholds are
-// UI buckets, not a change to how load itself is computed). Unavailable always
-// wins; otherwise it's driven by the active-task count.
-export function workloadBadge(user, activeCount) {
+/* ===================================================================
+   CAPACITY ENGINE (v1) — effort-weighted, phase-aware workload.
+
+   Principle: workload is the effort of a person's CURRENT responsibility,
+   not how many task rows contain their name. Each responsibility (owner or a
+   support-crew role) carries a role weight, is ACTIVE only during the workflow
+   phase where that work actually happens (derived from task status — never a
+   manual per-assignment status), and is placed on a timeline by the date most
+   relevant to that role. Weights are internal + versioned (not user-editable in
+   v1). Scope: creative/production responsibilities only — shared QA and posting
+   queues are NOT attributed to individuals in v1.
+   =================================================================== */
+export const CAPACITY_MODEL = {
+  version: 1,
+  // Role -> effort weight (a heavy edit is worth ~5 coordination pings).
+  roles: { owner: 2, shoot: 3, edit: 5, design: 4, coordinate: 1, shadow: 0.5, other: 1 },
+  // A responsibility that hasn't started yet counts at half.
+  phaseMultiplier: { active: 1, upcoming: 0.5, done: 0 },
+  // Weekly capacity (in the same points) by availability.
+  capacity: { full: 20, limited: 10, unavailable: 0 },
+};
+
+// A person's weekly capacity in points, from their availability flags.
+export function weeklyCapacity(user) {
+  if (!isAvailable(user)) return CAPACITY_MODEL.capacity.unavailable;
+  if (user && user.limited) return CAPACITY_MODEL.capacity.limited;
+  return CAPACITY_MODEL.capacity.full;
+}
+
+// Effort weight for a role (falls back to "other").
+export const responsibilityWeight = (role) =>
+  CAPACITY_MODEL.roles[role] != null ? CAPACITY_MODEL.roles[role] : CAPACITY_MODEL.roles.other;
+
+// Which phase a responsibility is in, derived from the task's workflow status:
+//   "active"   → the work is happening now (full weight)
+//   "upcoming" → not started yet (half weight)
+//   "done"     → this person's part is finished (zero)
+// Owner spans the whole task; coordination happens before the shoot; shoot/edit/
+// design/shadow happen during production ("In Progress"/"Changes Requested").
+export function responsibilityPhase(role, status) {
+  if (status === "Posted") return "done";
+  const planning = status === "Planned";
+  const producing = status === "In Progress" || status === "Changes Requested";
+  switch (role) {
+    case "owner":      return "active";                                   // until Posted
+    case "coordinate": return planning ? "active" : "done";               // pre-production only
+    case "shoot":
+    case "shadow":
+    case "edit":
+    case "design":
+    case "other":
+    default:           return planning ? "upcoming" : producing ? "active" : "done";
+  }
+}
+
+// The date a responsibility should sit on in the timeline. Shoot-side roles use
+// the shoot date; edit/design/owner/other use the post date. Falls back to the
+// other date, or null (→ "unscheduled").
+export function responsibilityDate(role, task) {
+  const shoot = task.shootDate || task.postDate || null;
+  const post = task.postDate || task.shootDate || null;
+  return (role === "shoot" || role === "shadow" || role === "coordinate") ? shoot : post;
+}
+
+// Time bucket relative to today. Overdue/near items land in "thisWeek".
+export function loadBucket(dateStr) {
+  if (!dateStr) return "unscheduled";
+  const d = daysTo(dateStr);
+  if (d == null) return "unscheduled";
+  if (d <= 7) return "thisWeek";     // includes past-due (negative)
+  if (d <= 14) return "nextWeek";
+  return "later";
+}
+
+// Every non-done responsibility this person holds across the live board, each
+// with its role, weight, phase, effective load, relevant date and time bucket.
+export function personResponsibilities(user, tasks) {
+  const name = user && user.name;
+  const out = [];
+  for (const t of (tasks || [])) {
+    if (!t || t.status === "Posted") continue;
+    const roles = [];
+    if (t.owner === name) roles.push("owner");
+    for (const s of (t.support || [])) if (s && s.name === name) roles.push(s.role || "other");
+    for (const role of roles) {
+      const phase = responsibilityPhase(role, t.status);
+      if (phase === "done") continue;
+      const weight = responsibilityWeight(role);
+      const date = responsibilityDate(role, t);
+      out.push({
+        taskId: t.id, title: t.title, type: t.type, role, weight, phase,
+        effective: weight * CAPACITY_MODEL.phaseMultiplier[phase],
+        date, bucket: loadBucket(date),
+      });
+    }
+  }
+  return out;
+}
+
+// A person's aggregate capacity picture: active vs upcoming points, counts,
+// timeline buckets, weekly capacity and the resulting band.
+export function personLoad(user, tasks) {
+  const items = personResponsibilities(user, tasks);
+  const active = items.filter((i) => i.phase === "active");
+  const upcoming = items.filter((i) => i.phase === "upcoming");
+  const sum = (arr) => Math.round(arr.reduce((s, i) => s + i.effective, 0) * 10) / 10;
+  const capacity = weeklyCapacity(user);
+  const buckets = { thisWeek: [], nextWeek: [], later: [], unscheduled: [] };
+  items.forEach((i) => buckets[i.bucket].push(i));
+  const activePoints = sum(active);
+  return {
+    items, active, upcoming, activePoints, upcomingPoints: sum(upcoming),
+    activeCount: active.length, upcomingCount: upcoming.length,
+    capacity, buckets, band: workloadBand(user, activePoints, capacity),
+  };
+}
+
+// Coarse capacity band (never a false-precise %). Driven by ACTIVE load only;
+// upcoming work is shown separately. Unavailable always wins.
+export function workloadBand(user, activePoints, capacity) {
   if (!isAvailable(user)) return { key: "unavail", label: "Unavailable", tone: "neutral" };
-  if (activeCount === 0) return { key: "available", label: "Available", tone: "green" };
-  if (activeCount <= 2) return { key: "light", label: "Light", tone: "blue" };
-  if (activeCount <= 5) return { key: "moderate", label: "Moderate", tone: "amber" };
-  return { key: "high", label: "High", tone: "red" };
+  if (!activePoints || activePoints <= 0) return { key: "available", label: "Available", tone: "green" };
+  const ratio = capacity > 0 ? activePoints / capacity : 1;
+  if (ratio <= 0.4) return { key: "light",    label: "Light",         tone: "green" };
+  if (ratio <= 0.7) return { key: "balanced", label: "Balanced",      tone: "blue" };
+  if (ratio <= 0.9) return { key: "busy",     label: "Busy",          tone: "amber" };
+  return { key: "high", label: "High workload", tone: "red" };
+}
+
+// Human label for a responsibility, weight-tiered (heavy/standard/light).
+export const responsibilityTier = (weight) => weight >= 4 ? "Heavy" : weight >= 2 ? "Standard" : "Light";
+
+/* ---- Plain-language workload ---------------------------------------------
+   The engine thinks in points. People think in "two edits due this week".
+   Nothing below invents new data — it phrases what personLoad already knows,
+   so the UI never has to show a number nobody can interpret. */
+
+// What someone IS in a role ("best available shooter") and the kind of work
+// they're compared on ("light editing schedule"). No engine vocabulary: the
+// internal "owner" role must never surface as "pieces to own".
+const ROLE_PERSON = { shoot:"shooter", edit:"editor", design:"designer",
+  coordinate:"coordinator", shadow:"trainee", owner:"lead" };
+const ROLE_NOUN = { shoot:"filming", edit:"editing", design:"design",
+  coordinate:"coordination", shadow:"shadowing", owner:"ownership" };
+
+// What's on someone's plate, in as few words as it can honestly be said, plus
+// whether their band is worth badging at all — "Light"/"Balanced" is not news,
+// so only the ends of the scale (free, busy, over, unavailable) earn a chip.
+export function loadSummary(user, tasks) {
+  const load = personLoad(user, tasks);
+  const band = load.band;
+  const notable = band.key !== "light" && band.key !== "balanced";
+  const week = load.buckets.thisWeek.length;
+  const base = { band, notable, load, dueThisWeek: week, upcoming: load.items.length - week };
+  if (!isAvailable(user)) return { ...base, detail: "Unavailable" };
+  if (week) return { ...base, detail: `${week} due this week` };
+  return { ...base, detail: load.items.length ? "Nothing due this week" : "Available this week" };
+}
+
+// Is this the same team, regardless of the order it was built in? Auto-assign
+// is deterministic, so re-running it on unchanged inputs returns an identical
+// crew — the UI needs to know that so "nothing changed" can be SAID rather
+// than looking like a dead button.
+const crewKey = (c) => `${(c && c.name) || ""}|${(c && c.role) || ""}|${(c && c.loc) || ""}`;
+export function sameCrew(a, b) {
+  const A = (a || []).map(crewKey).sort(), B = (b || []).map(crewKey).sort();
+  return A.length === B.length && A.every((k, i) => k === B[i]);
+}
+
+// Why this person is the right call — a recommendation, not a readout of the
+// score that produced it. Stays honest: when someone else is genuinely freer we
+// say what's on this person's plate instead of claiming they're the best pick.
+export function crewReason(pick, users, tasks) {
+  const role = pick && pick.role;
+  if (role === "shadow") return "Learning on this one";
+  const person = (users || []).find((u) => u.name === (pick && pick.name));
+  if (!person) return "Available";
+  if (!isAvailable(person)) return "Unavailable";
+  const { detail, load } = loadSummary(person, tasks);
+  // How many equally-skilled, available people are carrying LESS than they are.
+  const lighter = (users || []).filter((u) =>
+    u.name !== person.name && isAvailable(u) && (u.skills || []).includes(role)
+    && personLoad(u, tasks).activePoints < load.activePoints).length;
+  if (lighter > 0) return detail;
+  if (load.activePoints <= 0) return `Best available ${ROLE_PERSON[role] || "choice"}`;
+  return `Light ${ROLE_NOUN[role] || "workload"} schedule`;
+}
+
+// Immutable toggle of an id in a Set (returns a NEW set; never mutates). Used to
+// track which capacity cards are expanded — keyed by stable user id, so rapid
+// expansion of several cards never cross-contaminates.
+export function toggleId(set, id) {
+  const next = new Set(set);
+  next.has(id) ? next.delete(id) : next.add(id);
+  return next;
+}
+
+// Lightweight data-quality flags so a stale board doesn't quietly produce a
+// confident-but-wrong capacity picture. We never auto-change status — just flag.
+export function staleFlags(task) {
+  const flags = [];
+  if (!task || task.status === "Posted") return flags;
+  const shoot = task.shootDate ? daysTo(task.shootDate) : null;
+  const post = task.postDate ? daysTo(task.postDate) : null;
+  if (task.status === "Planned" && shoot != null && shoot < 0) flags.push("shoot-passed-still-planned");
+  if (post != null && post < 0) flags.push("post-passed-not-posted");
+  return flags;
 }
 
 // How many active (non-Posted) tasks a person owns or is crew on.
@@ -1106,15 +1372,24 @@ export function monthlyWins(tasks, offset = 0) {
   };
 }
 
-// Recent celebratory moments (most recent posted/approved per task), newest first.
+/* Recent celebratory moments — ONE win per completed piece of content, newest
+   first. The production TASK is the canonical source: its title is never
+   concatenated with a linked recurring event's name (that produced the
+   "X posted · X Poster" duplicate-looking rows), and repeated completion events
+   for the same content collapse into a single win — a "Posted" always wins over
+   an earlier "Approved". Returns structured data so the UI owns the wording. */
 export function recentWins(tasks, limit = 5) {
-  const wins = [];
+  const byContent = new Map();
   (tasks || []).forEach((t) => {
-    const posted = lastEvent(t, "posted"), approved = lastEvent(t, "approved");
-    if (posted) wins.push({ at: posted.at, text: `${t.title} posted${t.relatedEvent ? ` · ${t.relatedEvent}` : ""}` });
-    else if (approved) wins.push({ at: approved.at, text: `${t.title} approved` });
+    const posted = lastEvent(t, "posted");
+    const ev = posted || lastEvent(t, "approved");
+    if (!ev) return;
+    const key = t.id != null ? t.id : t.title;      // one entry per piece of content
+    const win = { id: key, at: ev.at, title: t.title, action: posted ? "Posted" : "Approved", type: t.type };
+    const prev = byContent.get(key);
+    if (!prev || (win.action === "Posted" && prev.action !== "Posted") || win.at > prev.at) byContent.set(key, win);
   });
-  return wins.sort((a, b) => b.at - a.at).slice(0, limit);
+  return [...byContent.values()].sort((a, b) => b.at - a.at).slice(0, limit);
 }
 
 // Posted-content contributions per person (owner or crew), most first.
