@@ -21,6 +21,10 @@
   --text-muted:#9CA3AF;
   --border:#E8E8EC;             /* clean hairline */
   --border-strong:#DCDCE1;
+  /* Form fields are their own layer. Kept as explicit tokens because a field
+     must stay distinguishable from EVERY surface it can sit on (sheet, card,
+     well) — deriving it from --surface-muted made it invisible in dark. */
+  --field:#FBFBFC; --field-hover:#F3F3F6; --field-border:#DCDCE3;
   /* -- color: brand (deep indigo; used sparingly, solid — never gradient) -- */
   --primary:#5E6AD2;
   --primary-hover:#525DBE;
@@ -94,6 +98,7 @@
   --text-muted:#62666D;
   --border:rgba(255,255,255,.07);
   --border-strong:rgba(255,255,255,.12);
+  --field:#0D0E10; --field-hover:#141518; --field-border:rgba(255,255,255,.16);
   --primary:#6E79E8; --primary-hover:#7C86EC; --primary-pressed:#5E6AD2;   /* Linear indigo, interactive on dark */
   --primary-muted:#1E2030;
   --success:#22C55E; --success-muted:#0F2418;
@@ -455,7 +460,7 @@ a{color:var(--primary)}
 }
 
 .sb-cap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
-  padding:14px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:9px;min-width:0}
+  padding:14px 16px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:0;min-width:0}
 /* Wins & metrics cards. */
 .sb-wincards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:4px}
 @media(min-width:680px){ .sb-wincards{grid-template-columns:repeat(4,1fr)} }
@@ -553,39 +558,257 @@ a{color:var(--primary)}
 .sb-deskonly{display:none}
 @media(min-width:900px){ .sb-deskonly{display:inline-block} }
 /* Recent wins rows. */
-.sb-recent{display:flex;flex-direction:column;gap:6px}
-.sb-recent-row{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:10px 13px;font-size:13.5px}
+/* Recent wins — a celebratory timeline of accomplishments. The icon is pinned to
+   the first line (flex-start + fixed width) so it never drifts when a long title
+   wraps, and every card shares the same padding/rhythm. */
+.sb-recent{display:flex;flex-direction:column;gap:8px}
+.sb-recent-row{display:flex;align-items:flex-start;gap:11px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:12px 14px;
+  transition:background var(--motion-fast) var(--ease-standard),border-color var(--motion-fast) var(--ease-standard)}
+@media(hover:hover){ .sb-recent-row:hover{background:var(--success-muted);
+  border-color:color-mix(in srgb,var(--success) 26%,transparent)} }
+.sb-recent-ic{flex:none;width:22px;height:22px;margin-top:-1px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:var(--success-muted);color:var(--success)}
+.sb-recent-ic .hi{width:14px;height:14px}
+.sb-recent-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.sb-recent-title{font-size:14px;font-weight:600;line-height:1.35;color:var(--text-primary);overflow-wrap:anywhere}
+.sb-recent-action{font-size:12px;font-weight:600;color:var(--success)}
 
-.sb-caplist{display:grid;grid-template-columns:1fr;gap:10px}
-@media(min-width:900px){ .sb-caplist{grid-template-columns:1fr 1fr} }
-/* Row 1 — avatar + name (name gets up to two lines, then ellipsis) + optional dept. */
-.sb-cap-hd{display:flex;align-items:flex-start;gap:10px;min-width:0}
-.sb-cap-av{width:34px;height:34px;font-size:12px;font-weight:700;flex:none}
-.sb-cap-id{min-width:0;display:flex;flex-direction:column;gap:2px;padding-top:1px}
-.sb-cap-name{font-weight:600;font-size:14.5px;line-height:1.25;color:var(--text-primary);
-  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
-.sb-cap-dept{font-size:12px;color:var(--text-muted);
+/* Team Load — one column on mobile; a centred two-column grid on desktop, where
+   an expanded card spans the full width and pulls to the top (no empty half-
+   column, and only one card is ever open). */
+.sb-caplist{display:flex;flex-direction:column;gap:10px;max-width:640px}
+@media(min-width:900px){
+  .sb-caplist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;
+    max-width:1120px;margin:0 auto;align-items:start}
+  .sb-cap.open{grid-column:1/-1;order:-1}
+}
+.sb-cap{transition:border-color var(--motion-fast) var(--ease-standard),box-shadow var(--motion-fast) var(--ease-standard)}
+.sb-cap:hover{border-color:var(--border-strong)}
+.sb-cap.open{border-color:var(--border-strong);box-shadow:var(--shadow-lg)}
+/* Header: avatar · name/primary role · status chip · chevron. */
+.sb-cap-hd{display:flex;align-items:center;gap:10px;min-width:0}
+.sb-cap-av{width:36px;height:36px;font-size:12px;font-weight:700;flex:none}
+.sb-cap-id{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px}
+.sb-cap-name{font-weight:600;font-size:15px;line-height:1.25;color:var(--text-primary);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Row 2 — workload badge pill (subtle tinted background; fades in on change). */
-.sb-wlbadge{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;
-  padding:3px 9px;border-radius:var(--r-pill);font-size:11.5px;font-weight:600;white-space:nowrap;
-  animation:revealIn var(--motion-fast) var(--ease-enter)}
+.sb-cap-dept{font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Status chip — shared tones; only shown when meaningful. */
+.sb-wlbadge{display:inline-flex;align-items:center;gap:6px;flex:none;
+  padding:3px 9px;border-radius:var(--r-pill);font-size:11.5px;font-weight:600;white-space:nowrap}
 .sb-wl-dot{width:7px;height:7px;border-radius:50%;flex:none;background:currentColor}
 .sb-wlbadge.tone-green{background:var(--success-muted);color:var(--success)}
 .sb-wlbadge.tone-blue{background:var(--info-muted);color:var(--info)}
 .sb-wlbadge.tone-amber{background:var(--warning-muted);color:var(--warning)}
 .sb-wlbadge.tone-red{background:var(--danger-muted);color:var(--danger)}
 .sb-wlbadge.tone-neutral{background:var(--surface-muted);color:var(--text-secondary)}
-/* Row 3 — metrics, one aligned line, secondary type. */
-.sb-cap-metrics{font-size:12.5px;color:var(--text-secondary);font-weight:500;
+.sb-cap-chev{flex:none;color:var(--text-muted);width:18px;height:18px;
+  transition:transform var(--motion-standard) var(--ease-standard)}
+.sb-cap-chev.up{transform:rotate(180deg)}
+.sb-cap-toggle{width:100%;background:none;border:none;padding:6px;margin:-6px;cursor:pointer;text-align:left;font:inherit;color:inherit;
+  border-radius:var(--r-control)}
+.sb-cap-toggle:hover .sb-cap-name{color:var(--primary)}
+.sb-cap-toggle:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+/* Headline: deadline concentration leads; lifecycle count is secondary. */
+.sb-cap-headline{margin-top:12px;font-size:14px;color:var(--text-primary)}
+.sb-cap-headline b{font-weight:700}
+.sb-cap-hl-muted{color:var(--text-secondary);font-weight:500}
+/* Coarse "near-term load" band meter (a level, not a precise %). */
+.sb-cap-caplabel{margin-top:11px;font-size:10.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--text-muted)}
+.sb-capmeter{display:flex;gap:4px;margin-top:6px}
+.sb-capseg{flex:1;height:6px;border-radius:var(--r-pill);background:var(--surface-muted);
+  transition:background var(--motion-standard) var(--ease-standard)}
+.sb-capseg.on.tone-green{background:var(--success)} .sb-capseg.on.tone-blue{background:var(--info)}
+.sb-capseg.on.tone-amber{background:var(--warning)} .sb-capseg.on.tone-red{background:var(--danger)}
+/* Actionable warning — its own row; click to open + review. */
+.sb-cap-warn{display:flex;align-items:center;gap:7px;margin-top:11px;width:100%;text-align:left;
+  background:var(--warning-muted);border:none;border-radius:var(--r-control);padding:8px 10px;
+  font-size:12px;color:var(--warning);cursor:pointer}
+.sb-cap-warn:hover{filter:brightness(.97)}
+.sb-cap-warn .hi{flex:none}
+.sb-cap-warn > span:nth-child(2){flex:1;min-width:0}
+.sb-cap-warn b{font-weight:700}
+.sb-cap-warn-cta{flex:none;font-weight:700;text-decoration:underline;text-underline-offset:2px}
+/* Expanded breakdown — smooth height (grid-rows) + fade; content always in DOM
+   so it can never render empty/desynced on first expand. */
+.sb-cap-detailwrap{display:grid;grid-template-rows:0fr;
+  transition:grid-template-rows var(--motion-standard) var(--ease-standard)}
+.sb-cap.open .sb-cap-detailwrap{grid-template-rows:1fr}
+.sb-cap-detail{overflow:hidden;min-height:0;opacity:0;padding-top:0;border-top:1px solid transparent;
+  transition:opacity var(--motion-standard) var(--ease-standard),padding-top var(--motion-standard) var(--ease-standard)}
+.sb-cap.open .sb-cap-detail{opacity:1;padding-top:14px;border-top-color:var(--border)}
+.sb-cap-empty{font-size:13px;color:var(--text-secondary);line-height:1.5;padding-top:14px}
+.sb-cap-empty span{display:block;color:var(--text-muted);font-size:12.5px}
+.sb-cap-bucket + .sb-cap-bucket{margin-top:16px}
+.sb-cap-bucket-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--text-muted);margin-bottom:8px}
+.sb-cap-resp{display:flex;align-items:flex-start;gap:10px;padding:7px 0;min-width:0}
+.sb-cap-resp-dot{width:8px;height:8px;border-radius:50%;flex:none;margin-top:5px;background:var(--text-muted)}
+.sb-cap-resp-dot.tier-heavy{background:var(--danger)} .sb-cap-resp-dot.tier-standard{background:var(--info)}
+.sb-cap-resp-body{min-width:0;display:flex;flex-direction:column;gap:2px}
+.sb-cap-resp-t{font-size:13.5px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-cap-resp-r{font-size:12px;color:var(--text-secondary)}
+.sb-cap-resp-tier{color:var(--danger);font-weight:600}
+.sb-cap-resp-due{color:var(--text-secondary)}
+.sb-cap-resp.stale .sb-cap-resp-dot{background:var(--warning)}
+.sb-cap-resp-stale{font-size:11.5px;color:var(--warning);font-weight:600;margin-top:1px}
+/* Inline info tooltip marker. */
+.sb-infotip{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;
+  border-radius:50%;background:var(--surface-muted);color:var(--text-muted);font-size:10px;font-weight:700;
+  cursor:help;vertical-align:middle}
+/* ---- Editor section cards -------------------------------------------------
+   The sheet body drops to the app background so each group can sit on its own
+   raised surface. Depth replaces dividers: the eye groups by surface, not by
+   counting rules, and the sheet reads lighter despite holding more. */
+/* One calm sheet, grouped by space and a hairline — not cards inside a card.
+   The body keeps the sheet's own surface so there is a single background. */
+.sb-bd-sections{display:flex;flex-direction:column}
+/* The intro line leans on the section rhythm — its own 22px bottom margin
+   stacked on that and left a hole above "Content". */
+.sb-bd-sections > .sb-sub{margin-bottom:0;font-size:13.5px}
+.sb-sec{padding:28px 0 0}
+.sb-sec + .sb-sec{border-top:1px solid var(--border);margin-top:28px;padding-top:28px}
+/* The first section follows the intro line, not a divider — it only needs
+   enough room to read as a new group, not a full between-sections gap. */
+.sb-sec:first-of-type{padding-top:14px}
+@media(min-width:900px){
+  .sb-sec{padding-top:30px}
+  .sb-sec + .sb-sec{margin-top:30px;padding-top:30px}
+  .sb-sec:first-of-type{padding-top:16px} }
+/* Section headers: title case, medium weight, small consistent icon anchor. */
+.sb-sec > .sb-sechead{margin:0 0 16px}
+.sb-sechead h2{display:inline-flex;align-items:center;gap:8px;
+  font-size:16px;font-weight:600;letter-spacing:-.005em;text-transform:none;
+  color:var(--text-primary)}
+@media(min-width:900px){ .sb-sechead h2{font-size:17px} }
+.sb-sechead h2 .hi{width:17px;height:17px;stroke-width:1.75;color:var(--text-muted);flex:none}
+/* Inputs read as recessed wells against the sheet — one subtle layer, no border. */
+.sb-sec .sb-field input,.sb-sec .sb-field select,.sb-sec .sb-field textarea{
+  background:var(--field);border-color:var(--field-border)}
+.sb-sec .sb-field input:hover,.sb-sec .sb-field select:hover,.sb-sec .sb-field textarea:hover{
+  background:var(--field-hover);border-color:var(--border-strong)}
+/* iOS centres date inputs and stretches them to the picker's natural width,
+   so they were the only fields not left-aligned with the rest of the form. */
+.sb-field input[type="date"]{
+  -webkit-appearance:none;appearance:none;text-align:left;
+  display:block;width:100%;min-width:0}
+.sb-field input[type="date"]::-webkit-date-and-time-value{text-align:left;margin:0}
+.sb-field input[type="date"]::-webkit-datetime-edit{text-align:left;padding:0}
+/* A field the validator has rejected shows it, not just the message below. */
+.sb-sec .sb-field input[aria-invalid="true"]{
+  background:var(--danger-muted);box-shadow:inset 0 0 0 1px var(--danger)}
+/* Labels must outrank placeholders — they were both mid-grey before. */
+.sb-sec .sb-field label{color:var(--text-secondary);font-size:12.5px;font-weight:600}
+.sb-sec .sb-field ::placeholder{color:var(--text-muted)}
+/* Comfortable mobile targets without the field wall getting taller. */
+@media(max-width:899px){
+  .sb-sec .sb-field{margin-bottom:16px}
+  .sb-sec .sb-field input,.sb-sec .sb-field select{min-height:50px}
+  .sb-sec .sb-field textarea{min-height:120px} }
+
+/* ---- Production team: roomy rows where the PERSON leads, the role is an
+   inline-editable chip, and removing is a quiet trailing action. ---- */
+.sb-crewlist{display:flex;flex-direction:column;gap:4px;margin-top:2px}
+/* Rows reveal in production order, ~45ms apart. This is the REAL render being
+   staggered — not a fabricated delay — so a recommendation reads as deliberate
+   without the UI pretending to think for half a second. */
+.sb-crewrow{display:flex;align-items:center;gap:12px;padding:10px;min-width:0;
+  border-radius:var(--r-control);
+  animation:revealIn var(--motion-standard) var(--ease-enter) both;
+  animation-delay:calc(var(--i, 0) * 45ms);
+  transition:background var(--motion-fast) var(--ease-standard)}
+.sb-crewrow:hover{background:var(--surface-muted)}
+@media (prefers-reduced-motion: reduce){
+  .sb-crewrow{animation:none;animation-delay:0ms}
+}
+.sb-crew-av{width:38px;height:38px;font-size:13px;font-weight:700;flex:none;align-self:flex-start}
+.sb-crew-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.sb-crew-name{font-size:15px;font-weight:600;letter-spacing:-.005em;color:var(--text-primary);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Row 4 — full-width department-coloured bar, pinned to the card bottom so bars
-   line up across a row; width animates when load changes (height never does). */
-.sb-capbar{height:7px;border-radius:var(--r-pill);background:var(--surface-muted);
-  margin-top:auto;overflow:hidden;display:flex}
-.sb-capbar i{height:100%;display:block;transition:width var(--motion-slow) var(--ease-standard)}
-.seg-shoot{background:var(--violet)} .seg-edit{background:var(--blue)}
-.seg-coordinate{background:var(--gold)} .seg-design{background:var(--green)} .seg-shadow{background:var(--amber)}
+.sb-crew-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+/* Third line, present only while the explanation is expanded. */
+.sb-crew-why{display:inline-flex;align-items:center;gap:5px;margin-top:2px;
+  font-size:12.5px;color:var(--text-secondary);
+  animation:revealIn var(--motion-fast) var(--ease-enter)}
+.sb-crew-why .hi{width:13px;height:13px;color:var(--success);flex:none}
+@media (prefers-reduced-motion: reduce){ .sb-crew-why{animation:none} }
+/* Role chip = a native select styled as a tappable chip (native picker on iOS). */
+.sb-crew-rolechip{position:relative;display:inline-flex;align-items:center;flex:none}
+.sb-crew-role{appearance:none;-webkit-appearance:none;border:1px solid var(--border);
+  background:var(--surface-muted);color:var(--text-primary);font-size:11.5px;font-weight:600;
+  border-radius:var(--r-pill);padding:3px 22px 3px 10px;cursor:pointer;font-family:inherit;
+  transition:border-color var(--motion-fast) var(--ease-standard),background var(--motion-fast) var(--ease-standard)}
+.sb-crew-role:hover{border-color:var(--border-strong)}
+.sb-crew-role:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+.sb-crew-rolechev{position:absolute;right:6px;width:12px;height:12px;color:var(--text-muted);pointer-events:none}
+/* Quiet workload badge — concise, never a chart. */
+.sb-crew-load{font-size:11px;font-weight:600;flex:none}
+.sb-crew-load.tone-green{color:var(--success)} .sb-crew-load.tone-blue{color:var(--info)}
+.sb-crew-load.tone-amber{color:var(--warning)} .sb-crew-load.tone-red{color:var(--danger)}
+.sb-crew-load.tone-neutral{color:var(--text-muted)}
+/* Read-only role label (task detail) — same rhythm as the editable chip, no affordance. */
+.sb-crew-rolestatic{font-size:11.5px;font-weight:600;color:var(--text-secondary);flex:none}
+.sb-crew-loc{font-size:11px;color:var(--text-muted)}
+.sb-crew-assign{flex:none}
+/* Remove: small, muted, only colours on hover — never the dominant element. */
+.sb-crew-x{flex:none;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;
+  background:none;border:none;border-radius:var(--r-control);color:var(--text-muted);cursor:pointer;
+  transition:background var(--motion-fast) var(--ease-standard),color var(--motion-fast) var(--ease-standard)}
+.sb-crew-x:hover{background:var(--danger-muted);color:var(--danger)}
+.sb-crew-x:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+.sb-crewempty{font-size:13px;color:var(--text-muted);padding:10px 2px}
+/* Auto-assign feedback. Explanatory copy stays NEUTRAL — green is reserved for
+   the ✓ that marks an actual recommendation, so the colour keeps its meaning. */
+.sb-autofb{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  margin-bottom:10px;font-size:12.5px;line-height:1.45;color:var(--text-muted)}
+.sb-autofb > span{flex:1;min-width:0}
+/* Disclosure control, styled like the app's other quiet chips (not a raw link). */
+.sb-whybtn{display:inline-flex;align-items:center;gap:4px;flex:none;padding:5px 9px 5px 11px;
+  background:var(--surface-muted);border:1px solid var(--border);border-radius:var(--r-pill);
+  color:var(--text-secondary);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;
+  transition:background var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),border-color var(--motion-fast) var(--ease-standard)}
+.sb-whybtn:hover{background:var(--primary-muted);border-color:var(--primary);color:var(--primary)}
+.sb-whybtn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+.sb-whybtn.open{background:var(--primary-muted);border-color:transparent;color:var(--primary)}
+.sb-whybtn-chev{width:13px;height:13px;flex:none;
+  transition:transform var(--motion-fast) var(--ease-standard)}
+.sb-whybtn.open .sb-whybtn-chev{transform:rotate(180deg)}
+/* Pre-commit crew read-out in the sticky footer. */
+.sb-footcrew{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  margin-bottom:8px;font-size:12px;color:var(--text-muted)}
+.sb-footcrew-warn{color:var(--warning);font-weight:600}
+/* Section-level secondary action: full width, input height, subtle outline.
+   Shared so "Add crew member" and "Customize reminders" are one component. */
+.sb-secaction,
+.sb-addcrew-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  margin-top:12px;width:100%;min-height:50px;padding:0 16px;
+  background:transparent;border:1px solid var(--border);border-radius:var(--r-input);
+  color:var(--text-secondary);font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;
+  transition:background var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),border-color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-instant) var(--ease-standard)}
+.sb-secaction:hover,
+.sb-addcrew-btn:hover{background:var(--primary-muted);color:var(--primary);border-color:var(--primary)}
+.sb-secaction:active,
+.sb-addcrew-btn:active{transform:scale(.99)}
+.sb-secaction:focus-visible,
+.sb-addcrew-btn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){ .sb-secaction:active,.sb-addcrew-btn:active{transform:none} }
+.sb-addcrew-panel{margin-top:14px;padding:14px;border-radius:var(--r-card);
+  background:var(--surface-muted);animation:revealIn var(--motion-fast) var(--ease-enter)}
+/* Inside the well, inputs step back UP so they stay legible against it. */
+.sb-addcrew-panel .sb-field input,.sb-addcrew-panel .sb-field select,
+.sb-sec .sb-addcrew-panel .sb-field input,.sb-sec .sb-addcrew-panel .sb-field select{
+  background:var(--surface-elevated);border-color:var(--field-border)}
+.sb-addcrew-panel .sb-field{margin-bottom:0}
+/* Assign-time capacity hint in the crew picker. */
+.sb-crewhint{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;
+  font-size:12px;color:var(--text-muted)}
+/* Only escalates when the pick is actually worth a second thought. */
+.sb-crewhint.notable{color:var(--text-secondary)}
 .sb-caplegend{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:9px;font-size:10.5px;color:var(--muted)}
 .sb-caplegend span{display:flex;align-items:center;gap:4px}
 .sb-caplegend i{width:8px;height:8px;border-radius:2px;display:inline-block}
@@ -600,6 +823,13 @@ a{color:var(--primary)}
 .sb-sheetfoot{flex:0 0 auto;display:flex;flex-direction:column;gap:10px;
   padding:14px 16px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--border);
   background:var(--surface-elevated)}
+/* Against a sectioned body the footer lifts with a shadow, not a rule. */
+.sb-sheet:has(.sb-bd-sections) .sb-sheetfoot{border-top:none;gap:8px;
+  padding:12px 20px calc(12px + env(safe-area-inset-bottom));
+  box-shadow:0 -1px 3px rgba(16,18,27,.07)}
+@media(max-width:899px){
+  .sb-sheet:has(.sb-bd-sections) .sb-sheetfoot{padding-left:16px;padding-right:16px} }
+.sb-sheet:has(.sb-bd-sections) .sb-footbtn{min-height:54px;font-size:15px}
 .sb-footmsg{font-size:var(--text-support);color:var(--danger);font-weight:500;line-height:1.45}
 .sb-footbtn{width:100%;margin-top:0}
 /* #6 — responsive two-column form row: side by side when wide, stacked when
@@ -609,7 +839,7 @@ a{color:var(--primary)}
 .sb-formrow > .sb-field input,.sb-formrow > .sb-field select{width:100%;min-width:0}
 @media(max-width:439px){ .sb-formrow{grid-template-columns:1fr;gap:0} }
 /* #3 — custom "Other" crew label input (outside a .sb-field) matches inputs. */
-.sb-addcrew-label{width:100%;margin-top:8px;border:1px solid var(--border);border-radius:var(--r-input);
+.sb-addcrew-label{width:100%;margin-top:8px;border:1px solid var(--field-border);border-radius:var(--r-input);
   padding:11px 12px;font-size:16px;font-family:inherit;background:var(--surface);color:var(--text-primary)}
 .sb-addcrew-label:focus{outline:2px solid var(--focus-ring);border-color:transparent}
 /* #4 — "Unavailable" workload chip + #3 optional-field hint */
@@ -681,13 +911,35 @@ a{color:var(--primary)}
   display:flex;flex-direction:column;overflow:hidden;-webkit-overflow-scrolling:touch;
   animation:rise .22s ease;overscroll-behavior:contain}
 @media(min-width:900px){ .sb-scrim{align-items:center;padding:20px}
-  .sb-sheet{border-radius:var(--r-modal);max-height:86dvh} }
+  .sb-sheet{border-radius:var(--r-modal);max-height:86dvh}
+  /* A creation flow needs room for two-column rows and crew lines. */
+  .sb-sheet:has(.sb-bd-sections){max-width:820px;max-height:88dvh;border-radius:22px} }
 @keyframes rise{from{transform:translateY(30px);opacity:.6}to{transform:translateY(0);opacity:1}}
 /* Sticky header pins the type badge + ✕ to the top of the panel, always
    visible and tappable; extra top padding clears the notch/home indicator. */
 .sb-sheet .hd{flex:0 0 auto;background:var(--surface-elevated);
-  padding:16px 18px 12px;border-bottom:1px solid var(--line);
-  display:flex;align-items:center;justify-content:space-between;z-index:3}
+  padding:14px 16px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;gap:12px;z-index:3}
+/* Creation flow: a low, quiet header — the title, and a close control that
+   doesn't outweigh it. The body's own rhythm separates it from the content. */
+.sb-sheet:has(.sb-bd-sections) .hd{border-bottom:none;padding:12px 20px 4px}
+@media(max-width:899px){
+  .sb-sheet:has(.sb-bd-sections) .hd{padding:6px 16px 4px;
+    padding-top:calc(6px + env(safe-area-inset-top))}
+  /* 40px still clears the 44px touch minimum via its padded hit area. */
+  .sb-sheet:has(.sb-bd-sections) .hd .sb-x{width:40px;height:40px} }
+.sb-sheet:has(.sb-bd-sections) .hd .sb-x{background:transparent;border-color:transparent;
+  color:var(--text-secondary)}
+.sb-sheet:has(.sb-bd-sections) .hd .sb-x:hover{background:var(--surface-muted);color:var(--text-primary)}
+.sb-sheet:has(.sb-bd-sections) .hd .sb-x:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.sb-sheettitle{font-size:21px;letter-spacing:-.01em}
+@media(max-width:899px){ .sb-sheettitle{font-size:19px} }
+.sb-sheet:has(.sb-bd-sections) .bd{padding:4px 20px calc(26px + env(safe-area-inset-bottom))}
+@media(max-width:899px){ .sb-sheet:has(.sb-bd-sections) .bd{padding-left:16px;padding-right:16px} }
+/* Keyboard focus must never land under the sticky footer. */
+.sb-bd-sections .sb-field input,.sb-bd-sections .sb-field select,
+.sb-bd-sections .sb-field textarea,.sb-bd-sections .sb-crewrow,
+.sb-bd-sections .sb-addcrew-btn{scroll-margin-bottom:96px;scroll-margin-top:16px}
 @media(max-width:899px){ .sb-sheet .hd{padding-top:calc(18px + env(safe-area-inset-top))} }
 .sb-sheet .bd{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
   padding:16px 18px calc(26px + env(safe-area-inset-bottom))}
@@ -778,8 +1030,8 @@ a{color:var(--primary)}
 .sb-rem{border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:var(--card)}
 .sb-rem.off{opacity:.55}
 .sb-rem .hd{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-.sb-rem .hd input[type=number]{width:52px;padding:6px 8px;font-size:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink)}
-.sb-rem .hd select{padding:6px 8px;font-size:13px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink)}
+.sb-rem .hd input[type=number]{width:52px;padding:6px 8px;font-size:14px;border:1px solid var(--field-border);border-radius:8px;background:var(--field);color:var(--text-primary)}
+.sb-rem .hd select{padding:6px 8px;font-size:13px;border:1px solid var(--field-border);border-radius:8px;background:var(--field);color:var(--text-primary)}
 .sb-remtog{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);margin-left:auto}
 .sb-rem-x{background:var(--line);border:none;width:26px;height:26px;border-radius:50%;font-size:12px;color:var(--ink);cursor:pointer;flex:none}
 .sb-rem .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
@@ -808,8 +1060,8 @@ a{color:var(--primary)}
 
 .sb-field{margin-bottom:13px}
 .sb-field label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px}
-.sb-field input,.sb-field select,.sb-field textarea{width:100%;border:1px solid var(--line);border-radius:11px;
-  padding:11px 12px;font-size:16px;font-family:inherit;background:var(--card);color:var(--ink)}
+.sb-field input,.sb-field select,.sb-field textarea{width:100%;border:1px solid var(--field-border);border-radius:11px;
+  padding:11px 12px;font-size:16px;font-family:inherit;background:var(--field);color:var(--text-primary)}
 .sb-field input:focus,.sb-field select:focus,.sb-field textarea:focus{outline:2px solid var(--violet);border-color:transparent}
 .sb-btn{width:100%;display:inline-flex;align-items:center;justify-content:center;gap:7px;
   background:var(--primary);color:#fff;border:none;padding:12px 14px;min-height:44px;
@@ -925,8 +1177,8 @@ a{color:var(--primary)}
 .sb-help ul{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
 .sb-help li{font-size:12.5px;color:var(--ink)}
 .sb-urlrow{display:flex;gap:9px;align-items:stretch}
-.sb-urlrow input{flex:1;min-width:0;border:1px solid var(--line);border-radius:11px;padding:11px 12px;
-  font-size:16px;background:var(--card);color:var(--ink);font-family:inherit}
+.sb-urlrow input{flex:1;min-width:0;border:1px solid var(--field-border);border-radius:11px;padding:11px 12px;
+  font-size:16px;background:var(--field);color:var(--text-primary);font-family:inherit}
 .sb-urlrow input:focus{outline:2px solid var(--violet);border-color:transparent}
 .sb-urlrow .sb-btn{flex:none;width:auto;margin-top:0;padding:11px 18px}
 
@@ -953,13 +1205,15 @@ a{color:var(--primary)}
 .sb-fchip.admin.on{border-style:solid}
 .sb-sortrow{display:flex;justify-content:flex-end;margin-bottom:12px}
 .sb-sortlbl{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);font-weight:600}
-.sb-select{background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:9px;
+.sb-select{background:var(--field);border:1px solid var(--field-border);color:var(--text-primary);border-radius:9px;
   padding:7px 10px;font-size:13px;font-weight:500;cursor:pointer}
 .sb-group{margin-bottom:22px}
 .sb-grouphd{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;cursor:pointer;
   padding:8px 2px;text-align:left}
 .sb-grouphd .sb-status{font-size:12.5px;font-weight:700}
-.sb-chev{display:inline-flex;align-items:center;color:var(--text-muted);transition:transform var(--motion-micro) var(--ease-out);flex:none}
+.sb-chev{display:inline-flex;align-items:center;color:var(--text-muted);flex:none;
+  transition:transform 280ms cubic-bezier(.32,.72,0,1)}
+@media (prefers-reduced-motion: reduce){ .sb-chev{transition:none} }
 .sb-chev.open{transform:rotate(90deg)}
 .sb-archtag{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
   color:var(--muted);background:var(--line);padding:2px 7px;border-radius:6px}
@@ -1141,17 +1395,18 @@ a{color:var(--primary)}
 .sb-sw.on span{left:18px}
 
 /* --- Reminder summary card (task form, v1.1.2) --- */
-.sb-remsum{background:var(--surface-muted);border:1px solid var(--border);border-radius:var(--r-card);
-  padding:var(--sp-3) var(--sp-4);display:flex;flex-direction:column;gap:10px;margin-top:6px}
-.sb-remsum .bd{display:flex;flex-direction:column;gap:3px}
-.sb-remsum .bd b{font-size:var(--text-support);font-weight:600}
-.sb-remsum .bd span{font-size:var(--text-label);color:var(--text-muted);line-height:1.45}
-.sb-remsum .sb-btn{margin-top:0}
+/* A compact row, not another bordered container inside its section. */
+/* Schedule on top, one full-width action beneath — the same shape as the
+   production team block, so the two sections read as one pattern. */
+.sb-remsum{display:flex;flex-direction:column;min-width:0}
+.sb-remsum .bd{display:flex;flex-direction:column;gap:3px;min-width:0}
+.sb-remsum .bd b{font-size:14px;font-weight:600;color:var(--text-primary)}
+.sb-remsum .bd span{font-size:12.5px;color:var(--text-secondary);line-height:1.45}
 
 /* --- Reminder timeline (bottom sheet, v1.1.2) --- */
-.sb-remtl{display:flex;flex-direction:column;margin:12px 0 4px;position:relative}
-.sb-tlrow{display:flex;gap:12px;align-items:flex-start;position:relative;padding:10px 0}
-.sb-tlrow::before{content:"";position:absolute;left:8px;top:34px;bottom:-8px;width:2px;background:var(--border)}
+.sb-remtl{display:flex;flex-direction:column;margin:14px 0 6px;position:relative}
+.sb-tlrow{display:flex;gap:14px;align-items:flex-start;position:relative;padding:14px 0}
+.sb-tlrow::before{content:"";position:absolute;left:8px;top:38px;bottom:-8px;width:2px;background:var(--border)}
 .sb-tlrow:last-child::before{display:none}
 .sb-tlrow.off{opacity:.55}
 .tl-dot{width:18px;height:18px;border-radius:50%;background:var(--primary-muted);border:2px solid var(--primary);
@@ -1160,24 +1415,49 @@ a{color:var(--primary)}
 .tl-main{flex:1;min-width:0}
 .tl-head{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
   background:none;border:none;text-align:left;padding:0;cursor:pointer}
-.tl-when{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tl-when{display:flex;flex-direction:column;gap:3px;min-width:0}
 .tl-when b{font-size:var(--text-body);font-weight:600;color:var(--text-primary)}
 .tl-date{font-size:var(--text-label);color:var(--text-secondary)}
-.tl-meta{font-size:var(--text-label);color:var(--text-muted)}
+.tl-meta{font-size:var(--text-label);color:var(--text-muted);line-height:1.5}
 .tl-err{font-size:var(--text-label);color:var(--danger);background:var(--danger-muted);
-  border-radius:var(--r-control);padding:6px 10px;margin-top:7px}
-.tl-adv{margin-top:10px;background:var(--surface-muted);border:1px solid var(--border);
-  border-radius:var(--r-card);padding:12px;animation:rise var(--motion-standard) var(--ease-out)}
-.tl-time{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-.tl-time input{width:56px;padding:8px;font-size:15px;border:1px solid var(--border);
-  border-radius:var(--r-control);background:var(--surface);color:var(--text-primary)}
-.tl-time select{padding:8px;font-size:14px;border:1px solid var(--border);
-  border-radius:var(--r-control);background:var(--surface);color:var(--text-primary)}
-.tl-lbl{font-size:var(--text-label);font-weight:700;color:var(--text-secondary);margin:8px 0 5px}
-.tl-adv .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
-.tl-adv .sb-rchip{min-height:34px;padding:6px 13px;font-size:var(--text-label)}
-.link.danger{color:var(--danger);background:none;border:none;font-size:var(--text-support);
-  font-weight:600;padding:6px 0;cursor:pointer}
+  border-radius:var(--r-control);padding:8px 11px;margin-top:9px}
+/* Disclosure: the ROW's height is what animates, on the iOS sheet curve —
+   it decelerates hard at the end so the rows below settle instead of snapping.
+   grid-template-rows 0fr→1fr is the only way to transition to auto height. */
+.tl-advwrap{display:grid;grid-template-rows:0fr;margin-top:0;
+  transition:grid-template-rows 280ms cubic-bezier(.32,.72,0,1),
+             margin-top 280ms cubic-bezier(.32,.72,0,1)}
+.tl-advwrap.open{grid-template-rows:1fr;margin-top:12px}
+.tl-adv{overflow:hidden;min-height:0}
+/* The panel itself trails the height by a beat, so content arrives into a
+   space that already exists rather than dragging the layout open with it. */
+.tl-advin{background:var(--surface-muted);border-radius:var(--r-card);padding:16px;
+  opacity:0;transform:translateY(-6px);
+  transition:opacity 140ms ease-out,transform 220ms cubic-bezier(.32,.72,0,1)}
+.tl-advwrap.open .tl-advin{opacity:1;transform:none;transition-delay:70ms}
+@media (prefers-reduced-motion: reduce){
+  .tl-advwrap,.tl-advin{transition:none}
+  .tl-advin{transform:none}
+}
+/* Wraps to its own line rather than squeezing the select on narrow phones. */
+.tl-time{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.tl-time input{width:72px;min-height:44px;padding:8px 10px;font-size:15px;
+  border:1px solid var(--field-border);border-radius:var(--r-control);
+  background:var(--surface-elevated);color:var(--text-primary)}
+.tl-time select{flex:1;min-width:140px;min-height:44px;padding:8px 10px;font-size:14px;
+  border:1px solid var(--field-border);border-radius:var(--r-control);
+  background:var(--surface-elevated);color:var(--text-primary)}
+.tl-lbl{font-size:var(--text-label);font-weight:600;color:var(--text-secondary);margin:16px 0 8px}
+.tl-adv .chips{display:flex;flex-wrap:wrap;gap:8px}
+.tl-adv .sb-rchip{min-height:40px;padding:8px 15px;font-size:var(--text-label)}
+/* Destructive action, set apart from the settings it would discard. */
+.tl-remove{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;
+  min-height:44px;margin-top:18px;padding:0 12px;background:none;
+  border:1px solid color-mix(in srgb,var(--danger) 28%,transparent);border-radius:var(--r-control);
+  color:var(--danger);font-size:var(--text-support);font-weight:600;font-family:inherit;cursor:pointer;
+  transition:background var(--motion-fast) var(--ease-standard)}
+.tl-remove:hover{background:var(--danger-muted)}
+.tl-remove:focus-visible{outline:2px solid var(--danger);outline-offset:2px}
 
 /* --- Notification drawer (desktop) + filters + grouping (v1.1.2) --- */
 .sb-unreadct{font-weight:600;font-size:13px;color:var(--text-muted)}
@@ -1232,16 +1512,20 @@ a{color:var(--primary)}
   background:color-mix(in srgb,var(--primary) 6%,transparent)}
 .sb-notif.unread .ti{font-weight:650}
 
-/* Reminder surfaces feel native to the card system. */
-.sb-remsum{background:var(--surface);border-radius:var(--r-card)}
-.sb-remsum .sb-btn{width:auto;align-self:flex-start;min-height:38px;padding:9px 14px}
-.tl-adv{background:var(--surface-muted)}
+/* Card treatment for the admin "Next dates" preview only. The reminder
+   summary in the editor is plain text in its section — it must NOT get a
+   surface of its own, or it reads as a card nested inside the section. */
+.sb-remcard{background:var(--surface);border-radius:var(--r-card);padding:12px 14px}
 .sb-rchip{transition:background var(--motion-micro) var(--ease-out),color var(--motion-micro) var(--ease-out)}
 .sb-rchip.on{background:var(--primary);border-color:var(--primary)}
 
 /* Inputs read as their own layer in dark mode. */
 [data-theme="dark"] input,[data-theme="dark"] textarea,[data-theme="dark"] select{
-  background:var(--surface-muted);border-color:var(--border);color:var(--text-primary)}
+  background:var(--field);border-color:var(--field-border);color:var(--text-primary)}
+/* Inputs that are the whole control, not a field inside one: the search bar's
+   own container carries the chrome, so the input must stay bare. This has to
+   come AFTER the blanket rule above, which would otherwise repaint it. */
+[data-theme="dark"] .sb-searchbar input{background:none;border-color:transparent}
 /* Button hierarchy: ghost = quiet secondary (soft border, tinted hover). */
 .sb-btn.ghost{border-color:color-mix(in srgb,var(--primary) 35%,var(--border));background:var(--surface)}
 .sb-btn.ghost:hover{background:var(--primary-muted);border-color:var(--primary)}
@@ -1951,9 +2235,7 @@ input,textarea,select{transition:border-color var(--motion-fast) var(--ease-stan
 /* --- Inputs: subtle border, 8px radius, soft indigo focus ring (no hard
    2px outline). Placeholder + disabled tuned to the reference. --- */
 .sb-field input,.sb-field select,.sb-field textarea{border-radius:var(--r-input);
-  background:var(--surface);border:1px solid var(--border);padding:10px 12px}
-[data-theme="dark"] .sb-field input,[data-theme="dark"] .sb-field select,[data-theme="dark"] .sb-field textarea{
-  background:var(--surface-muted)}
+  background:var(--field);border:1px solid var(--field-border);padding:10px 12px}
 .sb-field input:focus,.sb-field select:focus,.sb-field textarea:focus,
 .sb-urlrow input:focus,.sb-inline input:focus{outline:none;border-color:var(--primary);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 18%,transparent)}
@@ -2290,6 +2572,10 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 
 /* Workflow (and every page): never scroll the page sideways. */
 .sb-content{overflow-x:hidden}
+/* Programmatic focus target for route changes (a11y) — it takes focus so the
+   reader lands on the new page, but it isn't a user control, so no outline. */
+.sb-content:focus{outline:none}
+.sb-content:focus-visible{outline:none}
 
 /* Plan Content (and any sheet): flex fields must be allowed to shrink, and the
    body never scrolls sideways — fixes horizontal overflow / left-clipping. */
