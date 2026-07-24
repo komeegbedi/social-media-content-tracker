@@ -10,9 +10,10 @@
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { db, auth } from "./firebase";
 
-// The app is a single page with tab-based navigation (no router), so we track
-// the "current view" in a module variable and stamp it onto every issue. The
-// UI calls setView() whenever the active screen changes.
+// Logging runs OUTSIDE React and the Router — from global error handlers and
+// the ErrorBoundary — so it can't read the route via router hooks. The app
+// pushes the active screen here with setView() on every navigation, so an
+// error captured anywhere still records which screen the user was on.
 let currentView = "login";
 export const setView = (v) => { currentView = v; };
 export const getView = () => currentView;
