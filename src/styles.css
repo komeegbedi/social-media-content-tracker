@@ -2572,6 +2572,10 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 
 /* Workflow (and every page): never scroll the page sideways. */
 .sb-content{overflow-x:hidden}
+/* Programmatic focus target for route changes (a11y) — it takes focus so the
+   reader lands on the new page, but it isn't a user control, so no outline. */
+.sb-content:focus{outline:none}
+.sb-content:focus-visible{outline:none}
 
 /* Plan Content (and any sheet): flex fields must be allowed to shrink, and the
    body never scrolls sideways — fixes horizontal overflow / left-clipping. */

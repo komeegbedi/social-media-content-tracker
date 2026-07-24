@@ -1,6 +1,6 @@
 /* IFC Creatives Board — the digital home of the IFC Creative Team.
    (Internal note: powered by StudioBoard architecture.) */
-import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useContext, createContext } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useContext, createContext } from "react";
 import { createPortal } from "react-dom";
 import {
   onAuthStateChanged, signOut,
@@ -48,6 +48,9 @@ import {
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
+import { useBlocker } from "react-router-dom";
+import { useNav, useScrollRestoration } from "./navHooks.js";
+import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM } from "./nav.js";
 
 /* Tiny localStorage helpers for remembering small UI preferences (e.g. which
    status groups a user has collapsed). Best-effort — never throw. */
@@ -219,10 +222,14 @@ function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onN
             <div className="rl">{isAdmin?"Admin":"Member"} · {me.email}</div>
           </div>
         </div>
-        {onGoTab && <button className="sb-drawer-item" onClick={()=>{ onGoTab("team"); onClose(); }}>
+        {/* Navigating to a screen already drops ?panel=profile (closes the
+            drawer). Calling onClose() too would run a second navigation from a
+            stale location and clobber the screen change — the mobile "Team/Admin
+            don't work" bug. So these navigate only. */}
+        {onGoTab && <button className="sb-drawer-item" onClick={()=>onGoTab("team")}>
           <span className="i"><UserGroupIcon className="hi" aria-hidden="true"/></span>Team
         </button>}
-        {onGoTab && isAdmin && <button className="sb-drawer-item" onClick={()=>{ onGoTab("admin"); onClose(); }}>
+        {onGoTab && isAdmin && <button className="sb-drawer-item" onClick={()=>onGoTab("admin")}>
           <span className="i"><Cog6ToothIcon className="hi" aria-hidden="true"/></span>Admin
           {pendingCount>0 && <span className="sb-drawer-state">{pendingCount}</span>}
         </button>}
@@ -877,6 +884,43 @@ function useUnsavedGuard(isDirty, onClose) {
   return { requestClose, leaveGuard };
 }
 
+/* Router-aware unsaved guard for URL-backed editors (the content editor).
+   Closing is now a NAVIGATION, so a single useBlocker covers every path out —
+   the ✕, the scrim, drag-to-dismiss, AND Android/browser Back — while dirty.
+   beforeunload separately covers refresh / tab-close. On confirm we call
+   blocker.proceed(), which completes the SAME pending navigation (no duplicate
+   history entry); cancel calls blocker.reset(). The caller must clear dirty
+   before its post-save close so that navigation isn't itself blocked. */
+function useUnsavedRouteGuard(isDirty) {
+  const blocker = useBlocker(
+    useCallback(
+      ({ currentLocation, nextLocation }) =>
+        isDirty &&
+        (currentLocation.pathname !== nextLocation.pathname ||
+          currentLocation.search !== nextLocation.search),
+      [isDirty]
+    )
+  );
+  useEffect(() => {
+    if (!isDirty) return;
+    const h = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [isDirty]);
+  // If the form goes clean (e.g. saved) while a block is pending, let it through.
+  useEffect(() => {
+    if (!isDirty && blocker.state === "blocked") blocker.proceed();
+  }, [isDirty, blocker.state]);
+  const leaveGuard = blocker.state === "blocked" ? (
+    <ConfirmDialog tone="warning" icon="warning"
+      title="Leave without saving?"
+      body="You have unsaved changes. If you leave now, your changes will be lost."
+      cancelLabel="Keep editing" confirmLabel="Leave without saving"
+      onConfirm={() => blocker.proceed()} onClose={() => blocker.reset()} />
+  ) : null;
+  return { leaveGuard };
+}
+
 // Live subscription to a single document. undefined=loading, null=absent, object=data.
 function useDoc(path, canRead) {
   const [data, setData] = useState(undefined);
@@ -1239,52 +1283,114 @@ function Board({ profile, isAdmin }) {
   const notifSettings = useDoc("settings/notifications", true); // reminder defaults
   const [eventSeries] = useCollection("eventSeries", true); // admin-managed recurring events
 
-  const [tab, setTab] = useState("home");
-  // Inter-page transition: a brief skeleton on tab change so switching screens
-  // feels intentional (cross-fade in), never a blank flash. Data's already in
-  // memory, so this is purely a ~280ms polish beat — not real latency.
+  // ---- URL is the source of truth for navigation. Everything below is
+  // DERIVED from the current route; setters are navigation actions. ----
+  const R = useNav();
+  const { nav } = R;
+  // The visible top-level screen. On /content/:id the detail sheet renders over
+  // Workflow as its natural background; a non-admin on /admin can't be here.
+  const tab = nav.screen === "content" ? "board"
+    : (nav.screen === "admin" && !isAdmin) ? "home"
+    : nav.screen;
+
+  // One-time migration of legacy deep links (?task=, ?tab=&sec=) to canonical
+  // URLs, via replace so the legacy URL never lingers in history. Runs before
+  // the redirect effect below so a legacy URL is canonicalised, not bounced.
+  const migrated = useRef(false);
+  const legacy = !migrated.current && migrate(R.location.pathname, R.location.search);
+  useEffect(() => {
+    if (migrated.current) return;
+    migrated.current = true;
+    if (legacy) R.replace(legacy.pathname + (legacy.search || ""));
+  }, []);
+
+  // Redirects/normalisation (replace, never a new entry): /home → /, the
+  // reserved /team/:memberId → /team, unknown → /, and /admin for a non-admin.
+  useEffect(() => {
+    if (legacy) return;                              // migration handles this tick
+    if (nav.redirect && nav.redirect !== R.location.pathname) R.replace(nav.redirect);
+    else if (nav.screen === "admin" && !isAdmin) R.replace("/");
+  }, [nav.redirect, nav.screen, isAdmin, R.location.pathname]);
+
+  // Inter-page transition: a brief skeleton on top-level screen change so
+  // switching feels intentional. Overlays/content don't retrigger it.
   const [navLoading, setNavLoading] = useState(false);
   const firstNav = useRef(true);
   useEffect(() => {
-    if (firstNav.current) { firstNav.current = false; return; }   // no skeleton on very first mount
+    if (firstNav.current) { firstNav.current = false; return; }
+    if (nav.screen === "content" || hasOverlay(nav.overlay)) return;  // overlay, not a page swap
     setNavLoading(true);
     const t = setTimeout(() => setNavLoading(false), 280);
     return () => clearTimeout(t);
   }, [tab]);
-  const [openId, setOpenId] = useState(null);
-  // Admin sub-section request (deep-link / notification → Admin → People etc.).
-  // Carries a nonce so repeat requests re-fire even when Admin is already open.
-  const [adminSecReq, setAdminSecReq] = useState(null);
-  const goPeople = () => { setTab("admin"); setAdminSecReq({ sec: "people", n: Date.now() }); };
-  const [editTask, setEditTask] = useState(null);
-  const [editPrefill, setEditPrefill] = useState(null);  // defaults for a new task (e.g. from an event)
-  const newForEvent = (prefill) => { setEditPrefill(prefill); setEditTask("new"); };
-  // Board scoped to one event occurrence (from Home's "View content →").
-  const [boardEvent, setBoardEvent] = useState(null);
-  const viewEvent = (occ) => {
-    setBoardEvent({ id: occ.eventOccurrenceId, label: occ.name, annual: occ.annual, name: occ.name });
-    setTab("board");
+
+  // Derived overlay/detail state (read the URL; never stored in parallel).
+  const openId = nav.screen === "content" ? nav.contentId : null;
+  const editTask = nav.overlay.editor
+    ? (nav.overlay.editor.mode === "new" ? "new" : (nav.overlay.editor.id || "new"))
+    : null;
+  const editPrefill = R.location.state?.composePrefill || null;
+  const boardEvent = nav.event
+    ? (R.location.state?.eventOcc
+        ? { id: nav.event, label: R.location.state.eventOcc.name, annual: R.location.state.eventOcc.annual, name: R.location.state.eventOcc.name }
+        : { id: nav.event, label: "Event", annual: false, name: "" })
+    : null;
+  const searchOpen = nav.overlay.panel === "search";
+  const showDrawer = nav.overlay.panel === "profile";
+  const notifOpenPanel = nav.overlay.panel === "notifications";
+  // Memoised so its identity changes ONLY when the section changes — otherwise
+  // Admin's [secReq] effect would re-fire every render and override the user's
+  // in-panel tab clicks (which stay local, non-shareable).
+  const adminSecReq = useMemo(() => nav.section ? { sec: nav.section, n: nav.section } : null, [nav.section]);
+
+  // Navigation actions used throughout Board (thin wrappers over useNav).
+  const setTab = (t) => R.goScreen(t);
+  const setOpenId = (id) => { if (id) R.openContent(id); else R.goBack(); };
+  const setEditTask = (t) => {
+    if (!t) { R.closeOverlay(); return; }
+    if (t === "new") R.openComposeNew();
+    else R.openComposeEdit(t.id || t);
   };
+  const newForEvent = (prefill) =>
+    R.navigateWithState({ pathname: R.location.pathname, search: openComposeNew(R.location.search) }, { composePrefill: prefill });
+  const viewEvent = (occ) => R.setEventFilter(occ.eventOccurrenceId, occ);
+  const setBoardEvent = (v) => { if (!v) R.clearEventFilter(); };
+  const setAdminSecReq = (req) => R.setAdminSection(req?.sec || null);
+  const goPeople = () => R.navigate({ pathname: "/admin", search: withParams("", { [PARAM.section]: "people" }) });
+  const setSearchOpen = (v) => v ? R.openPanel("search") : R.closeOverlay();
+  const setShowDrawer = (v) => v ? R.openPanel("profile") : R.closeOverlay();
+  const setNotifOpen = (v) => v ? R.openPanel("notifications") : R.closeOverlay();
+  const notifOpen = notifOpenPanel;
+
+  // A non-URL utility sheet (admin) — stays local, never in history.
   const [editUser, setEditUser] = useState(null);
   const [showReport, setShowReport] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [showDrawer, setShowDrawer] = useState(false);
 
   // Stamp the active screen onto any error/report logged from here.
   useEffect(() => setView(tab), [tab]);
 
-  // Deep link from a push notification (/?task=<id>, /?tab=admin&sec=people) →
-  // open that destination once.
+  // Keep the document title in sync with the route (a11y + browser history).
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const t = params.get("task");
-    const tb = params.get("tab");
-    const sec = params.get("sec");
-    if (t) setOpenId(t);
-    if (tb && ["home","myday","board","mine","team","admin"].includes(tb)) setTab(tb);
-    if (tb === "admin" && sec) setAdminSecReq({ sec, n: Date.now() });
-    if (t || tb) window.history.replaceState({}, "", window.location.pathname);
-  }, []);
+    const ct = openId ? (tasks.find(t => t.id === openId)?.title) : null;
+    document.title = titleFor(nav, ct);
+  }, [nav, openId, tasks]);
+
+  // Route-aware scroll restoration for the single scroll region (.sb-content):
+  // new top-level pages start at the top; returning restores the prior offset.
+  useScrollRestoration(R.location, nav);
+
+  // A11y: on a genuine PAGE navigation (pathname change, no overlay open), move
+  // focus to the main region so keyboard/SR focus is never stranded on a link
+  // in the page we just left. Skipped while an overlay is up — the overlay owns
+  // focus (its Portal traps it and restores to the trigger on close).
+  const contentRef = useRef(null);
+  const focusPath = useRef(R.location.pathname);
+  useEffect(() => {
+    if (focusPath.current === R.location.pathname) return;   // overlay/filter change
+    focusPath.current = R.location.pathname;
+    if (nav.screen !== "content" && !hasOverlay(nav.overlay))
+      contentRef.current?.focus({ preventScroll: true });
+  }, [R.location.pathname, nav.screen]);
 
   // Global search shortcuts: "/" or ⌘K / Ctrl+K from anywhere (but not while
   // typing in a field, so "/" stays usable in inputs).
@@ -1305,8 +1411,9 @@ function Board({ profile, isAdmin }) {
   const pendingCount = allUsers.filter(u => u.status === "pending").length;
 
   // Notification Center (reads my notifications; backend writes them in Slice 3).
+  // `notifOpen` is derived from the URL (?panel=notifications) up top — not
+  // stored here. notifSettings/whatsNew/featureReq are minor local sub-dialogs.
   const notif = useNotifications(me.id);
-  const [notifOpen, setNotifOpen] = useState(false);
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   const [featureReqOpen, setFeatureReqOpen] = useState(false);
@@ -1627,7 +1734,7 @@ function Board({ profile, isAdmin }) {
             </div>
           </header>
 
-          <div className="sb-content">
+          <div className="sb-content" ref={contentRef} tabIndex={-1}>
             <BetaBanner onReport={()=>setShowReport(true)} />
             {navLoading && <PageSkeleton />}
             <div className={navLoading ? "sb-pagehide" : "sb-pageshow"}>
@@ -1671,23 +1778,25 @@ function Board({ profile, isAdmin }) {
       )}
 
       {showDrawer && (
+        // Path/panel-changing actions navigate directly — the new URL replaces
+        // ?panel=profile in ONE entry, so no redundant close-then-navigate.
         <ProfileDrawer me={me} isAdmin={isAdmin} unread={notif.unread} pendingCount={pendingCount}
           onClose={()=>setShowDrawer(false)} onGoTab={setTab}
-          onNotifications={()=>{ setShowDrawer(false); setNotifOpen(true); }}
+          onNotifications={()=>setNotifOpen(true)}
           onNotifPrefs={()=>setNotifSettingsOpen(true)}
           onWhatsNew={()=>setWhatsNewOpen(true)}
           onFeatureRequest={()=>setFeatureReqOpen(true)}
-          onReport={()=>{ setShowDrawer(false); setShowReport(true); }} />
+          onReport={()=>setShowReport(true)} />
       )}
 
       {notifOpen && (
         <NotifCenter notif={notif} isAdmin={isAdmin}
           onClose={()=>setNotifOpen(false)}
-          onOpenTask={(id)=>{ setNotifOpen(false); setOpenId(id); }}
-          onViewEvent={(occ)=>{ setNotifOpen(false); viewEvent(occ); }}
-          onGoPeople={()=>{ setNotifOpen(false); goPeople(); }}
-          onGoTab={(t)=>{ setNotifOpen(false); setTab(t); }}
-          onSettings={()=>{ setNotifOpen(false); setNotifSettingsOpen(true); }} />
+          onOpenTask={setOpenId}
+          onViewEvent={viewEvent}
+          onGoPeople={goPeople}
+          onGoTab={setTab}
+          onSettings={()=>setNotifSettingsOpen(true)} />
       )}
 
       {notifSettingsOpen && (
@@ -1718,8 +1827,8 @@ function Board({ profile, isAdmin }) {
       {searchOpen && (
         <GlobalSearch tasks={tasks} users={isAdmin ? allUsers : users}
           onClose={()=>setSearchOpen(false)}
-          onOpenTask={(id)=>{ setSearchOpen(false); setOpenId(id); }}
-          goTab={(t)=>{ setSearchOpen(false); setTab(t); }} />
+          onOpenTask={setOpenId}
+          goTab={setTab} />
       )}
 
       {openTask && (
@@ -1738,13 +1847,16 @@ function Board({ profile, isAdmin }) {
           onDuplicate={isAdmin ? async ()=>{ await duplicateTask(openTask); setOpenId(null); } : undefined}
           onArchive={isAdmin ? async ()=>{ await archiveTask(openTask); setOpenId(null); } : undefined}
           onDelete={isAdmin ? async ()=>{ await deleteTask(openTask.id); setOpenId(null); } : undefined}
-          onEdit={()=>{ setOpenId(null); setEditTask(openTask); }} />
+          onEdit={()=>setEditTask(openTask)} />
       )}
       {editTask && (
-        <TaskEditor task={editTask==="new"?null:editTask} prefill={editPrefill} users={users} allTasks={tasks}
+        // editTask is "new" or a task id (from ?compose/?edit) — resolve the id
+        // to the live task object here. The editor may render OVER the detail
+        // (/content/:id?edit=id) as an intentional nested flow.
+        <TaskEditor task={editTask==="new"?null:tasks.find(t=>t.id===editTask)} prefill={editPrefill} users={users} allTasks={tasks}
           defaultReminders={notifSettings?.defaultReminders}
-          onClose={()=>{ setEditTask(null); setEditPrefill(null); }}
-          onSave={(t)=>{ setEditPrefill(null); return saveTask(t); }} onAuto={(t)=>autoAssign(t, users, tasks)} />
+          onClose={()=>setEditTask(null)}
+          onSave={(t)=>saveTask(t)} onAuto={(t)=>autoAssign(t, users, tasks)} />
       )}
       {editUser && (
         <UserEditor user={editUser} onClose={()=>setEditUser(null)}
@@ -4414,14 +4526,21 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
   // by value, so focus/blur/formatting don't trip it; a successful save closes
   // the editor (unmount) before this could warn.
   const initial = useRef(JSON.stringify(f));
-  const isDirty = JSON.stringify(f) !== initial.current;
-  const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
+  // Cleared just before the post-save close so that navigation isn't blocked.
+  const savedRef = useRef(false);
+  const isDirty = !savedRef.current && JSON.stringify(f) !== initial.current;
+  const { leaveGuard } = useUnsavedRouteGuard(isDirty);
+  // Closing IS a navigation now; the blocker above intercepts it while dirty,
+  // so every close affordance can call onClose directly.
+  const requestClose = onClose;
   const drag = useSheetDrag(requestClose);
   const doSave = async (withSoloOwner) => {
     // #2 — with no crew, the owner becomes the sole lead (Lead Designer / Content Lead).
     const payload = withSoloOwner && hasOwner ? { ...f, support: [soloCrewFor(f.type, f.owner)] } : f;
     setSaving(true);
-    try { await onSave(payload); } catch { setSaving(false); }   // success unmounts the editor
+    savedRef.current = true;                          // pre-clear so the close nav passes the guard
+    try { await onSave(payload); }
+    catch { savedRef.current = false; setSaving(false); }   // save failed → re-arm the guard
   };
   const trySave = () => {
     setAttempted(true);
