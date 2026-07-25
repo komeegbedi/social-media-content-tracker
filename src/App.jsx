@@ -48,8 +48,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
-import { useBlocker } from "react-router-dom";
-import { useNav, useScrollRestoration } from "./navHooks.js";
+import { useNav, useScrollRestoration, useDirtyNavGuard } from "./navHooks.js";
 import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM, notificationDestination } from "./nav.js";
 
 /* Tiny localStorage helpers for remembering small UI preferences (e.g. which
@@ -882,38 +881,20 @@ function useUnsavedGuard(isDirty, onClose) {
 }
 
 /* Router-aware unsaved guard for URL-backed editors (the content editor).
-   Closing is now a NAVIGATION, so a single useBlocker covers every path out —
-   the ✕, the scrim, drag-to-dismiss, AND Android/browser Back — while dirty.
-   beforeunload separately covers refresh / tab-close. On confirm we call
-   blocker.proceed(), which completes the SAME pending navigation (no duplicate
-   history entry); cancel calls blocker.reset(). The caller must clear dirty
-   before its post-save close so that navigation isn't itself blocked. */
+   Closing is a NAVIGATION, so ONE guard covers every path out — the ✕, scrim,
+   drag, Cancel, AND Android/browser Back — while dirty. The pending-navigation
+   model (useDirtyNavGuard) captures the intended destination and completes it
+   itself after Discard, so a confirmed Back completes in ONE press (it does not
+   depend on blocker.proceed(), which can't replay a blocked POP). This renders
+   the confirm dialog; the hook owns the history mechanics. */
 function useUnsavedRouteGuard(isDirty) {
-  const blocker = useBlocker(
-    useCallback(
-      ({ currentLocation, nextLocation }) =>
-        isDirty &&
-        (currentLocation.pathname !== nextLocation.pathname ||
-          currentLocation.search !== nextLocation.search),
-      [isDirty]
-    )
-  );
-  useEffect(() => {
-    if (!isDirty) return;
-    const h = (e) => { e.preventDefault(); e.returnValue = ""; };
-    window.addEventListener("beforeunload", h);
-    return () => window.removeEventListener("beforeunload", h);
-  }, [isDirty]);
-  // If the form goes clean (e.g. saved) while a block is pending, let it through.
-  useEffect(() => {
-    if (!isDirty && blocker.state === "blocked") blocker.proceed();
-  }, [isDirty, blocker.state]);
-  const leaveGuard = blocker.state === "blocked" ? (
+  const { blocked, discard, keep } = useDirtyNavGuard(isDirty);
+  const leaveGuard = blocked ? (
     <ConfirmDialog tone="warning" icon="warning"
       title="Leave without saving?"
       body="You have unsaved changes. If you leave now, your changes will be lost."
       cancelLabel="Keep editing" confirmLabel="Leave without saving"
-      onConfirm={() => blocker.proceed()} onClose={() => blocker.reset()} />
+      onConfirm={discard} onClose={keep} />
   ) : null;
   return { leaveGuard };
 }
@@ -1776,8 +1757,11 @@ function Board({ profile, isAdmin }) {
       {showDrawer && (
         // Path/panel-changing actions navigate directly — the new URL replaces
         // ?panel=profile in ONE entry, so no redundant close-then-navigate.
+        // The drawer is a LAUNCHER: jumping to a primary destination (Team/Admin)
+        // replaces the ?panel=profile entry, so Back from there returns to the
+        // underlying page, not the drawer.
         <ProfileDrawer me={me} isAdmin={isAdmin} unread={notif.unread} pendingCount={pendingCount}
-          onClose={()=>setShowDrawer(false)} onGoTab={setTab}
+          onClose={()=>setShowDrawer(false)} onGoTab={R.launchScreen}
           onNotifications={()=>setNotifOpen(true)}
           onNotifPrefs={()=>setNotifSettingsOpen(true)}
           onWhatsNew={()=>setWhatsNewOpen(true)}
@@ -1786,9 +1770,13 @@ function Board({ profile, isAdmin }) {
       )}
 
       {notifOpen && (
+        // The Notification Center is a LAUNCHER: selecting a notification
+        // replaces the ?panel=notifications entry (R.launch), so Close/Back from
+        // the destination returns to the underlying page — the drawer does not
+        // reopen. (This was the originally reported bug, fixed for all launchers.)
         <NotifCenter notif={notif} isAdmin={isAdmin}
           onClose={()=>setNotifOpen(false)}
-          onNavigate={(dest)=>R.navigate(dest)}
+          onNavigate={R.launch}
           onSettings={()=>setNotifSettingsOpen(true)} />
       )}
 
@@ -1818,10 +1806,12 @@ function Board({ profile, isAdmin }) {
       )}
 
       {searchOpen && (
+        // Search is a LAUNCHER: opening a result replaces the ?panel=search
+        // entry, so Back returns to the page you searched from, not the overlay.
         <GlobalSearch tasks={tasks} users={isAdmin ? allUsers : users}
           onClose={()=>setSearchOpen(false)}
-          onOpenTask={setOpenId}
-          goTab={setTab} />
+          onOpenTask={R.launchContent}
+          goTab={R.launchScreen} />
       )}
 
       {openTask && (
@@ -4572,12 +4562,13 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
   // by value, so focus/blur/formatting don't trip it; a successful save closes
   // the editor (unmount) before this could warn.
   const initial = useRef(JSON.stringify(f));
-  // Cleared just before the post-save close so that navigation isn't blocked.
-  const savedRef = useRef(false);
+  const savedRef = useRef(false);                     // set true once saved (skips the guard)
   const isDirty = !savedRef.current && JSON.stringify(f) !== initial.current;
+  // ONE guard for every way out (✕ / scrim / drag / Cancel / hardware Back):
+  // each just navigates; the guard blocks when dirty, confirms, then completes
+  // the intended navigation itself (pending-navigation model) — so a confirmed
+  // Discard returns in a single action.
   const { leaveGuard } = useUnsavedRouteGuard(isDirty);
-  // Closing IS a navigation now; the blocker above intercepts it while dirty,
-  // so every close affordance can call onClose directly.
   const requestClose = onClose;
   const drag = useSheetDrag(requestClose);
   const doSave = async (withSoloOwner) => {

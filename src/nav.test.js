@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   SCREENS, pathForScreen, parseLocation, parseOverlay, migrate, withParams,
   openComposeNew, openComposeEdit, openPanel, closeOverlays, fallbackPath,
-  titleFor, hasOverlay, PARAM, notificationDestination,
+  titleFor, hasOverlay, PARAM, notificationDestination, overlayClose,
 } from "./nav.js";
 
 test("every screen has a canonical path and round-trips", () => {
@@ -184,4 +184,26 @@ test("a deep-link with focus/comment parses back into the same intent", () => {
   assert.equal(parseLocation("/content/t3", "?focus=bogus").focus, null);
   // Workflow attention filter round-trips.
   assert.equal(parseLocation("/workflow", "?filter=attention").filter, "attention");
+});
+
+test("deep-link Back fallback is a logical parent, tuned by section focus", () => {
+  // A review-request deep link, opened cold, falls back to the awaiting-review list.
+  assert.equal(fallbackPath(parseLocation("/content/x", "?focus=review")), "/workflow?filter=review");
+  // A plain content deep link → the workflow.
+  assert.equal(fallbackPath(parseLocation("/content/x", "")), "/workflow");
+  // A comments deep link isn't a workflow filter → generic workflow parent.
+  assert.equal(fallbackPath(parseLocation("/content/x", "?focus=comments")), "/workflow");
+});
+
+test("overlayClose unwinds to the parent, never re-pushes it (Task↔Edit loop fix)", () => {
+  // Editor opened in-session over its task detail → step BACK to the detail.
+  assert.deepEqual(overlayClose({ search: "?edit=t1", canGoBack: true }), { type: "back" });
+  // Direct entry (no history) → synthesize the parent by stripping the overlay.
+  assert.deepEqual(overlayClose({ search: "?edit=t1", canGoBack: false }), { type: "replace", search: "" });
+  // A panel over a filtered page keeps the filter when synthesizing the parent.
+  assert.deepEqual(overlayClose({ search: "?event=e1&panel=notifications", canGoBack: false }),
+    { type: "replace", search: "?event=e1" });
+  // Nothing open → never pop a real page by accident.
+  assert.deepEqual(overlayClose({ search: "?event=e1", canGoBack: true }), { type: "noop" });
+  assert.deepEqual(overlayClose({ search: "", canGoBack: true }), { type: "noop" });
 });
