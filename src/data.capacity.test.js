@@ -152,7 +152,7 @@ test("each person's load is computed independently — no bleed between cards", 
 });
 
 test("auto-assign refuses when no content type is chosen (never assumes graphics)", () => {
-  const users = [{ name: "David", skills: ["design"], location: ["828"] }];
+  const users = [{ name: "David", status: "approved", skills: ["design"], location: ["828"] }];
   assert.deepEqual(autoAssign({ location: "828", owner: "X" }, users), []);       // no type at all
   assert.deepEqual(autoAssign({ type: "", location: "828", owner: "X" }, users), []); // empty type
   // With a real type it still resolves (Poster -> a designer).
@@ -163,9 +163,9 @@ test("auto-assign refuses when no content type is chosen (never assumes graphics
 
 test("graphics auto-assign generalizes — no hardcoded designer name", () => {
   const users = [
-    { name: "Grace", skills: ["design"], location: ["828"] },  // designers, none named "David"
-    { name: "Kola",  skills: ["design"], location: ["828"] },
-    { name: "Sam",   skills: ["shoot"],  location: ["828"] },
+    { name: "Grace", status: "approved", skills: ["design"], location: ["828"] },  // designers, none named "David"
+    { name: "Kola",  status: "approved", skills: ["design"], location: ["828"] },
+    { name: "Sam",   status: "approved", skills: ["shoot"],  location: ["828"] },
   ];
   // Owner is a designer → they design it themselves; no extra crew.
   assert.deepEqual(autoAssign({ type: "Poster", owner: "Grace" }, users), []);
@@ -175,14 +175,14 @@ test("graphics auto-assign generalizes — no hardcoded designer name", () => {
   assert.equal(out[0].role, "design");
   assert.ok(["Grace", "Kola"].includes(out[0].name));
   // No designer available at all → nothing (caller surfaces the reason).
-  assert.deepEqual(autoAssign({ type: "Poster", owner: "Sam" }, [{ name: "Sam", skills: ["shoot"] }]), []);
+  assert.deepEqual(autoAssign({ type: "Poster", owner: "Sam" }, [{ name: "Sam", status: "approved", skills: ["shoot"] }]), []);
 });
 
 test("auto-assign is board-aware: a pre-loaded person is passed over", () => {
   const users = [
-    { name: "Owner", skills: ["coordinate"], location: ["828"] },
-    { name: "EdA", skills: ["edit", "shoot"], location: ["828"] },
-    { name: "EdB", skills: ["edit", "shoot"], location: ["828"] },
+    { name: "Owner", status: "approved", skills: ["coordinate"], location: ["828"] },
+    { name: "EdA", status: "approved", skills: ["edit", "shoot"], location: ["828"] },
+    { name: "EdB", status: "approved", skills: ["edit", "shoot"], location: ["828"] },
   ];
   const newTask = { id: "new", type: "Reel", location: "828", owner: "Owner", support: [] };
   // With no board context, equal load -> first eligible (EdA) takes the first role.
@@ -253,7 +253,7 @@ test("no engine vocabulary reaches the user (no points, no internal role names)"
     { id:"o1", type:"Reel", status:"In Progress", postDate:d(2), owner:"Lee", support:[] },
     { id:"o2", type:"Reel", status:"In Progress", postDate:d(3), owner:"Lee", support:[] },
   ];
-  const users = [{ name:"Lee", skills:["shoot","edit"] }];
+  const users = [{ name:"Lee", status: "approved", skills:["shoot","edit"] }];
   const strings = [
     loadSummary({ name:"Lee" }, tasks).detail,
     crewReason({ name:"Lee", role:"shoot" }, users, tasks),
@@ -269,9 +269,9 @@ test("no engine vocabulary reaches the user (no points, no internal role names)"
 
 test("crewReason recommends in human terms and stays honest when someone is freer", () => {
   const users = [
-    { name:"Jordan", skills:["shoot","edit"] },
-    { name:"Riley",  skills:["shoot","edit"] },
-    { name:"Sam",    skills:["shoot"] },
+    { name:"Jordan", status: "approved", skills:["shoot","edit"] },
+    { name:"Riley",  status: "approved", skills:["shoot","edit"] },
+    { name:"Sam",    status: "approved", skills:["shoot"] },
   ];
   // Jordan carries a live edit; Riley carries nothing.
   const tasks = [{ id:"t1", type:"Reel", status:"In Progress", postDate:d(3),
@@ -292,15 +292,15 @@ test("crewReason recommends in human terms and stays honest when someone is free
   assert.equal(crewReason({ name:"Sam", role:"shadow" }, users, tasks), "Learning on this one");
   // Never leaks internals for an unknown or unavailable person.
   assert.equal(crewReason({ name:"Ghost", role:"edit" }, users, tasks), "Available");
-  assert.equal(crewReason({ name:"Away", role:"edit" }, [{ name:"Away", available:false, skills:["edit"] }], tasks),
+  assert.equal(crewReason({ name:"Away", role:"edit" }, [{ name:"Away", available:false, status: "approved", skills:["edit"] }], tasks),
     "Unavailable");
 });
 
 test("re-running auto-assign is detectable as a no-op (the button is not dead)", () => {
   const users = [
-    { name:"Owner", skills:["coordinate"], location:["828"] },
-    { name:"EdA",   skills:["edit","shoot"], location:["828"] },
-    { name:"EdB",   skills:["edit","shoot"], location:["828"] },
+    { name:"Owner", status: "approved", skills:["coordinate"], location:["828"] },
+    { name:"EdA",   status: "approved", skills:["edit","shoot"], location:["828"] },
+    { name:"EdB",   status: "approved", skills:["edit","shoot"], location:["828"] },
   ];
   const task = { id:"t", type:"Reel", location:"828", owner:"Owner", support:[] };
   const first  = autoAssign(task, users);

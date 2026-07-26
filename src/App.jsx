@@ -20,7 +20,7 @@ import {
   PHASES, statusPhase, nextStep, workflowAction,
   LINK_FIELDS, requiredLinkKeys, missingLinks, QA_STATUSES,
   activityEntry, activityLabel, isApprovalEvent,
-  TYPES, typeClass, qaQueue, postQueue, pendingMatches, applyAssignment,
+  TYPES, typeClass, qaQueue, reviewMetrics, qaTaskCapabilities, postQueue, pendingMatches, applyAssignment,
   personalWins, teamWins, dashboardMetrics, searchTasks, searchPeople,
   monthlyWins, recentWins, contributorWins,
   BOARD_SORTS, BOARD_FILTERS, sortTasks, groupByStatus, applyBoardFilter,
@@ -32,13 +32,14 @@ import {
   DEFAULT_REMINDERS, REMINDER_CHANNELS, REMINDER_RECIPIENTS, MAX_REMINDERS, isValidEmail,
   isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, loadSummary, crewReason, sameCrew, dateIssues, todayStr, isShootType,
   personLoad, responsibilityTier, staleFlags, orderedCrew,
+  isApproved, isQA, isProductionMember, isAssignable, QA_DEPARTMENT,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
 import { pushState, enablePush, listenForeground, refreshPushToken } from "./push";
 import { RELEASES, LATEST_RELEASE } from "./releases";
 import {
-  HomeIcon, ClockIcon, ViewColumnsIcon, ClipboardDocumentListIcon, UserGroupIcon,
+  HomeIcon, ClockIcon, ViewColumnsIcon, ClipboardDocumentListIcon, ClipboardDocumentCheckIcon, UserGroupIcon,
   Cog6ToothIcon, BellIcon, MagnifyingGlassIcon, XMarkIcon, ChevronRightIcon,
   EllipsisHorizontalIcon, ExclamationTriangleIcon, SunIcon, MoonIcon, FunnelIcon,
   BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, SparklesIcon, EyeIcon, EyeSlashIcon,
@@ -1244,6 +1245,8 @@ function useSheetDrag(onClose) {
    MAIN BOARD (approved users)
    =================================================================== */
 function Board({ profile, isAdmin }) {
+  const me = profile;
+  const isReviewer = isQA(me);   // QA reviewer → a review-only experience (used by effects below)
   // `users` = the active team (used for assignment, capacity, owner pickers).
   // `allUsers` = everyone incl. pending — admins only, for the approval queue.
   const [usersAll] = useCollection("users", true);
@@ -1288,7 +1291,9 @@ function Board({ profile, isAdmin }) {
     if (legacy) return;                              // migration handles this tick
     if (nav.redirect && nav.redirect !== R.location.pathname) R.replace(nav.redirect);
     else if (nav.screen === "admin" && !isAdmin) R.replace("/");
-  }, [nav.redirect, nav.screen, isAdmin, R.location.pathname]);
+    // QA reviewers have no production dashboards — Home / My Day route to Reviews.
+    else if (isReviewer && (nav.screen === "home" || nav.screen === "myday")) R.replace("/my-work");
+  }, [nav.redirect, nav.screen, isAdmin, isReviewer, R.location.pathname]);
 
   // Inter-page transition: a brief skeleton on top-level screen change so
   // switching feels intentional. Overlays/content don't retrigger it.
@@ -1384,7 +1389,6 @@ function Board({ profile, isAdmin }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const me = profile;
   const pendingCount = allUsers.filter(u => u.status === "pending").length;
 
   // Notification Center (reads my notifications; backend writes them in Slice 3).
@@ -1450,12 +1454,19 @@ function Board({ profile, isAdmin }) {
   // the profile sheet); desktop sidebar shows Main + Management groups.
   // Outline icons throughout (active state = colour + soft background).
   const navIco = (Out) => <Out className="hi hi-nav" aria-hidden="true" />;
-  const mainNav = [
-    { id:"home",  label:"Home",    ico:()=>navIco(HomeIcon) },
-    { id:"myday", label:"My Day",  ico:()=>navIco(ClockIcon) },
-    { id:"board", label:"Workflow", ico:()=>navIco(ViewColumnsIcon) },
-    { id:"mine",  label:"My Work", ico:()=>navIco(ClipboardDocumentListIcon) },
-  ];
+  // QA reviewers get a REVIEW-centric app: their queue leads, then a read-only
+  // review-filtered Workflow — no production dashboards (Home / My Day).
+  const mainNav = isReviewer
+    ? [
+        { id:"mine",  label:"Reviews",  ico:()=>navIco(ClipboardDocumentCheckIcon) },
+        { id:"board", label:"Workflow", ico:()=>navIco(ViewColumnsIcon) },
+      ]
+    : [
+        { id:"home",  label:"Home",    ico:()=>navIco(HomeIcon) },
+        { id:"myday", label:"My Day",  ico:()=>navIco(ClockIcon) },
+        { id:"board", label:"Workflow", ico:()=>navIco(ViewColumnsIcon) },
+        { id:"mine",  label:"My Work", ico:()=>navIco(ClipboardDocumentListIcon) },
+      ];
   const mgmtNav = [
     { id:"team", label:"Team", ico:()=>navIco(UserGroupIcon) },
     ...(isAdmin ? [{ id:"admin", label:"Admin", badge: pendingCount, ico:()=>navIco(Cog6ToothIcon) }] : []),
@@ -1679,7 +1690,7 @@ function Board({ profile, isAdmin }) {
               </button>
             ))}
           </nav>
-          {isAdmin && <button className="sb-newbtn" onClick={()=>setEditTask("new")} aria-label="New content">
+          {isAdmin && !isReviewer && <button className="sb-newbtn" onClick={()=>setEditTask("new")} aria-label="New content">
             <PlusIcon className="hi" aria-hidden="true"/><span className="lbl">New content</span></button>}
           {/* Personal area: Notifications, then Profile, then the quiet Report link. */}
           <div className="sb-sfoot">
@@ -1732,7 +1743,7 @@ function Board({ profile, isAdmin }) {
             </div>
           </div>
 
-          <nav className="sb-nav" aria-label="Main" style={{ "--nav-i": ["home","myday","board","mine"].indexOf(tab) >= 0 ? ["home","myday","board","mine"].indexOf(tab) : 4 }}>
+          <nav className="sb-nav" aria-label="Main" style={{ "--nav-i": mainNav.findIndex(n=>n.id===tab) >= 0 ? mainNav.findIndex(n=>n.id===tab) : mainNav.length, "--nav-cols": mainNav.length + 1 }}>
             <span className="sb-nav-ind" aria-hidden="true" />
             {mainNav.map(n => (
               <button key={n.id} className={"sb-navbtn"+(tab===n.id?" on":"")} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
@@ -1749,8 +1760,9 @@ function Board({ profile, isAdmin }) {
       </div>
 
       {/* Admin has its own "New content" button; every other tab — Home
-          included — needs the FAB, since the sidebar one is desktop-only. */}
-      {isAdmin && tab!=="admin" && (
+          included — needs the FAB, since the sidebar one is desktop-only.
+          QA reviewers never create content, so no FAB for them (even if admin). */}
+      {isAdmin && !isReviewer && tab!=="admin" && (
         <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content"><PlusIcon className="hi hi-nav" aria-hidden="true"/></button>
       )}
 
@@ -2131,9 +2143,11 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
    BOARD LIST
    =================================================================== */
 function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilter, urlFilter }) {
+  const reviewer = isQA(me);
   // A summary notification deep-links here with ?filter=attention; adopt that
-  // filter on arrival (and whenever it changes), otherwise default to All.
-  const [filter, setFilter] = useState(urlFilter || "all");
+  // filter on arrival. Otherwise QA reviewers open to the review queue (their
+  // reason for being on Workflow); everyone else sees All.
+  const [filter, setFilter] = useState(urlFilter || (reviewer ? "review" : "all"));
   useEffect(() => { if (urlFilter) setFilter(urlFilter); }, [urlFilter]);
   // Board (grouped cards) vs List (dense rows); the choice is remembered.
   const [view, setView] = useState(() => loadPref("sb-board-view", "board"));
@@ -2257,7 +2271,41 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
 /* ===================================================================
    MINE
    =================================================================== */
+/* The QA reviewer's home base — "Reviews". Optimised for reviewing work, not
+   producing it: their queue, overdue reviews, sent-back items, and what they've
+   recently cleared. No production assignments, shoots, crew, or workload. */
+function Reviews({ tasks, me, openTask }) {
+  const m = useMemo(() => reviewMetrics(tasks), [tasks]);
+  const groups = [
+    { key: "overdue", label: "Overdue reviews", items: m.overdue, accent: " urgent" },
+    { key: "awaiting", label: "Awaiting your review", items: m.awaiting, accent: "" },
+    { key: "changes", label: "Changes requested", items: m.changes, accent: "" },
+    { key: "reviewed", label: "Recently reviewed", items: m.recentlyReviewed, accent: "" },
+  ].filter(g => g.items.length > 0);
+  const nothing = m.awaiting.length === 0 && m.changes.length === 0;
+  return (
+    <div className="sb-page">
+      <div className="sb-h">Reviews</div>
+      <div className="sb-sub">
+        {nothing ? "You're all caught up — nothing is waiting for review."
+          : `${m.counts.awaiting} awaiting review${m.counts.overdue ? ` · ${m.counts.overdue} overdue` : ""}.`}
+      </div>
+      {nothing && groups.length===0 &&
+        <div className="sb-empty"><div className="big"><ClipboardDocumentCheckIcon className="hi hi-empty" aria-hidden="true"/></div>
+          Nothing to review yet. Submitted content will appear here.</div>}
+      {groups.map(g => (
+        <div key={g.key}>
+          <div className={"sb-shead"+g.accent}><h2>{g.label}</h2><span className="sb-tag">{g.items.length}</span></div>
+          <div className="sb-list">{g.items.map(t => <TaskCard key={t.id} t={t} me={me} onClick={()=>openTask(t.id)} />)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Mine({ tasks, me, openTask }) {
+  // QA reviewers see Reviews, never a producer's assignment list.
+  if (isQA(me)) return <Reviews tasks={tasks} me={me} openTask={openTask} />;
   const sections = useMemo(() => myWorkSections(tasks, me), [tasks, me]);
   const total = sections.reduce((n, s) => n + s.items.length, 0);
   // Only the urgent buckets start expanded; the rest stay collapsed so the
@@ -2424,9 +2472,17 @@ function CapCard({ u, load, tasks, open, onToggle }) {
 }
 
 function Team({ tasks, users }) {
+  // Production capacity roster: PRODUCTION members only. QA carries no production
+  // load, so reviewers never appear here (excluded at the data level). This view
+  // is inherently read-only — it never offers assign/availability actions — so
+  // QA reviewers see the SAME page: they can observe capacity, not operate it.
   const rows = useMemo(() => users
+    .filter(isProductionMember)
     .map(u => ({ u, load: personLoad(u, tasks) }))
     .sort((a,b) => b.load.activePoints - a.load.activePoints), [users, tasks]);
+  // QA members get a non-production presentation, not a capacity card.
+  const qaMembers = useMemo(() => (users || []).filter(u => isApproved(u) && isQA(u)), [users]);
+  const review = useMemo(() => reviewMetrics(tasks), [tasks]);
   // Single-open accordion, tracked by stable user id in the parent (no per-card
   // or shared stale state) — expanding one card can never desync another.
   const [openId, setOpenId] = useState(null);
@@ -2436,13 +2492,29 @@ function Team({ tasks, users }) {
       <div className="sb-sub">See who has work concentrated around upcoming deadlines. Load reflects assigned
         production responsibilities, not task count.{" "}
         <span className="sb-infotip" tabIndex={0} role="note"
-          title="Shared QA and posting work isn't assigned to individuals yet.">ⓘ</span></div>
+          title="Reviewers (QA) aren't production personnel, so they carry no production capacity. Shared posting work isn't assigned to individuals yet.">ⓘ</span></div>
       <div className="sb-caplist">
         {rows.map(({u,load}) => (
           <CapCard key={u.id} u={u} load={load} tasks={tasks}
             open={openId===u.id} onToggle={()=>setOpenId(id => id===u.id ? null : u.id)} />
         ))}
       </div>
+
+      {qaMembers.length>0 && <>
+        <div className="sb-shead" style={{marginTop:26}}><h2>QA · Review</h2></div>
+        <div className="sb-sub" style={{marginTop:-6}}>
+          Reviewers, not production crew. Department review queue:{" "}
+          <b>{review.counts.awaiting}</b> awaiting{review.counts.overdue?<>, <b>{review.counts.overdue}</b> overdue</>:""}.
+        </div>
+        <div className="sb-caplist">
+          {qaMembers.map(u => (
+            <div key={u.id} className="sb-cmt" style={{display:"flex",alignItems:"center",gap:10}}>
+              <span className="sb-av">{initials(u.name)}</span>
+              <span><b>{u.name}</b> · <span style={{color:"var(--muted)"}}>QA reviewer{u.role==="admin"?" · Admin":""}</span></span>
+            </div>
+          ))}
+        </div>
+      </>}
     </div>
   );
 }
@@ -3959,7 +4031,12 @@ function TaskDetail({ task, me, isAdmin, isQA, focus, highlightComment, onClose,
   const EMOJIS = ["👍","🔥","🙏","👀"];
   const isLink = task.link && task.link.startsWith("http");
   const phase = statusPhase(task.status);
-  const action = workflowAction(task, me);                 // the single guided step for this user
+  // A pure QA reviewer (QA and not admin) can OBSERVE production but not OPERATE
+  // it: no guided production step, no edit/assign/delete — only review actions in
+  // a reviewable state (qaTaskCapabilities is the single source of that policy).
+  const reviewerOnly = !!me.qa && !isAdmin;
+  const qaCaps = qaTaskCapabilities(task);
+  const action = reviewerOnly ? null : workflowAction(task, me);   // the single guided step for this user
   const required = requiredLinkKeys(task.type);
   // Only the type's required links (plus any already filled) — keeps it focused.
   const linkKeys = Object.keys(LINK_FIELDS).filter(k => required.includes(k) || (links[k]||"").trim());
@@ -4057,8 +4134,11 @@ function TaskDetail({ task, me, isAdmin, isQA, focus, highlightComment, onClose,
             <div className="sb-banner" style={{marginBottom:14}}>⏳ Submitted. Awaiting QA review.</div>
           )}
 
-          {/* QA panel — Approve / Request changes, only for QA while In Review. */}
-          {isQA && task.status==="In Review" && (
+          {/* QA panel — Approve / Request changes. Gated by the SAME central
+              policy the rest of the UI reads (qaTaskCapabilities), so the button
+              and the rule can't drift: review actions appear only in a reviewable
+              state; other states are view-only. */}
+          {isQA && qaCaps.canReview && (
             <div className={"sb-qa"+(flashSection==="review"?" sb-flash":"")} ref={reviewRef}>
               <b>QA review</b>
               <div className="sb-btnrow">
@@ -4462,10 +4542,10 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
   const [showWhy, setShowWhy] = useState(false);
   const remDefaults = (defaultReminders && defaultReminders.length) ? defaultReminders : DEFAULT_REMINDERS;
   const hasOwner = f.owner && f.owner !== "Pending";
-  // #1 — only AVAILABLE people can be chosen as owner, but keep an already-set
-  // (now-unavailable) owner visible on an existing task so it still displays.
+  // #1 — only ASSIGNABLE production people can be chosen as owner (never QA), but
+  // keep an already-set owner visible on an existing task so it still displays.
   const ownerOptions = useMemo(() => {
-    const avail = users.filter(isAvailable);
+    const avail = users.filter(isAssignable);
     if (hasOwner && !avail.some(u => u.name === f.owner)) {
       const cur = users.find(u => u.name === f.owner);
       if (cur) return [cur, ...avail];
@@ -4768,7 +4848,7 @@ function CrewRow({ s, idx, pos = 0, users, allTasks, showLoc, recommended, reaso
 /* Guided add flow: one "Add crew member" affordance that reveals person →
    responsibility → confirm, instead of two always-visible dropdowns. */
 function AddCrew({ users, allTasks, onAdd }) {
-  const assignable = (users || []).filter(isAvailable);   // never assign unavailable people
+  const assignable = (users || []).filter(isAssignable);   // production members only — never QA, never unavailable
   const [open, setOpen] = useState(false);
   const [n,setN] = useState(""); const [r,setR] = useState(""); const [label,setLabel] = useState("");
   const isOther = r === "other";
@@ -4825,13 +4905,28 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
   const toggleSkill = (s)=>set("skills", f.skills.includes(s)?f.skills.filter(x=>x!==s):[...f.skills,s]);
   const toggleLoc = (l)=>set("location", f.location.includes(l)?f.location.filter(x=>x!==l):[...f.location,l]);
   const toggleDept = (d)=>set("departments", f.departments.includes(d)?f.departments.filter(x=>x!==d):[...f.departments,d]);
-  const valid = f.name.trim() && f.skills.length && f.location.length;
+  // QA is an EXCLUSIVE, non-production role. Turning it on strips every
+  // production attribute (skills, location, production departments, availability,
+  // captions, special handling) and pins the department to QA — the invariant is
+  // enforced here in the editor, again in payload(), and in firestore.rules.
+  const setQa = (on) => setF(p => on
+    ? { ...p, qa:true, skills:[], location:[], departments:[QA_DEPARTMENT], available:false,
+        captions:false, deprioritize:false, limited:false, manualSchedule:false }
+    : { ...p, qa:false, departments: p.departments.filter(d => d !== QA_DEPARTMENT) });
+  const qaMode = f.qa;
+  // QA users don't need production skills/location; producers still do.
+  const valid = f.name.trim() && (qaMode || (f.skills.length && f.location.length));
   const SK = ["shoot","edit","coordinate","design","shadow"];
   const initial = useRef(JSON.stringify(f));
   const isDirty = JSON.stringify(f) !== initial.current;
   const { requestClose, leaveGuard } = useUnsavedGuard(isDirty, onClose);
 
-  const payload = () => ({ id:user.id, ...f });
+  // Enforce the QA invariant on the way out, whatever the form state: a reviewer
+  // carries no production attributes. (Also enforced in firestore.rules.)
+  const payload = () => f.qa
+    ? { id:user.id, ...f, skills:[], location:[], departments:[QA_DEPARTMENT],
+        available:false, captions:false, deprioritize:false, limited:false, manualSchedule:false }
+    : { id:user.id, ...f };
   const reset = async () => {
     try { await sendPasswordResetEmail(auth, user.email); setResetMsg("Reset email sent to "+user.email); }
     catch { setResetMsg("Couldn't send reset email."); }
@@ -4856,6 +4951,24 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
               <option value="member">Member: can view all tasks</option>
               <option value="admin">Admin: full control</option></select></div>
 
+          {/* Roles first — choosing QA reframes the whole form. */}
+          <div className="sb-field"><label>Roles &amp; permissions</label>
+            <Toggle label="QA reviewer: reviews &amp; approves content (not production crew)" v={f.qa} on={()=>setQa(!f.qa)} />
+            {!qaMode && <>
+              <Toggle label="Department lead: leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
+              <Toggle label="Captions & upload: handles posting after approval" v={f.captions} on={()=>set("captions",!f.captions)} />
+            </>}
+          </div>
+
+          {qaMode ? (
+            // QA is a reviewer — a distinct discipline. No production skills,
+            // location, availability, or staffing controls.
+            <div className="sb-banner" style={{marginBottom:4}}>
+              Reviewers belong to the <b>QA</b> department. They review and approve
+              content and are never part of the production crew — so production skills,
+              location, and availability don't apply.
+            </div>
+          ) : (<>
           <div className="sb-field"><label>Departments <span className="sb-optional">(one or more)</span></label>
             <div className="sb-seg" style={{flexWrap:"wrap"}}>
               {DEPARTMENTS.map(d => <button key={d} type="button"
@@ -4876,17 +4989,12 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
             {!f.available && <div className="sb-sub" style={{marginTop:4}}>Excluded from auto-assignment and can't be manually assigned until turned back on.</div>}
           </div>
 
-          <div className="sb-field"><label>Roles &amp; permissions</label>
-            <Toggle label="Department lead: leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
-            <Toggle label="QA reviewer: can approve content & request changes" v={f.qa} on={()=>set("qa",!f.qa)} />
-            <Toggle label="Captions & upload: handles posting after approval" v={f.captions} on={()=>set("captions",!f.captions)} />
-          </div>
-
           <div className="sb-field"><label>Special handling</label>
             <Toggle label="Deprioritize: only assign if no one else free" v={f.deprioritize} on={()=>set("deprioritize",!f.deprioritize)} />
             <Toggle label="Coordinate only: can't shoot/edit after church" v={f.limited} on={()=>set("limited",!f.limited)} />
             <Toggle label="Manual schedule: confirm availability each time" v={f.manualSchedule} on={()=>set("manualSchedule",!f.manualSchedule)} />
           </div>
+          </>)}
 
           {isPending
             ? <button className="sb-btn green" disabled={!valid} onClick={()=>onApprove(payload())}>Approve &amp; let in</button>
