@@ -474,6 +474,7 @@ Requires the **Blaze** (pay-as-you-go) plan.
 - **Content-performance analytics** (Instagram / Facebook / YouTube) and calendar/Drive integrations
 - **PWA & performance** — route-level code-splitting, richer offline support
 - Bulk admin actions; recurring content templates; AI caption suggestions
+- **ID-based task assignments** — replace name-based `owner` / `support[].name` with stable **user IDs**, so assignment integrity can be validated in Firestore rules, renames/removals don't break references, task-history attribution stays reliable, and QA production exclusions can be enforced **server-side** (today they're enforced client-side plus the server-side user-doc invariant). Also unblocks a per-task `reviewerId`.
 
 ---
 

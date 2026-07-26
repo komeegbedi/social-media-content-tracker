@@ -175,6 +175,26 @@ export const openPanel = (search, name) =>
 export const closeOverlays = (search) =>
   withParams(search, { [PARAM.compose]: null, [PARAM.edit]: null, [PARAM.panel]: null });
 
+/* Decide how to DISMISS an overlay (editor or panel) without creating a
+   Task↔Edit loop. An overlay is always opened by PUSHING its ?param on top of
+   its parent, so the parent is the entry directly below.
+
+   INVARIANT: a child returns to its parent by UNWINDING history (going back to
+   the entry that's already there) — never by pushing a fresh copy of the parent
+   on top of the child. Pushing was the bug: it left the dismissed editor sitting
+   in history as a Back target, so closing the detail stepped back into it.
+
+     • nothing open            → "noop"    (never pop a real page by accident)
+     • opened in-session       → "back"    (unwind one entry to the real parent)
+     • direct entry (no back)  → "replace" (synthesize the parent, e.g.
+                                            /content/:id from /content/:id?edit) */
+export function overlayClose({ search, canGoBack }) {
+  const cleaned = closeOverlays(search);
+  if (cleaned === search) return { type: "noop" };
+  if (canGoBack) return { type: "back" };
+  return { type: "replace", search: cleaned };
+}
+
 /* ---- notification deep-linking ------------------------------------------
 
    A notification is only an entry point: tapping it must land the user on the
@@ -221,12 +241,17 @@ export function notificationDestination(n) {
 
 /* ---- safe back fallbacks (for direct entry with no in-app history) -------- */
 
-// Where an in-app Back control should land when there's no earlier app entry —
-// so we never call history back into an external site. Depends on the screen
-// the user is currently on.
+// Where an in-app Back control should land when there's no earlier app entry
+// (a push/email deep link opened cold) — so we never step history back into the
+// email app, an external site, or a blank tab. A logical PARENT of where the
+// user is, tuned by any section focus the deep link carried.
 export function fallbackPath(navState) {
   if (!navState) return "/";
-  if (navState.screen === "content") return "/workflow";
+  if (navState.screen === "content") {
+    // A review request → the awaiting-review list; otherwise the workflow.
+    if (navState.focus === "review") return "/workflow?filter=review";
+    return "/workflow";
+  }
   if (navState.screen === "admin") return "/admin";
   if (navState.memberId) return "/team";
   return "/";

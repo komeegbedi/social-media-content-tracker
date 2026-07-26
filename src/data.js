@@ -341,7 +341,8 @@ export function formatContentTitle(title) {
    whole board — not merely whoever has fewer rows on this one task. */
 export function autoAssign(task, users, allTasks = []) {
   if (!task || !task.type) return [];   // no type chosen → nothing to assign (don't assume graphics)
-  users = (users || []).filter(isAvailable); // #4: never auto-assign unavailable people
+  // Only production members who are available — QA reviewers are never staffed.
+  users = (users || []).filter(isAssignable);
   if (!isShootType(task.type)) {   // Poster / graphics → needs one designer
     const ownerU = users.find(u => u.name === task.owner);
     // If the owner is a designer, they design it themselves — no extra crew.
@@ -766,6 +767,54 @@ export function qaQueue(tasks) {
   };
 }
 
+// Workflow states in which a reviewer can act (approve / request changes).
+// Review actions appear ONLY here; every other state is view-only for QA.
+export const REVIEWABLE_STATES = ["In Review"];
+export const isReviewableState = (status) => REVIEWABLE_STATES.includes(status);
+
+/* Central QA task-capability policy — one place, not scattered checks.
+   A QA REVIEWER can OBSERVE all production (view any task, its full context,
+   history and comments) but can OPERATE none of it: review actions are limited
+   to a reviewable state, and every production mutation is denied. Admins keep
+   admin powers on the separate `isAdmin` axis — this describes the reviewer role,
+   not an admin who happens to be QA. */
+export function qaTaskCapabilities(task) {
+  const reviewable = isReviewableState(task && task.status);
+  return {
+    // Observe
+    canView: true, canSearch: true, canViewProductionContext: true, canComment: true,
+    // Review — only in a reviewable state
+    canReview: reviewable, canApprove: reviewable, canRequestChanges: reviewable,
+    // Operate production — never
+    canEditProduction: false, canAssignCrew: false, canChangeOwner: false,
+    canAutoAssign: false, canPlanContent: false, canDelete: false,
+  };
+}
+
+/* QA reviewer dashboard metrics (the review counterpart to production load).
+   Never touches capacity/skills — QA work is a different concept entirely.
+   `overdue` = submitted for review but the publish date has already passed, so
+   the review is holding up a due piece. `recentlyReviewed` = things this
+   reviewer has cleared or bounced recently (newest first). */
+export function reviewMetrics(tasks) {
+  const all = tasks || [];
+  const awaiting = all.filter((t) => t.status === "In Review");
+  const overdue = awaiting.filter((t) => (daysTo(t.postDate) ?? 99) < 0);
+  const changes = all.filter((t) => t.status === "Changes Requested");
+  const reviewedAt = (t) => {
+    const ev = lastEvent(t, "approved") || lastEvent(t, "changes_requested");
+    return ev ? ev.at : 0;
+  };
+  const recentlyReviewed = all
+    .filter((t) => reviewedAt(t) > 0 && t.status !== "In Review")
+    .sort((a, b) => reviewedAt(b) - reviewedAt(a))
+    .slice(0, 10);
+  return {
+    awaiting, overdue, changes, recentlyReviewed,
+    counts: { awaiting: awaiting.length, overdue: overdue.length, changes: changes.length },
+  };
+}
+
 /* Caption / upload team: their work starts once content is approved. */
 export function postQueue(tasks) {
   const live = (tasks || []).filter((t) => t.status !== "Posted");
@@ -819,27 +868,37 @@ export function searchTasks(tasks, query) {
   return (tasks || []).filter((t) => { const h = haystack(t); return terms.every((term) => h.includes(term)); });
 }
 
-/* People search — for the global "find anything" search + People page. */
+/* People search — for the global "find anything" search + People page.
+   QA reviewers are searchable AS PEOPLE (name/email/role/dept), but their
+   haystack drops production terms (skills/location), so a staffing search like
+   "available editor" or "479 photographer" can never surface a QA reviewer. */
 export function searchPeople(users, query) {
   const q = (query || "").trim().toLowerCase();
   if (!q) return [];
   const terms = q.split(/\s+/);
-  const haystack = (u) => [
-    u.name, u.email, u.role, u.status, ...userDepartments(u),
-    ...(u.skills || []), ...(u.location || []),
-  ].join(" ").toLowerCase();
+  const haystack = (u) => {
+    const base = [u.name, u.email, u.role, u.status, ...userDepartments(u)];
+    // Only production people are described by skills/location in search.
+    const prod = isQA(u) ? [] : [...(u.skills || []), ...(u.location || [])];
+    return [...base, ...prod].join(" ").toLowerCase();
+  };
   return (users || []).filter((u) => { const h = haystack(u); return terms.every((term) => h.includes(term)); });
 }
 
 /* ===================================================================
    People management (Admin → People)
    =================================================================== */
-// Departments are org groupings only. "Caption & Upload" and "QA" are NOT
-// departments — they're capabilities, already surfaced as Roles & permissions
-// toggles (user.captions / user.qa), so keeping them here would duplicate.
+// PRODUCTION departments — the crews that make content. Used for staffing and
+// capacity. QA is deliberately NOT here (see QA_DEPARTMENT).
 export const DEPARTMENTS = [
   "Graphic Design", "Content Creation", "Videography", "Photography",
 ];
+// QA is its OWN department — a distinct discipline (review), never production.
+// It is not a skill and not a production department; it groups reviewers in the
+// org directory and drives the review-only experience.
+export const QA_DEPARTMENT = "QA";
+// All departments for directory/display (production crews + QA).
+export const ALL_DEPARTMENTS = [...DEPARTMENTS, QA_DEPARTMENT];
 
 // A user may belong to MULTIPLE departments. Stored as `departments: [...]`,
 // but older docs used a single `department` string — normalise both to an
@@ -850,10 +909,35 @@ export function userDepartments(user) {
   return user.department ? [user.department] : [];
 }
 
-// Availability for assignment (#4). Missing = available (opt-out, not opt-in),
-// so existing users keep working. When false: excluded from auto-assign and
-// blocked from manual assignment; the Team page shows "Unavailable".
+/* ---- membership predicates (the ONE place production eligibility is decided) --
+
+   QA is a separate discipline: reviewers, never production personnel. These
+   predicates are the single source of truth — every crew picker, recommendation,
+   capacity calc, auto-assign path and staffing search routes through them, so QA
+   is excluded at the business-rule level, not merely hidden in the UI. */
+
+export const isApproved = (user) => !!(user && (user.status === "approved" || user.role === "admin"));
+
+// Is this a QA reviewer? `qa` is the authoret­ative permission flag (also gates
+// firestore.rules and the review notifications).
+export const isQA = (user) => !!(user && user.qa === true);
+
+// Eligible to be staffed on production work. QA is excluded even when they are
+// also an admin — admin governs what you can MANAGE, QA governs the department
+// you BELONG to. There is deliberately NO admin exception here.
+export const isProductionMember = (user) => isApproved(user) && !isQA(user);
+
+// Production availability (#4). Missing = available (opt-out, not opt-in), so
+// existing users keep working. When false: excluded from auto-assign and blocked
+// from manual assignment; the Team page shows "Unavailable". Kept as a PURE
+// production-availability flag — QA exclusion is a separate concern (isAssignable),
+// so we never conflate "is a reviewer" with "is unavailable to shoot".
 export const isAvailable = (user) => !(user && user.available === false);
+
+// Eligible to be picked / recommended / auto-assigned for production RIGHT NOW:
+// a production member (never QA) who is available. THE gate for every staffing
+// query and picker.
+export const isAssignable = (user) => isProductionMember(user) && isAvailable(user);
 
 // Permission/role chips shown on a person card.
 export function roleChips(user) {
@@ -1045,9 +1129,9 @@ export function crewReason(pick, users, tasks) {
   if (!person) return "Available";
   if (!isAvailable(person)) return "Unavailable";
   const { detail, load } = loadSummary(person, tasks);
-  // How many equally-skilled, available people are carrying LESS than they are.
+  // How many equally-skilled, assignable people (never QA) carry LESS than they do.
   const lighter = (users || []).filter((u) =>
-    u.name !== person.name && isAvailable(u) && (u.skills || []).includes(role)
+    u.name !== person.name && isAssignable(u) && (u.skills || []).includes(role)
     && personLoad(u, tasks).activePoints < load.activePoints).length;
   if (lighter > 0) return detail;
   if (load.activePoints <= 0) return `Best available ${ROLE_PERSON[role] || "choice"}`;

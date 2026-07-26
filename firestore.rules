@@ -36,11 +36,18 @@ service cloud.firestore {
         && request.resource.data.get('captions', false) == false
         && request.resource.data.get('lead', false) == false;
 
-      // Admins edit profiles (approvals, roles, skills, flags, removal).
-      // Members may self-edit ONLY their notification preferences and appearance
-      // preference — nothing else (changing their own skills/flags could game
-      // auto-assignment).
-      allow update: if isAdmin()
+      // A QA reviewer is a distinct, non-production department: they must never
+      // carry production skills (that's what makes them staffable/recommended).
+      // Enforce the invariant server-side so no client — even a buggy admin
+      // form — can persist a QA user with skills.
+      function qaInvariantOk(d) {
+        return d.get('qa', false) == false || d.get('skills', []).size() == 0;
+      }
+      // Admins edit profiles (approvals, roles, skills, flags, removal), subject
+      // to the QA invariant. Members may self-edit ONLY their notification
+      // preferences and appearance — nothing else (changing their own
+      // skills/flags could game auto-assignment).
+      allow update: if (isAdmin() && qaInvariantOk(request.resource.data))
         || (signedIn() && request.auth.uid == uid
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['notifPrefs', 'appearance']));
       allow delete: if isAdmin();

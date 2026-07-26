@@ -49,9 +49,9 @@ test("solo-owner crew role maps by type", () => {
 
 test("autoAssign never picks an unavailable person", () => {
   const users = [
-    { name: "Owner", skills: ["coordinate"], location: ["828"] },
-    { name: "Shooter", skills: ["shoot"], location: ["828"], available: false },
-    { name: "Editor", skills: ["edit"], location: ["828"] },
+    { name: "Owner", status: "approved", skills: ["coordinate"], location: ["828"] },
+    { name: "Shooter", status: "approved", skills: ["shoot"], location: ["828"], available: false },
+    { name: "Editor", status: "approved", skills: ["edit"], location: ["828"] },
   ];
   const out = autoAssign({ type: "Reel", location: "828", owner: "Owner" }, users);
   const names = out.map((s) => s.name);

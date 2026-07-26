@@ -40,8 +40,10 @@ const iso = (d) => d.toISOString().slice(0, 10);
 const PEOPLE = [
   { uid: "seed-jane",   name: "Jane Doe",       email: "jane@example.com",
     role: "admin",  status: "approved", skills: ["shoot", "edit", "coordinate"], location: ["479", "828"] },
+  // QA reviewer — a distinct, non-production department: no skills, no location,
+  // not production-available. Reviews and approves content only.
   { uid: "seed-john",   name: "John Smith",     email: "john@example.com",
-    role: "member", status: "approved", skills: ["design", "shoot"],            location: ["828"], qa: true },
+    role: "member", status: "approved", qa: true, departments: ["QA"], skills: [], location: [], available: false },
   { uid: "seed-alex",   name: "Alex Johnson",   email: "alex@example.com",
     role: "member", status: "approved", skills: ["shoot", "edit"],              location: ["479"],
     department: "Videography", lead: true },
