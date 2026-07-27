@@ -20,6 +20,50 @@ service cloud.firestore {
       return hasProfile() && (myDoc().qa == true || myDoc().role == 'admin');
     }
 
+    // ---- task workflow (the 7-stage state machine, mirrored from src/data.js) ----
+    function taskStatuses() {
+      return ['Planned', 'In Progress', 'In Review', 'Changes Requested',
+              'Approved', 'Ready to Post', 'Posted'];
+    }
+    // Is a proposed `from -> to` status change legal for THIS actor?
+    //   owner/admin   : Planned→In Progress, In Progress→In Review, Changes Requested→In Review
+    //   QA/admin      : In Review→Approved | Changes Requested   (the QA decision)
+    //   captions/admin: Approved→Ready to Post, Ready to Post→Posted
+    //   admin         : any valid status (manual correction)
+    // A no-op (from == to) is always allowed so members can edit other fields.
+    function transitionAllowed(from, to) {
+      let isOwner = resource.data.owner == myDoc().name;
+      let isCap = myDoc().get('captions', false) == true;
+      return from == to
+        || isAdmin()
+        || (isOwner && (
+              (from == 'Planned' && to == 'In Progress') ||
+              (from == 'In Progress' && to == 'In Review') ||
+              (from == 'Changes Requested' && to == 'In Review')))
+        || (isQA() && from == 'In Review' && (to == 'Approved' || to == 'Changes Requested'))
+        || (isCap && (
+              (from == 'Approved' && to == 'Ready to Post') ||
+              (from == 'Ready to Post' && to == 'Posted')));
+    }
+    // Integrity checks applied to EVERY task write (members AND admins):
+    //  • status is a real status value;
+    //  • the audit log is append-only — it can only grow, by at most one entry
+    //    per write (no truncation, no wholesale forgery of history);
+    //  • archivedAt only appears on a Posted task, and a non-admin can never
+    //    clear one that's already set (no un-archiving to hide history).
+    function taskIntegrityOk() {
+      let oldAct = resource.data.get('activity', []);
+      let newAct = request.resource.data.get('activity', []);
+      let oldArch = resource.data.get('archivedAt', null);
+      let newArch = request.resource.data.get('archivedAt', null);
+      return request.resource.data.status in taskStatuses()
+        && newAct is list
+        && newAct.size() >= oldAct.size()
+        && newAct.size() <= oldAct.size() + 1
+        && (newArch == null || request.resource.data.status == 'Posted')
+        && (isAdmin() || oldArch == null || newArch != null);
+    }
+
     match /users/{uid} {
       // Read your own profile always; read others only once you're approved.
       allow get: if signedIn() && (request.auth.uid == uid || isApproved());
@@ -108,37 +152,58 @@ service cloud.firestore {
       // Only admins create or delete tasks.
       allow create, delete: if isAdmin();
 
-      // Admins can change anything. Approved members may only touch
-      // collaboration fields — status, comments, reactions, and the
-      // "what's next / waiting on" fields — not reassign crew, owners,
-      // dates, priority, etc.
-      // ...plus content links, captions/post link, and the activity log.
-      // The QA-decision transitions ("Approved" and "Changes Requested") can
-      // only be made by a QA member or an admin.
-      allow update: if isAdmin()
+      // Every write must pass base integrity (valid status, append-only audit
+      // log, archivedAt semantics). On top of that:
+      //  • admins may change anything else;
+      //  • approved members may touch only collaboration fields, and any status
+      //    change must be a role-legal transition (owner/QA/captions matrix).
+      allow update: if taskIntegrityOk() && (
+        isAdmin()
         || (isApproved()
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['status', 'comments', 'reactions', 'updatedAt', 'archivedAt',
                            'blockedOn', 'links', 'activity', 'caption', 'postLink'])
-            && (request.resource.data.status == resource.data.status
-                || !(request.resource.data.status in ['Approved', 'Changes Requested'])
-                || isQA()));
+            && transitionAllowed(resource.data.status, request.resource.data.status)));
 
-      // Comments as a subcollection (v1.1). Approved members read all and may
-      // post their own; edits/removal are admin-only. Enables the server-side
-      // @mention trigger without bloating the task document.
+      // Comments as a subcollection (v1.1) — the canonical comment store. Approved
+      // members read all and may post their OWN (uid must match the caller;
+      // display name is trusted only for rendering). Strict schema + size limits;
+      // edits/removal are admin-only. Feeds the server-side @mention trigger.
       match /comments/{commentId} {
         allow read: if isApproved();
-        allow create: if isApproved() && request.resource.data.uid == request.auth.uid;
+        allow create: if isApproved()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['uid', 'who', 'txt', 'tm', 'mentions'])
+          && request.resource.data.txt is string
+          && request.resource.data.txt.size() > 0
+          && request.resource.data.txt.size() <= 2000
+          && request.resource.data.tm == request.time
+          && request.resource.data.get('mentions', []) is list
+          && request.resource.data.get('mentions', []).size() <= 20;
         allow update, delete: if isAdmin();
       }
     }
 
-    // Issue log: user-filed reports and auto-captured runtime errors.
+    // Issue log: user-filed reports/feature-requests and auto-captured runtime
+    // errors. Strict schema (no arbitrary fields), size-bounded, server-stamped,
+    // and only under your own uid. Auto-captured ERRORS may come from any signed-in
+    // user (they happen during setup, before approval); user-INITIATED reports and
+    // feature requests require an approved account.
     match /issues/{id} {
-      // Any signed-in user may file an issue, but only under their own uid
-      // (can't spoof someone else). Errors are logged the same way.
-      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+             'uid', 'kind', 'message', 'stack', 'action', 'code', 'taskId', 'note',
+             'status', 'route', 'online', 'userAgent', 'viewport', 'url', 'email',
+             'title', 'problem', 'beneficiary', 'link', 'createdAt'])
+        && request.resource.data.kind in ['error', 'report', 'feature_request']
+        && request.resource.data.status == 'open'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.get('message', '').size() <= 4000
+        && request.resource.data.get('stack', '').size() <= 8000
+        && request.resource.data.get('note', '').size() <= 4000
+        && request.resource.data.get('problem', '').size() <= 4000
+        && (request.resource.data.kind == 'error' || isApproved());
       // Only admins can read the log, triage (resolve), or delete.
       allow read, update, delete: if isAdmin();
     }
