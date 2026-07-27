@@ -15,6 +15,7 @@ const {
   resolveTaskRecipients, relativeDue, localHour, localToday, formatContentTitle,
 } = require("./lib");
 const { resendApiKey, sendDigestEmail } = require("./emailService");
+const { enqueueDigestItem, flushDigests } = require("./reminderDigest");
 const quota = require("./emailQuota");
 
 const LEASE_MINUTES = 10;
@@ -85,9 +86,10 @@ async function runDispatch() {
   const candidates = [...dueSnap.docs, ...stale];
 
   let processed = 0, skipped = 0, failed = 0;
-  // Reminder EMAILS are batched into one digest per user (counts as 1 email).
-  // In-app + push still fire per task; only email is deferred to the digest.
-  const digest = new Map(); // uid -> { user, items:[{title, dueText}] }
+  // Reminder EMAILS are batched into one digest per user per day. The digest is
+  // DURABLE (reminderDigests): a due reminder's email requirement is recorded
+  // before its instance is marked processed, so a crash can't lose the email.
+  const today = localToday();
   for (const snap of candidates) {
     const inst = await claim(snap.ref, execId, now);
     if (!inst) continue; // another run owns it
@@ -103,20 +105,19 @@ async function runDispatch() {
         .map((uid) => byUid[uid]).filter(Boolean);
       const dueText = relativeDue(task.postDate);
       const dispTitle = formatContentTitle(task.title);   // Title Case for reminder text + email digest
-      // In-app + push per task (email stripped — batched below).
+      // In-app + push per task (durable via notifyUsers; email deferred to the digest).
       await notifyUsers(recipients, {
         type: "reminder", taskId: inst.taskId,
         title: `'${dispTitle}' ${dueText}`,
         keyBase: `reminder_${snap.id}`,
         channels: (inst.channels || []).filter((c) => c !== "email"),
       });
-      // Accumulate email digest items for recipients who allow reminder email.
+      // Durably enqueue the email requirement BEFORE marking processed, so the
+      // email survives a crash. Idempotent (arrayUnion) if the instance is reclaimed.
       if ((inst.channels || []).includes("email")) {
         for (const u of recipients) {
           if (!isActive(u) || !emailAllow(u) || !prefsAllow(u, "reminder")) continue;
-          const e = digest.get(u.uid) || { user: u, items: [] };
-          if (!e.items.some((i) => i.title === dispTitle)) e.items.push({ title: dispTitle, dueText });
-          digest.set(u.uid, e);
+          await enqueueDigestItem(u.uid, today, { taskId: inst.taskId, title: dispTitle, dueText });
         }
       }
       await snap.ref.update({ status: "processed", processedAt: FieldValue.serverTimestamp(), lastError: "" });
@@ -130,13 +131,9 @@ async function runDispatch() {
     }
   }
 
-  // Send one batched reminder digest per user (idempotent per user per day).
-  let digests = 0;
-  const today = localToday();
-  for (const { user, items } of digest.values()) {
-    const r = await sendDigestEmail({ user, items, notificationId: `reminderdigest_${user.uid}_${today}` });
-    if (r.status === "sent") digests++;
-  }
+  // Send every pending digest (across all runs — a crashed run's digest is picked
+  // up here, not lost) idempotently from the durable store.
+  const { sent: digests } = await flushDigests({ byUid, send: sendDigestEmail });
 
   // Morning leadership digest (once per day at the configured local hour).
   if (localHour() === settings.reminderHourLocal) {

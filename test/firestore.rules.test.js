@@ -176,6 +176,13 @@ test("issues reject spoofed uid, arbitrary fields, oversized payloads, bad statu
   await assertFails(setDoc(doc(as("member"), "issues", "x5"), { ...ok, kind: "spam" }));        // invalid kind
 });
 
+test("reminderDigests is server-owned: admin-read, no client write", async () => {
+  await seed("reminderDigests", "u1_2026-07-27", { uid: "member", day: "2026-07-27", status: "pending", items: [] });
+  await assertFails(getDoc(doc(as("member"), "reminderDigests", "u1_2026-07-27")));
+  await assertSucceeds(getDoc(doc(as("admin"), "reminderDigests", "u1_2026-07-27")));
+  await assertFails(setDoc(doc(as("admin"), "reminderDigests", "x"), { uid: "x", status: "pending" })); // even admins can't write
+});
+
 test("non-admins cannot read the issue log", async () => {
   await seed("issues", "i1", { uid: "member", kind: "report", note: "x", status: "open" });
   await assertFails(getDoc(doc(as("member"), "issues", "i1")));
