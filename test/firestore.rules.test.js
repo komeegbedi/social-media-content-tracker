@@ -128,6 +128,18 @@ test("members can't touch protected fields (owner/dates/priority)", async () => 
   await assertFails(updateDoc(doc(as("owner"), "tasks", "t8"), { priority: "High", updatedAt: serverTimestamp() }));
 });
 
+test("an approved member may toggle a reaction, but can't smuggle a status change through it", async () => {
+  await seed("tasks", "tr", baseTask());
+  // A plain reaction toggle (reactions + updatedAt, no status change) is allowed.
+  await assertSucceeds(updateDoc(doc(as("member"), "tasks", "tr"), {
+    reactions: { "🔥": ["Mel Member"] }, updatedAt: serverTimestamp(),
+  }));
+  // The same write may not also jump the workflow (illegal transition denied).
+  await assertFails(updateDoc(doc(as("member"), "tasks", "tr"), {
+    reactions: { "🔥": ["Mel Member"] }, status: "Approved", updatedAt: serverTimestamp(),
+  }));
+});
+
 /* ---- comment subcollection schema ---- */
 
 test("a comment must be owned by the caller, well-formed, and size-bounded", async () => {

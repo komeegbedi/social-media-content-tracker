@@ -1552,3 +1552,43 @@ export function computeCapacity(tasks, users) {
   });
   return cap;
 }
+
+/* ---- Comments: merge legacy embedded array with the canonical subcollection ----
+   During the migration window a task's discussion lives in two places at once:
+   the old embedded `task.comments[]` array and the new `tasks/{id}/comments`
+   subcollection. The migration copies each embedded comment into a subcollection
+   doc PRESERVING its original who/txt/timestamp, so the two representations of the
+   same comment share an identity and must render only once. */
+
+// Normalise any timestamp shape to epoch-millis: a raw number (legacy Date.now()),
+// a Firestore Timestamp (.toMillis()), a plain {seconds,nanoseconds} (from a
+// snapshot serialised over the wire), or a Date.
+export function tmMillis(v) {
+  if (v == null) return 0;
+  if (typeof v === "number") return v;
+  if (typeof v.toMillis === "function") return v.toMillis();
+  if (typeof v.seconds === "number") return v.seconds * 1000 + Math.floor((v.nanoseconds || 0) / 1e6);
+  if (v instanceof Date) return v.getTime();
+  return 0;
+}
+
+// Identity of a comment for dedup: author + text + when. A migrated subcollection
+// doc keeps the original values, so it collides with its embedded twin and the two
+// collapse to one. New subcollection comments (server timestamp) never collide with
+// a legacy one.
+export function commentKey(c) {
+  return `${c.who ?? ""} ${c.txt ?? ""} ${tmMillis(c.tm)}`;
+}
+
+// Union of embedded + subcollection comments, deduped by identity (the canonical
+// subcollection copy wins), oldest first — the order the Discussion thread reads in.
+export function mergeComments(embedded = [], subDocs = []) {
+  const byKey = new Map();
+  for (const c of embedded || []) {
+    byKey.set(commentKey(c), { who: c.who, txt: c.txt, tm: tmMillis(c.tm), source: "legacy" });
+  }
+  for (const c of subDocs || []) {
+    byKey.set(commentKey(c), { who: c.who, txt: c.txt, tm: tmMillis(c.tm), source: "sub", id: c.id });
+  }
+  return [...byKey.values()].sort((a, b) => a.tm - b.tm);
+}

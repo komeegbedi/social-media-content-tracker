@@ -8,7 +8,7 @@ import {
   signInWithPopup, updateProfile, sendPasswordResetEmail,
 } from "firebase/auth";
 import {
-  collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot, serverTimestamp,
+  collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot, serverTimestamp, runTransaction,
 } from "firebase/firestore";
 import { auth, db, googleProvider, functions } from "./firebase";
 import { httpsCallable } from "firebase/functions";
@@ -33,6 +33,7 @@ import {
   isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, loadSummary, crewReason, sameCrew, dateIssues, todayStr, isShootType,
   personLoad, responsibilityTier, staleFlags, orderedCrew,
   isApproved, isQA, isProductionMember, isAssignable, QA_DEPARTMENT,
+  mergeComments,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
@@ -1589,18 +1590,26 @@ function Board({ profile, isAdmin }) {
     updateDoc(doc(db, "tasks", id), { blockedOn, updatedAt: serverTimestamp() });
   const setLinks = async (task, links) =>
     updateDoc(doc(db, "tasks", task.id), { links, updatedAt: serverTimestamp() });
+  // Comments live in the tasks/{id}/comments subcollection (the canonical store).
+  // The author is the trusted signed-in uid — never a client-supplied name — and
+  // the timestamp is server-set; rules reject anything else.
   const addComment = (task, txt) => withFeedback(
-    updateDoc(doc(db, "tasks", task.id), {
-      comments: [...(task.comments||[]), { who: me.name, txt, tm: Date.now() }],
-      updatedAt: serverTimestamp(),
+    addDoc(collection(db, "tasks", task.id, "comments"), {
+      uid: me.id, who: me.name, txt, tm: serverTimestamp(), mentions: [],
     }), "✓ Note posted");
-  const toggleReact = async (task, emo) => {
-    const r = { ...(task.reactions||{}) };
+  // Reactions are a read-modify-write on one shared map, so concurrent taps from
+  // different people would clobber each other. Run it in a transaction: Firestore
+  // retries on a conflicting write, so every toggle survives.
+  const toggleReact = (task, emo) => runTransaction(db, async (tx) => {
+    const ref = doc(db, "tasks", task.id);
+    const snap = await tx.get(ref);
+    if (!snap.exists()) return;
+    const r = { ...(snap.data().reactions || {}) };
     const arr = new Set(r[emo] || []);
     arr.has(me.name) ? arr.delete(me.name) : arr.add(me.name);
     r[emo] = [...arr];
-    await updateDoc(doc(db, "tasks", task.id), { reactions: r, updatedAt: serverTimestamp() });
-  };
+    tx.update(ref, { reactions: r, updatedAt: serverTimestamp() });
+  });
   const autoAll = async () => {
     const targets = tasks.filter(t => !(t.support && t.support.length) && t.status !== "Posted");
     await withFeedback(Promise.all(targets.map(t =>
@@ -3924,6 +3933,10 @@ function TaskCard({ t, me, onClick }) {
           <span key={i} className={"sb-av"+(p.owner?" owner":"")}
             style={me&&p.name===me.name?{outline:"2px solid var(--violet)"}:{}}>{initials(p.name)}</span>
         ))}
+        {/* Legacy embedded-comment count. Post-migration, new comments live in the
+            subcollection and aren't counted here — reading it per card would be one
+            extra query per row. A backend-maintained `commentCount` (Phase 3) makes
+            this exact; the full thread is always correct on open. */}
         {(t.comments?.length>0) && <span style={{fontSize:11,color:"var(--muted)",marginLeft:"auto"}}>{Ic.chat} {t.comments.length}</span>}
       </div>
     </div>
@@ -4044,6 +4057,11 @@ function TaskDetail({ task, me, isAdmin, isQA, focus, highlightComment, onClose,
     }, 220);   // let the sheet finish its open animation first
     return () => clearTimeout(t);
   }, [focus]);
+  // Discussion streams from the canonical tasks/{id}/comments subcollection. During
+  // the migration window a task may still carry the legacy embedded array as well,
+  // so merge and dedup the two — each comment renders exactly once (see mergeComments).
+  const [subComments] = useCollection(`tasks/${task.id}/comments`, true);
+  const comments = useMemo(() => mergeComments(task.comments, subComments), [task.comments, subComments]);
   // #12 — auto-saves surface a global "✓ Saved just now" banner (always visible,
   // whichever field was edited), via the parent.
   const flashSaved = () => onSaved && onSaved();
@@ -4272,7 +4290,7 @@ function TaskDetail({ task, me, isAdmin, isQA, focus, highlightComment, onClose,
           {(() => {
             const events = [
               ...(task.activity||[]),
-              ...(task.comments||[]).map(c=>({ type:"comment", by:c.who, at:c.tm, note:c.txt })),
+              ...comments.map(c=>({ type:"comment", by:c.who, at:c.tm, note:c.txt })),
             ].sort((a,b)=>(b.at||0)-(a.at||0));
             return events.length===0
               ? <div className="sb-empty" style={{padding:16}}>No activity yet.</div>
@@ -4299,8 +4317,8 @@ function TaskDetail({ task, me, isAdmin, isQA, focus, highlightComment, onClose,
 
           <div className={"sb-shead"+(flashSection==="comments"?" sb-flash":"")} ref={discussRef} style={{marginTop:18}}><h2>Discussion</h2></div>
           <div className="sb-sub" style={{marginTop:-6}}>Keep it here, not in WhatsApp.</div>
-          {(task.comments||[]).map((c,i)=>(
-            <div className="sb-cmt" key={i}>
+          {comments.map((c,i)=>(
+            <div className="sb-cmt" key={c.id||i}>
               <div className="who">{c.who}</div><div className="txt">{c.txt}</div><div className="tm">{tm(c.tm)}</div>
             </div>
           ))}
