@@ -1611,11 +1611,20 @@ function Board({ profile, isAdmin }) {
     r[emo] = [...arr];
     tx.update(ref, { reactions: r, updatedAt: serverTimestamp() });
   });
+  // Bulk auto-assign runs on the trusted backend: the client suggests the crew
+  // (heuristic only), the server validates every assignment and applies them in
+  // bounded resumable chunks, returning explicit applied/skipped counts.
   const autoAll = async () => {
     const targets = tasks.filter(t => !(t.support && t.support.length) && t.status !== "Posted");
-    await withFeedback(Promise.all(targets.map(t =>
-      updateDoc(doc(db, "tasks", t.id), { support: autoAssign(t, users, tasks), updatedAt: serverTimestamp() }))),
-      `✓ Auto-assigned crew to ${targets.length} task${targets.length!==1?"s":""}`, "Auto-assigning crew…");
+    if (!targets.length) { flashBanner("Nothing to auto-assign right now."); return; }
+    const assignments = targets.map(t => ({ taskId: t.id, support: autoAssign(t, users, tasks) }));
+    showPending("Auto-assigning crew…");
+    try {
+      const { data } = await httpsCallable(functions, "bulkAssign")({ opId: `auto_${Date.now()}`, assignments });
+      flashBanner(data.failed
+        ? `✓ Assigned ${data.applied} · ${data.failed} skipped`
+        : `✓ Auto-assigned crew to ${data.applied} task${data.applied !== 1 ? "s" : ""}`);
+    } catch (e) { flashBanner("Couldn't auto-assign crew — please try again.", "err"); }
   };
   const autoOne = (task) => withFeedback(
     updateDoc(doc(db, "tasks", task.id), { support: autoAssign(task, users, tasks), updatedAt: serverTimestamp() }),
