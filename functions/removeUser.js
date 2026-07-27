@@ -8,6 +8,7 @@ const { logger } = require("firebase-functions/v2");
 const { getAuth } = require("firebase-admin/auth");
 const { db, FieldValue } = require("./lib");
 const { removalOpId, validateCaller, validateTarget, runRemoval } = require("./removalSaga");
+const { validatePolicy } = require("./taskDetach");
 
 // Reversibly disable the Auth account (never delete). A missing Auth account is
 // treated as already-disabled so a Firestore-only profile can still be removed.
@@ -54,14 +55,25 @@ async function removeUserCore({ database, callerUid, targetUid, policy, deps = {
     return { ok: true, opId: opRef.id, phase: await run() };
   }
 
-  // 3. Fresh removal → target checks, then create the op and run.
+  // 3. Fresh removal → target checks + reassignment policy validation, then create
+  //    the op and run. The policy is validated (and its target resolved to a name)
+  //    BEFORE any phase begins.
   const tv = validateTarget({ target, activeAdminCount: admins });
   if (tv.error) throw new HttpsError(tv.error[0], tv.error[1]);
   if (tv.alreadyRemoved) return { ok: true, opId: opRef.id, alreadyRemoved: true };
 
+  const pol = policy || { mode: "unassign" };
+  const byUid = {};
+  if (pol.mode === "reassign" && pol.reassignToUid) {
+    const s = await database.doc(`users/${pol.reassignToUid}`).get();
+    if (s.exists) byUid[pol.reassignToUid] = s.data();
+  }
+  const pv = validatePolicy(pol, byUid, targetUid);
+  if (pv.error) throw new HttpsError(pv.error[0], pv.error[1]);
+
   await opRef.create({
     type: "user_removal", targetUid, targetName: target.name || "", requestedBy: callerUid,
-    policy: policy || null, phase: "validating",
+    policy: pol, resolvedTargetName: pv.resolvedTargetName, phase: "validating",
     createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
   });
   return { ok: true, opId: opRef.id, phase: await run() };

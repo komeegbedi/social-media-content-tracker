@@ -13,6 +13,7 @@
    attribution while stripping every access/operational field.
    =================================================================== */
 const { FieldValue } = require("./lib");
+const { detachTasks } = require("./taskDetach");
 
 const removalOpId = (uid) => `remove_${uid}`;
 
@@ -80,7 +81,9 @@ async function writeAuditEvent(db, opId, { targetUid, targetName, removedBy }) {
    the Firestore-only emulator tests can verify Auth-disable and simulate a crash.
    `hooks.afterDisable` is a test seam for the crash-after-Auth-disable case. */
 async function runRemoval({ db, opRef, targetUid, targetName, removedBy, disableAuthUser, hooks = {} }) {
-  let phase = (await opRef.get()).data().phase;
+  const op = (await opRef.get()).data();
+  let phase = op.phase;
+  const name = op.targetName || targetName;
 
   if (phase === "validating") {
     // Tombstone FIRST (denies Firestore access instantly), then disable Auth.
@@ -95,9 +98,20 @@ async function runRemoval({ db, opRef, targetUid, targetName, removedBy, disable
     await opRef.update({ phase: "tokens_cleared", updatedAt: FieldValue.serverTimestamp() });
     phase = "tokens_cleared";
   }
-  // NOTE: 4B inserts a "tasks_detached" phase here (chunked reassignment).
   if (phase === "tokens_cleared") {
-    await writeAuditEvent(db, opRef.id, { targetUid, targetName, removedBy });
+    // Chunked, resumable detach from ACTIVE tasks (posted history preserved).
+    // A crash mid-detach keeps the phase here and resumes from the cursor.
+    await detachTasks({
+      db, opRef, userName: name,
+      mode: (op.policy && op.policy.mode) || "unassign",
+      resolvedTargetName: op.resolvedTargetName || null,
+      hooks: { afterChunk: hooks.afterChunk },
+    });
+    await opRef.update({ phase: "tasks_detached", updatedAt: FieldValue.serverTimestamp() });
+    phase = "tasks_detached";
+  }
+  if (phase === "tasks_detached") {
+    await writeAuditEvent(db, opRef.id, { targetUid, targetName: name, removedBy });
     await opRef.update({ phase: "audited", updatedAt: FieldValue.serverTimestamp() });
     phase = "audited";
   }

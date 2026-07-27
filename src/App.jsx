@@ -1632,26 +1632,14 @@ function Board({ profile, isAdmin }) {
     setEditUser(null);
   };
   const removeUser = (id) => withFeedback(deleteDoc(doc(db, "users", id)), "✓ Removed from team", "Removing…");
-  // Safer team removal: detach the person from their tasks first (tasks stay),
-  // either reassigning owned work to someone else or marking it for reassignment.
+  // Safer team removal: runs the server-side removal saga (reversible tombstone +
+  // Auth disable + chunked task detachment + audit). The client never mutates
+  // tasks or deletes the profile directly — that's all trusted backend work.
   const removeUserWithTasks = async (user, { mode, target } = {}) => {
-    const updates = [];
-    for (const t of tasks) {
-      const ownsActive = t.owner === user.name && t.status !== "Posted";
-      const isCrew = (t.support || []).some(s => s.name === user.name);
-      if (!ownsActive && !isCrew) continue;
-      const patch = { updatedAt: serverTimestamp() };
-      if (ownsActive) {
-        patch.owner = mode === "reassign" && target ? target : "Pending";
-        patch.ownerSuggested = "";
-      }
-      if (isCrew) patch.support = t.support.filter(s => s.name !== user.name);
-      updates.push(updateDoc(doc(db, "tasks", t.id), patch));
-    }
-    await withFeedback((async () => {
-      await Promise.all(updates);
-      await deleteDoc(doc(db, "users", user.id));
-    })(), "✓ Removed from team", "Removing from team…");
+    const call = httpsCallable(functions, "removeUser");
+    await withFeedback(
+      call({ targetUid: user.id, policy: { mode: mode || "unassign", reassignToUid: mode === "reassign" ? target : undefined } }),
+      "✓ Removed from team", "Removing from team…");
   };
 
   /* ---- bulk-assign imported "Pending" tasks to a newly-matched user ---- */
@@ -3556,7 +3544,7 @@ function RemoveUserModal({ user, tasks, team, onClose, onConfirm }) {
   const owned = tasks.filter(t => t.owner === user.name && t.status !== "Posted");
   const others = team.filter(u => u.name !== user.name);
   const [mode, setMode] = useState("unassign");
-  const [target, setTarget] = useState(others[0]?.name || "");
+  const [target, setTarget] = useState(others[0]?.id || ""); // uid — the stable identity the server validates
   const [busy, setBusy] = useState(false);
 
   const go = async () => {
@@ -3588,7 +3576,7 @@ function RemoveUserModal({ user, tasks, team, onClose, onConfirm }) {
               </label>
               {mode==="reassign" && (
                 <select className="sb-select" style={{marginTop:6}} value={target} onChange={e=>setTarget(e.target.value)}>
-                  {others.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                  {others.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
               )}
             </div>
