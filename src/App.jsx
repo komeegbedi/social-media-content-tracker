@@ -1738,7 +1738,7 @@ function Board({ profile, isAdmin }) {
             {tab==="team"  && <Team tasks={tasks} users={users} />}
             {tab==="admin" && isAdmin && (
               <Admin users={allUsers} tasks={tasks} teamUsers={users} issues={issues} eventSeries={eventSeries}
-                secReq={adminSecReq}
+                secReq={adminSecReq} focusUser={nav.user}
                 onEditUser={setEditUser} onEditTask={setEditTask}
                 onDeleteUser={removeUser} onRemoveUser={removeUserWithTasks} onDeleteTask={deleteTask}
                 onArchiveTask={archiveTask} onDuplicateTask={duplicateTask} onOpenTask={setOpenId}
@@ -2405,9 +2405,15 @@ function CapCard({ u, load, tasks, open, onToggle }) {
   const staleCount = new Set(load.items
     .filter(i => staleFlags(tasks.find(t => t.id === i.taskId)).length > 0)
     .map(i => i.taskId)).size;
+  // Stable id linking every trigger to the one expandable region (a11y). Both
+  // the header row and the "needs attention" control drive the SAME open state.
+  const detailId = `member-capacity-${u.id}`;
+  const verb = open ? "Close" : "View";
   return (
     <div className={"sb-cap"+(open?" open":"")}>
-      <button className="sb-cap-hd sb-cap-toggle" onClick={onToggle} aria-expanded={open}>
+      <button className="sb-cap-hd sb-cap-toggle" onClick={onToggle}
+        aria-expanded={open} aria-controls={detailId}
+        aria-label={`${verb} ${u.name}'s workload`}>
         <span className="sb-av sb-cap-av" aria-hidden="true">{initials(u.name)}</span>
         <div className="sb-cap-id">
           <span className="sb-cap-name" title={u.name}>{u.name}</span>
@@ -2434,14 +2440,18 @@ function CapCard({ u, load, tasks, open, onToggle }) {
       </div>
 
       {staleCount > 0 && (
-        <button type="button" className="sb-cap-warn" onClick={()=>{ if(!open) onToggle(); }}>
+        // Same toggle + same region as the header row — the label reflects state
+        // ("View" ↔ "Close"), so it never looks like a second, separate action.
+        <button type="button" className="sb-cap-warn" onClick={onToggle}
+          aria-expanded={open} aria-controls={detailId}
+          aria-label={`${verb} ${u.name}'s workload`}>
           <ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/>
           <span><b>Needs attention</b> — {staleCount} status{staleCount!==1?"es":""} may be outdated</span>
-          <span className="sb-cap-warn-cta">Review</span>
+          <span className="sb-cap-warn-cta">{verb}</span>
         </button>
       )}
 
-      <div className="sb-cap-detailwrap" aria-hidden={!open}>
+      <div className="sb-cap-detailwrap" id={detailId} aria-hidden={!open}>
         <div className="sb-cap-detail">
           {load.items.length === 0
             ? <div className="sb-cap-empty">No production responsibilities scheduled.
@@ -3054,7 +3064,7 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
   );
 }
 
-function Admin({ users, tasks, teamUsers, issues, eventSeries, secReq, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
+function Admin({ users, tasks, teamUsers, issues, eventSeries, secReq, focusUser, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
   // Start on the requested section (deep-link / notification) so we never flash
   // "Overview" before switching — that intermediate render looked jumpy.
   const [sec, setSec] = useState(() => secReq?.sec || "overview");
@@ -3092,7 +3102,7 @@ function Admin({ users, tasks, teamUsers, issues, eventSeries, secReq, onEditUse
         onNewContent={()=>onEditTask("new")} onAutoAll={onAutoAll} onNewForEvent={onNewForEvent}
         onEditUser={onEditUser} onDeleteUser={onDeleteUser} onAssignSuggested={onAssignSuggested} />}
 
-      {sec==="people" && <AdminPeople users={users} tasks={tasks}
+      {sec==="people" && <AdminPeople users={users} tasks={tasks} focusUser={focusUser}
         onEditUser={onEditUser} onDeleteUser={onDeleteUser} onRemoveUser={onRemoveUser}
         onAssignSuggested={onAssignSuggested} />}
 
@@ -3249,7 +3259,8 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
           {pending.length===0
             ? <div className="sb-empty compact">No one is waiting to be approved.</div>
             : <div className="sb-prowlist">{pending.map(u => (
-                <PendingRow key={u.id} u={u} tasks={tasks} onReview={()=>onEditUser(u)} onReject={onDeleteUser} onAssignSuggested={onAssignSuggested} />
+                <PendingRow key={u.id} u={u} tasks={tasks}
+                  onReview={()=>onEditUser(u)} onReject={onDeleteUser} onAssignSuggested={onAssignSuggested} />
               ))}</div>}
         </section>
 
@@ -3375,10 +3386,23 @@ function AdminContent({ tasks, h, filter, setFilter, onNewContent, onAutoAll }) 
 
 /* A compact pending-approval row: identity + a single primary "Review" action.
    Reject is tucked into the kebab so the page isn't a wall of danger buttons. */
-function PendingRow({ u, tasks, onReview, onReject, onAssignSuggested }) {
+function PendingRow({ u, tasks, focus, onReview, onReject, onAssignSuggested }) {
   const [confirmReject, setConfirmReject] = useState(false);
+  // Arrived from a "waiting for approval" notification (…&user=<id>): scroll this
+  // exact person into view and flash them once so they're impossible to miss.
+  const rowRef = useRef(null);
+  const [flash, setFlash] = useState(false);
+  useEffect(() => {
+    if (!focus || !rowRef.current) return;
+    const t = setTimeout(() => {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      setFlash(true);
+      setTimeout(() => setFlash(false), 1600);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [focus]);
   return (
-    <div className="sb-prow">
+    <div className={"sb-prow"+(flash?" sb-flash":"")} ref={rowRef}>
       <span className="sb-av" style={{width:38,height:38,fontSize:13}}>{initials(u.name)}</span>
       <div className="sb-prow-main">
         <div className="sb-prow-name">{u.name}</div>
@@ -3440,7 +3464,7 @@ function PersonCard({ u, tasks, onEdit, onRemove }) {
 }
 
 /* People = approvals + team management: search, filters, grouped roster. */
-function AdminPeople({ users, tasks, onEditUser, onDeleteUser, onRemoveUser, onAssignSuggested }) {
+function AdminPeople({ users, tasks, focusUser, onEditUser, onDeleteUser, onRemoveUser, onAssignSuggested }) {
   const [q, setQ] = useState("");
   const [pushFilter, setPushFilter] = useState("all");
   const [filter, setFilter] = useState("all");
@@ -3464,7 +3488,7 @@ function AdminPeople({ users, tasks, onEditUser, onDeleteUser, onRemoveUser, onA
         <div className="sb-shead sb-shead-strong"><h2>Waiting for approval</h2><span className="sb-tag">{pending.length}</span></div>
         <div className="sb-prowlist" style={{marginBottom:18}}>
           {pending.map(u => (
-            <PendingRow key={u.id} u={u} tasks={tasks}
+            <PendingRow key={u.id} u={u} tasks={tasks} focus={u.id===focusUser}
               onReview={()=>onEditUser(u)} onReject={onDeleteUser} onAssignSuggested={onAssignSuggested} />
           ))}
         </div>

@@ -81,7 +81,7 @@ async function sendPush(uid, { title, body, url }) {
 /* Canonical deep-link for push/email, mirroring src/nav.js notificationDestination
    so an external tap lands exactly where an in-app tap would. Kept in sync by
    hand (server is CommonJS, client is ESM); the client mapper is the reference. */
-function deepLinkUrl({ type, taskId, eventOccurrenceId, commentId, route }) {
+function deepLinkUrl({ type, taskId, eventOccurrenceId, commentId, userId, route }) {
   if (route) return route;
   if (taskId) {
     const focus = type === "qa" ? "review"
@@ -92,16 +92,18 @@ function deepLinkUrl({ type, taskId, eventOccurrenceId, commentId, route }) {
     return `/content/${encodeURIComponent(taskId)}${q.length ? `?${q.join("&")}` : ""}`;
   }
   if (eventOccurrenceId) return `/workflow?event=${encodeURIComponent(eventOccurrenceId)}`;
+  // Account/people alerts → Admin → People, highlighting the user when known.
+  if (type === "account_pending") return `/admin?section=people${userId ? `&user=${encodeURIComponent(userId)}` : ""}`;
   if (type === "leadership") return "/workflow?filter=attention";
   if (type === "weeklyTaskCheck") return "/my-day";
   return "/";
 }
 
 /* ---- idempotent notification write ---- */
-async function writeNotification({ id, uid, type, title, body = "", taskId = "", eventOccurrenceId = "", commentId = "" }) {
+async function writeNotification({ id, uid, type, title, body = "", taskId = "", eventOccurrenceId = "", commentId = "", userId = "" }) {
   try {
     await db.collection("notifications").doc(id).create({
-      uid, type, title, body, taskId, eventOccurrenceId, commentId,
+      uid, type, title, body, taskId, eventOccurrenceId, commentId, userId,
       read: false, channels: ["in-app"], dedupeKey: id,
       createdAt: FieldValue.serverTimestamp(),
     });
@@ -131,18 +133,19 @@ const NOTIFY_POLICY = {
   overdue:          { channels: ["in-app", "push"],            priority: "critical" },
   mention:          { channels: ["in-app", "push"],            priority: "action" },
   account_approved: { channels: ["in-app", "email"],          priority: "critical" },
+  account_pending:  { channels: ["in-app", "push", "email"],  priority: "critical" },
   leadership:       { channels: ["in-app"],                    priority: "standard" },
   weeklyTaskCheck:  { channels: ["in-app", "push"],            priority: "standard" },
 };
 const policyFor = (type) => NOTIFY_POLICY[type] || { channels: ["in-app", "push"], priority: "standard" };
 
-async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, commentId = "", keyBase, required = false, channels = null, whenText = "", priority = "", route = "" }) {
+async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, commentId = "", userId = "", keyBase, required = false, channels = null, whenText = "", priority = "", route = "" }) {
   const pol = policyFor(type);
   const chans = channels || pol.channels;              // explicit override wins
   const pri = priority || pol.priority;
   // Push/email land on the SAME place as the in-app tap (canonical routes,
   // mirroring src/nav.js notificationDestination).
-  const url = deepLinkUrl({ type, taskId, eventOccurrenceId, commentId, route });
+  const url = deepLinkUrl({ type, taskId, eventOccurrenceId, commentId, userId, route });
   const pushChannel = chans.includes("push");
   const emailChannel = chans.includes("email");
   const seen = new Set();
@@ -150,7 +153,7 @@ async function notifyUsers(recipients, { type, title, body, taskId, eventOccurre
     if (seen.has(u.uid)) return; seen.add(u.uid);
     if (!required && !prefsAllow(u, type)) return;
     const notificationId = `${keyBase}_${u.uid}`;
-    const created = await writeNotification({ id: notificationId, uid: u.uid, type, title, body, taskId, eventOccurrenceId, commentId });
+    const created = await writeNotification({ id: notificationId, uid: u.uid, type, title, body, taskId, eventOccurrenceId, commentId, userId });
     if (!created) return; // idempotent: someone already delivered this one
     // Fan out to external channels (only on the first write; each respects prefs).
     if (pushChannel && pushAllow(u)) await sendPush(u.uid, { title, body, url });

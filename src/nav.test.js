@@ -207,3 +207,31 @@ test("overlayClose unwinds to the parent, never re-pushes it (Task↔Edit loop f
   assert.deepEqual(overlayClose({ search: "?event=e1", canGoBack: true }), { type: "noop" });
   assert.deepEqual(overlayClose({ search: "", canGoBack: true }), { type: "noop" });
 });
+
+test("a pending-approval notification opens Admin → People and highlights the user", () => {
+  // The originally-reported bug: this used to route to Workflow. It must go to
+  // Admin → People, focused on the exact pending person.
+  assert.deepEqual(
+    notificationDestination({ type: "account_pending", userId: "u42" }),
+    { pathname: "/admin", search: "?section=people&user=u42" });
+  // Without a userId it still lands on People (never Workflow).
+  assert.deepEqual(
+    notificationDestination({ type: "account_pending" }),
+    { pathname: "/admin", search: "?section=people" });
+  // An explicit adminSection is honoured for future account/permission alerts.
+  assert.deepEqual(
+    notificationDestination({ type: "leadership", adminSection: "people", userId: "u9" }),
+    { pathname: "/admin", search: "?section=people&user=u9" });
+  // /admin?section=people&user=... round-trips through the parser.
+  const s = parseLocation("/admin", "?section=people&user=u42");
+  assert.equal(s.screen, "admin");
+  assert.equal(s.section, "people");
+  assert.equal(s.user, "u42");
+});
+
+test("the leadership DIGEST still routes to the follow-up list, not People", () => {
+  // A genuine summary (no user/adminSection) stays on Workflow's attention filter.
+  assert.deepEqual(
+    notificationDestination({ type: "leadership", body: "4 overdue · 1 blocked" }),
+    { pathname: "/workflow", search: "?filter=attention" });
+});

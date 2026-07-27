@@ -582,7 +582,10 @@ a{color:var(--primary)}
 @media(min-width:900px){
   .sb-caplist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;
     max-width:1120px;margin:0 auto;align-items:start}
-  .sb-cap.open{grid-column:1/-1;order:-1}
+  /* A card expands IN PLACE — vertically, within its own column. It must NOT
+     jump to the front (order) or span both columns (grid-column), which yanked
+     it to the top and reflowed the list. `align-items:start` keeps the row-mate
+     top-anchored while this card grows. */
 }
 .sb-cap{transition:border-color var(--motion-fast) var(--ease-standard),box-shadow var(--motion-fast) var(--ease-standard)}
 .sb-cap:hover{border-color:var(--border-strong)}
