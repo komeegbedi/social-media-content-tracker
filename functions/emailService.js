@@ -107,22 +107,47 @@ function isPermanent(err) {
   return code >= 400 && code < 500;
 }
 
-// Atomically claim the delivery record. Returns "claimed" | "already-sent" | "in-progress".
+// Atomically claim the delivery record for an attempt. Returns
+// { status: "claimed"|"sent"|"failed"|"suppressed_quota_limit"|"in-progress",
+//   attemptCount, reserved }. A settled delivery (sent/failed/suppressed) is
+// terminal and never re-attempted; an unsettled pending/unknown one is claimable
+// (and carries its existing reservation forward via `reserved`).
 async function claimDelivery(ref, meta) {
   const now = Date.now();
   return getFirestore().runTransaction(async (tx) => {
     const s = await tx.get(ref);
     if (!s.exists) {
-      tx.set(ref, { ...meta, status: "processing", attemptCount: 1, leaseUntil: now + LEASE_MS,
-        createdAt: FieldValue.serverTimestamp() });
-      return "claimed";
+      tx.set(ref, { ...meta, status: "processing", attemptCount: 1, reserved: false, settled: false,
+        leaseUntil: now + LEASE_MS, createdAt: FieldValue.serverTimestamp() });
+      return { status: "claimed", attemptCount: 1, reserved: false };
     }
     const d = s.data();
-    if (d.status === "sent") return "already-sent";
-    if (d.status === "processing" && d.leaseUntil && d.leaseUntil > now) return "in-progress";
-    tx.update(ref, { status: "processing", attemptCount: (d.attemptCount || 0) + 1, leaseUntil: now + LEASE_MS });
-    return "claimed";
+    if (d.settled || d.status === "sent") return { status: d.status };          // terminal
+    if (d.status === "processing" && d.leaseUntil && d.leaseUntil > now) return { status: "in-progress" };
+    const attemptCount = (d.attemptCount || 0) + 1;
+    tx.update(ref, { status: "processing", attemptCount, leaseUntil: now + LEASE_MS });
+    return { status: "claimed", attemptCount, reserved: !!d.reserved };
   });
+}
+
+// Give up after this many attempts (releasing the one reservation exactly once).
+const MAX_EMAIL_ATTEMPTS = 5;
+
+// A transient/uncertain outcome: retry (keeping the single reservation) until the
+// attempt cap, then give up — releasing that reservation exactly once. Returns a
+// retryable status before the cap, or a terminal permanent-failure at it.
+async function retryOrGiveUp(ref, quota, period, attemptCount, transientStatus, code, msg, notificationId) {
+  if (attemptCount >= MAX_EMAIL_ATTEMPTS) {
+    await quota.settleReservation(ref, "release", period, {
+      status: "failed", errorCode: "exhausted", errorMessage: String(msg || "").slice(0, 300),
+      failedAt: FieldValue.serverTimestamp(),
+    });
+    logger.error("email gave up after retries", { notificationId, attempts: attemptCount });
+    return { status: "failed", permanent: true };
+  }
+  await ref.update({ status: transientStatus, errorCode: code, errorMessage: String(msg || "").slice(0, 300) });
+  logger.warn("email transient — will retry", { notificationId, attempt: attemptCount, transientStatus });
+  return { status: transientStatus };
 }
 
 function getKey() {
@@ -149,8 +174,10 @@ function buildDigestEmail({ recipientName, items, url }) {
   return { subject: `You have ${items.length} content reminder${items.length !== 1 ? "s" : ""}`, html, text };
 }
 
-/* Shared core: claim → reserve budget → send via Resend → commit outcome.
-   Idempotent per notificationId. Never throws. */
+/* Shared core: claim → reserve budget ONCE → send via Resend → settle outcome
+   EXACTLY ONCE. Idempotent per notificationId, and safe to re-attempt: the single
+   reservation is reused across retries (never re-reserved) and the same Resend
+   idempotency key means a re-send never double-delivers. Never throws. */
 async function _deliver({ notificationId, to, type, priority, subject, html, text, meta }) {
   const quota = require("./emailQuota");
   const db = getFirestore();
@@ -159,46 +186,54 @@ async function _deliver({ notificationId, to, type, priority, subject, html, tex
   if (!key) { logger.warn("email skipped: RESEND_API_KEY not available", { notificationId }); return { status: "skipped", reason: "no-secret" }; }
 
   const ref = db.collection("emailDeliveries").doc(notificationId);
+  const period = quota.periods();
   let claim;
   try { claim = await claimDelivery(ref, meta); }
   catch (e) { logger.error("email claim failed", { notificationId, error: e.message }); return { status: "error", reason: "claim" }; }
-  if (claim !== "claimed") return { status: claim };
+  if (claim.status !== "claimed") {
+    if (claim.status === "sent") return { status: "already-sent" };
+    if (claim.status === "in-progress") return { status: "in-progress" };
+    return { status: "failed", permanent: true };            // already-settled terminal (failed/suppressed)
+  }
 
-  // Atomically reserve budget; suppress (in-app is unaffected) if denied.
-  const period = quota.periods();
-  const res = await quota.reserve({ type, priority, period });
-  if (!res.allowed) {
-    await ref.update({ status: "suppressed_quota_limit", suppressReason: res.reason, failedAt: FieldValue.serverTimestamp() });
-    logger.warn("email suppressed by quota", { notificationId, type, reason: res.reason, usedPct: res.usedPct });
-    return { status: "suppressed", reason: res.reason };
+  // Reserve budget EXACTLY ONCE (atomic with the doc flag; a retry reuses it).
+  if (!claim.reserved) {
+    const res = await quota.reserve({ type, priority, period, deliveryRef: ref });
+    if (!res.allowed) {
+      logger.warn("email suppressed by quota", { notificationId, type, reason: res.reason, usedPct: res.usedPct });
+      return { status: "suppressed", reason: res.reason };
+    }
+    if ((res.newThresholds && res.newThresholds.length) || res.dailyAlert) {
+      try { await quota.alertAdmins({ monthlyThresholds: res.newThresholds || [], daily: !!res.dailyAlert, period, usedPct: res.usedPct }); }
+      catch (e) { logger.warn("quota alert failed", { error: e.message }); }
+    }
   }
-  if ((res.newThresholds && res.newThresholds.length) || res.dailyAlert) {
-    try { await quota.alertAdmins({ monthlyThresholds: res.newThresholds || [], daily: !!res.dailyAlert, period, usedPct: res.usedPct }); }
-    catch (e) { logger.warn("quota alert failed", { error: e.message }); }
-  }
-  await ref.update({ usagePeriod: period.month, usageDay: period.day, reservedAt: FieldValue.serverTimestamp() });
 
   const payload = { from: SENDER, to, subject, html, text };
   if (REPLY_TO) payload.reply_to = REPLY_TO;
   let response;
   try { response = await new Resend(key).emails.send(payload, { idempotencyKey: notificationId }); }
   catch (e) {
-    // Uncertain outcome (network/timeout): keep the reservation, leave "unknown"
-    // for the reconcile job — never release/resend blindly.
-    await ref.update({ status: "unknown", errorCode: "network", errorMessage: String((e && e.message) || "").slice(0, 300) });
-    logger.error("email send uncertain (kept reserved)", { notificationId, error: String((e && e.message) || "").slice(0, 200) });
-    return { status: "unknown" };
+    // Uncertain (network/timeout): keep the reservation and re-attempt later with
+    // the SAME idempotency key (Resend dedupes → never a double-send).
+    return retryOrGiveUp(ref, quota, period, claim.attemptCount, "unknown", "network", (e && e.message) || "", notificationId);
   }
   const { data, error } = response;
   if (error) {
-    const permanent = isPermanent({ statusCode: error.statusCode });
-    if (permanent) { await quota.commitFailed(period); await ref.update({ status: "failed", failedAt: FieldValue.serverTimestamp(), errorCode: String(error.statusCode || ""), errorMessage: String(error.message || "").slice(0, 300) }); }
-    else { await quota.release(period); await ref.update({ status: "pending", errorCode: String(error.statusCode || ""), errorMessage: String(error.message || "").slice(0, 300) }); }
-    logger.error("email send failed", { notificationId, permanent, code: error.statusCode });
-    return { status: "failed", permanent };
+    if (isPermanent({ statusCode: error.statusCode })) {
+      await quota.settleReservation(ref, "failed", period, {
+        status: "failed", failedAt: FieldValue.serverTimestamp(),
+        errorCode: String(error.statusCode || ""), errorMessage: String(error.message || "").slice(0, 300),
+      });
+      logger.error("email send failed (permanent)", { notificationId, code: error.statusCode });
+      return { status: "failed", permanent: true };
+    }
+    return retryOrGiveUp(ref, quota, period, claim.attemptCount, "pending", String(error.statusCode || ""), error.message, notificationId);
   }
-  await quota.commitSent(period);
-  await ref.update({ status: "sent", providerMessageId: (data && data.id) || "", sentAt: FieldValue.serverTimestamp(), errorCode: "", errorMessage: "" });
+  await quota.settleReservation(ref, "sent", period, {
+    status: "sent", providerMessageId: (data && data.id) || "", sentAt: FieldValue.serverTimestamp(),
+    errorCode: "", errorMessage: "",
+  });
   logger.info("email sent", { notificationId, type, providerMessageId: (data && data.id) || "" });
   return { status: "sent", providerMessageId: (data && data.id) || "" };
 }

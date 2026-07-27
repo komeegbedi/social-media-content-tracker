@@ -46,12 +46,20 @@ const monthDefaults = (period) => ({ provider: "resend", period, monthlyLimit: M
 const dayDefaults = (period) => ({ provider: "resend", period, dailyLimit: DAILY_LIMIT,
   reservedCount: 0, sentCount: 0, suppressedCount: 0, alertedDaily: false });
 
-/* Atomically reserve one email against the monthly + daily budgets, applying
-   priority gating. Returns { allowed, reason?, usedPct, newThresholds[], dailyAlert }. */
-async function reserve({ type, priority, period }) {
+/* Atomically reserve ONE email against the monthly + daily budgets, applying
+   priority gating — and, in the SAME transaction, stamp the delivery doc as
+   `reserved` so a reservation and its record can never disagree (no leak on a
+   crash between the two). Idempotent per delivery: if the doc is already
+   reserved (a prior attempt), no second reservation is taken.
+   Returns { allowed, reason?, usedPct, newThresholds[], dailyAlert }. */
+async function reserve({ type, priority, period, deliveryRef }) {
   const pr = priorityOf(type, priority);
   const mRef = monthRef(period.month), dRef = dayRef(period.day);
   return db.runTransaction(async (tx) => {
+    // Reads first. A reservation already held for this delivery → reuse it.
+    const dvSnap = deliveryRef ? await tx.get(deliveryRef) : null;
+    if (dvSnap && dvSnap.exists && dvSnap.data().reserved) return { allowed: true, already: true };
+
     const [mSnap, dSnap] = await Promise.all([tx.get(mRef), tx.get(dRef)]);
     const m = mSnap.exists ? mSnap.data() : monthDefaults(period.month);
     const d = dSnap.exists ? dSnap.data() : dayDefaults(period.day);
@@ -71,10 +79,12 @@ async function reserve({ type, priority, period }) {
     if (deny) {
       tx.set(mRef, { ...m, suppressedCount: (m.suppressedCount || 0) + 1, lastUpdatedAt: FieldValue.serverTimestamp() }, { merge: true });
       tx.set(dRef, { ...d, suppressedCount: (d.suppressedCount || 0) + 1, lastUpdatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      // Suppressed is terminal — never reserved, so it's already settled.
+      if (deliveryRef) tx.update(deliveryRef, { status: "suppressed_quota_limit", suppressReason: deny, reserved: false, settled: true, failedAt: FieldValue.serverTimestamp() });
       return { allowed: false, reason: deny, usedPct };
     }
 
-    // Reserve.
+    // Reserve, and flag the delivery doc atomically.
     const newReservedM = (m.reservedCount || 0) + 1;
     const newUsedM = (m.sentCount || 0) + newReservedM;
     const alerted = m.alertedThresholds || [];
@@ -87,28 +97,41 @@ async function reserve({ type, priority, period }) {
     tx.set(dRef, { ...d, reservedCount: newReservedD,
       alertedDaily: d.alertedDaily || dailyAlert, lastUpdatedAt: FieldValue.serverTimestamp() }, { merge: true });
 
+    if (deliveryRef) tx.update(deliveryRef, { reserved: true, settled: false,
+      usagePeriod: period.month, usageDay: period.day, reservedAt: FieldValue.serverTimestamp() });
+
     return { allowed: true, usedPct: Math.round((newUsedM / mLimit) * 100), newThresholds, dailyAlert };
   });
 }
 
-// reserved -1, sent +1 (email accepted by Resend).
-function commitSent(period) { return adjust(period, { rM: -1, sM: +1, rD: -1, sD: +1 }); }
-// reserved -1, failed +1 (permanent Resend failure).
-function commitFailed(period) { return adjust(period, { rM: -1, fM: +1, rD: -1 }); }
-// reserved -1 (temporary failure — not sent; will retry, no send/fail counted).
-function release(period) { return adjust(period, { rM: -1, rD: -1 }); }
-
-async function adjust(period, { rM = 0, sM = 0, fM = 0, rD = 0, sD = 0 }) {
+/* Settle a delivery's SINGLE reservation EXACTLY ONCE, atomically with the
+   delivery-doc flag flip, so a reservation can never leak or be double-released.
+   kind: "sent" | "failed" | "release". `extra` patches the delivery doc. A no-op
+   (but still records `extra`) when the delivery was never reserved or is already
+   settled — this is what makes double-release impossible. */
+async function settleReservation(deliveryRef, kind, period, extra = {}) {
   const mRef = monthRef(period.month), dRef = dayRef(period.day);
-  await db.runTransaction(async (tx) => {
+  return db.runTransaction(async (tx) => {
+    const dvSnap = await tx.get(deliveryRef);
+    if (!dvSnap.exists) return { settled: false };
+    const dv = dvSnap.data();
+    if (!dv.reserved || dv.settled) {
+      if (Object.keys(extra).length) tx.update(deliveryRef, extra);
+      return { settled: false };
+    }
     const [mS, dS] = await Promise.all([tx.get(mRef), tx.get(dRef)]);
     const m = mS.exists ? mS.data() : monthDefaults(period.month);
-    const d = dS.exists ? dS.data() : dayDefaults(period.day);
-    tx.set(mRef, { reservedCount: Math.max(0, (m.reservedCount || 0) + rM),
-      sentCount: (m.sentCount || 0) + sM, failedCount: (m.failedCount || 0) + fM,
+    const day = dS.exists ? dS.data() : dayDefaults(period.day);
+    const adj = kind === "sent" ? { rM: -1, sM: +1, rD: -1, sD: +1 }
+      : kind === "failed" ? { rM: -1, fM: +1, rD: -1 }
+        : { rM: -1, rD: -1 }; // release
+    tx.set(mRef, { reservedCount: Math.max(0, (m.reservedCount || 0) + adj.rM),
+      sentCount: (m.sentCount || 0) + (adj.sM || 0), failedCount: (m.failedCount || 0) + (adj.fM || 0),
       lastUpdatedAt: FieldValue.serverTimestamp() }, { merge: true });
-    tx.set(dRef, { reservedCount: Math.max(0, (d.reservedCount || 0) + rD),
-      sentCount: (d.sentCount || 0) + sD, lastUpdatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    tx.set(dRef, { reservedCount: Math.max(0, (day.reservedCount || 0) + adj.rD),
+      sentCount: (day.sentCount || 0) + (adj.sD || 0), lastUpdatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    tx.update(deliveryRef, { reserved: false, settled: true, ...extra });
+    return { settled: true };
   });
 }
 
@@ -133,20 +156,26 @@ async function alertAdmins({ monthlyThresholds = [], daily = false, period, used
   await Promise.all(jobs);
 }
 
-/* Reconcile deliveries whose outcome is unknown (function crashed/timed out
-   after reserving): release the stuck reservation and mark them failed, so
-   reservations don't leak. Idempotency keys mean we never resend. */
+/* Backstop for deliveries left unresolved past the grace window — a crash with no
+   retry loop to finish them. The retry loops (the notification delivery sweep and
+   the digest flush) normally resolve `unknown`/`pending` by re-attempting with the
+   same idempotency key; reconcile only gives up on the stragglers, releasing the
+   single reservation EXACTLY ONCE (guarded by the settled flag → never a
+   double-release). Idempotency keys mean we never resend. */
 async function reconcile(graceMs = 60 * 60 * 1000) {
   const cutoff = Date.now() - graceMs;
-  const stuck = await db.collection("emailDeliveries").where("status", "==", "unknown").limit(50).get();
+  const stuck = await db.collection("emailDeliveries")
+    .where("status", "in", ["unknown", "pending"]).limit(50).get();
   let released = 0;
   for (const doc of stuck.docs) {
     const x = doc.data();
-    const ra = x.reservedAt && x.reservedAt.toMillis ? x.reservedAt.toMillis() : 0;
-    if (ra && ra > cutoff) continue; // still within grace
-    if (x.usagePeriod && x.usageDay) await release({ month: x.usagePeriod, day: x.usageDay });
-    await doc.ref.update({ status: "failed", errorCode: "reconciled", errorMessage: "released after uncertain outcome" });
-    released++;
+    if (x.settled || !x.reserved) continue;                 // already accounted for
+    const ra = (x.reservedAt && x.reservedAt.toMillis) ? x.reservedAt.toMillis() : 0;
+    if (ra && ra > cutoff) continue;                        // still within grace → let the retry loops try
+    if (!x.usagePeriod || !x.usageDay) { await doc.ref.update({ settled: true, status: "failed" }); continue; }
+    const r = await settleReservation(doc.ref, "release", { month: x.usagePeriod, day: x.usageDay },
+      { status: "failed", errorCode: "reconciled", errorMessage: "released after grace (gave up)" });
+    if (r.settled) released++;
   }
   return released;
 }
@@ -159,5 +188,5 @@ async function snapshot() {
 
 module.exports = {
   MONTHLY_LIMIT, DAILY_LIMIT, priorityOf, periods,
-  reserve, commitSent, commitFailed, release, alertAdmins, reconcile, snapshot,
+  reserve, settleReservation, alertAdmins, reconcile, snapshot,
 };
