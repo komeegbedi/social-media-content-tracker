@@ -1572,6 +1572,15 @@ export function tmMillis(v) {
   return 0;
 }
 
+// Team members a user can @mention: approved teammates other than themselves,
+// sorted by name. The UID (`id`) is the identity that gets stored; the name is
+// only for display + the copy.
+export function mentionableUsers(users, me) {
+  return (users || [])
+    .filter((u) => u && u.id !== (me && me.id) && isApproved(u))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+}
+
 // Identity of a comment for dedup: author + text + when. A migrated subcollection
 // doc keeps the original values, so it collides with its embedded twin and the two
 // collapse to one. New subcollection comments (server timestamp) never collide with

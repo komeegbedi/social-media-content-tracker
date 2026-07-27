@@ -33,7 +33,7 @@ import {
   isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, loadSummary, crewReason, sameCrew, dateIssues, todayStr, isShootType,
   personLoad, responsibilityTier, staleFlags, orderedCrew,
   isApproved, isQA, isProductionMember, isAssignable, QA_DEPARTMENT,
-  mergeComments,
+  mergeComments, mentionableUsers,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
@@ -1593,9 +1593,10 @@ function Board({ profile, isAdmin }) {
   // Comments live in the tasks/{id}/comments subcollection (the canonical store).
   // The author is the trusted signed-in uid — never a client-supplied name — and
   // the timestamp is server-set; rules reject anything else.
-  const addComment = (task, txt) => withFeedback(
+  const addComment = (task, txt, mentions = []) => withFeedback(
     addDoc(collection(db, "tasks", task.id, "comments"), {
-      uid: me.id, who: me.name, txt, tm: serverTimestamp(), mentions: [],
+      uid: me.id, who: me.name, txt, tm: serverTimestamp(),
+      mentions: [...new Set(mentions)].slice(0, 20), // uids; server re-validates + the trigger notifies
     }), "✓ Note posted");
   // Reactions are a read-modify-write on one shared map, so concurrent taps from
   // different people would clobber each other. Run it in a transaction: Firestore
@@ -1843,6 +1844,7 @@ function Board({ profile, isAdmin }) {
       {openTask && (
         <TaskDetail key={openTask.id} task={openTask} me={me} isAdmin={isAdmin}
           isQA={isAdmin || !!me.qa}
+          users={users}
           focus={nav.focus} highlightComment={nav.comment}
           onClose={()=>setOpenId(null)}
           onStatus={(s)=>setStatus(openTask, s)}
@@ -1851,7 +1853,7 @@ function Board({ profile, isAdmin }) {
           onLinks={(links)=>setLinks(openTask, links)}
           onRequestChanges={(note)=>qaRequestChanges(openTask, note)}
           onBlocked={(b)=>setBlocked(openTask.id, b)}
-          onComment={(txt)=>addComment(openTask, txt)}
+          onComment={(txt, mentions)=>addComment(openTask, txt, mentions)}
           onReact={(emo)=>toggleReact(openTask, emo)}
           onSaved={()=>flashBanner("✓ Saved just now")}
           onDuplicate={isAdmin ? async ()=>{ await duplicateTask(openTask); setOpenId(null); } : undefined}
@@ -4027,9 +4029,21 @@ function MissingContent({ onBack }) {
   );
 }
 
-function TaskDetail({ task, me, isAdmin, isQA, focus, highlightComment, onClose, onStatus, onAction, onApprove, onLinks, onRequestChanges, onBlocked, onComment, onReact, onEdit, onDuplicate, onArchive, onDelete, onSaved }) {
+function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, onClose, onStatus, onAction, onApprove, onLinks, onRequestChanges, onBlocked, onComment, onReact, onEdit, onDuplicate, onArchive, onDelete, onSaved }) {
   const [confirmDel, setConfirmDel] = useState(false);   // admin delete confirmation
   const [draft, setDraft] = useState("");
+  // @mentions: uids selected from the team (the identity that gets stored); the
+  // "@Name" inserted into the note is just context. Server re-validates.
+  const [mentions, setMentions] = useState([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const mentionCandidates = useMemo(() => mentionableUsers(users, me), [users, me]);
+  const mentionedUsers = mentions.map((id) => mentionCandidates.find((u) => u.id === id)).filter(Boolean);
+  const addMention = (u) => {
+    if (!mentions.includes(u.id)) { setMentions((m) => [...m, u.id]); setDraft((d) => `${d}${d && !d.endsWith(" ") ? " " : ""}@${(u.name || "").split(/\s+/)[0]} `); }
+    setMentionOpen(false);
+  };
+  const removeMention = (id) => setMentions((m) => m.filter((x) => x !== id));
+  const postNote = () => { onComment(draft.trim(), mentions); setDraft(""); setMentions([]); setMentionOpen(false); };
   // Local drafts; persisted on blur. Component is keyed by task id, so these
   // reset when a new task opens.
   const [blocked, setBlocked] = useState(task.blockedOn || "");
@@ -4325,7 +4339,33 @@ function TaskDetail({ task, me, isAdmin, isQA, focus, highlightComment, onClose,
           <div className="sb-field" style={{marginTop:10}}>
             <textarea rows={2} placeholder="Add a note for the crew…" value={draft} onChange={e=>setDraft(e.target.value)} />
           </div>
-          <button className="sb-btn compact" disabled={!draft.trim()} onClick={()=>{ onComment(draft.trim()); setDraft(""); }}>Post note</button>
+          {mentionedUsers.length>0 && (
+            <div className="sb-mention-chips" style={{display:"flex",flexWrap:"wrap",gap:6,margin:"8px 0 2px"}}>
+              {mentionedUsers.map((u)=>(
+                <span key={u.id} className="sb-chip" style={{display:"inline-flex",alignItems:"center",gap:4}}>
+                  @{u.name}
+                  <button type="button" aria-label={`Remove ${u.name}`} className="sb-chip-x" onClick={()=>removeMention(u.id)}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8,position:"relative"}}>
+            <button className="sb-btn compact" disabled={!draft.trim()} onClick={postNote}>Post note</button>
+            {mentionCandidates.length>0 && (
+              <button type="button" className="sb-btn ghost compact" aria-haspopup="listbox" aria-expanded={mentionOpen}
+                onClick={()=>setMentionOpen((o)=>!o)}>@ Mention</button>
+            )}
+            {mentionOpen && (
+              <div className="sb-mention-menu" role="listbox" style={{position:"absolute",bottom:"100%",left:0,marginBottom:6,zIndex:20,maxHeight:220,overflowY:"auto",minWidth:200,background:"var(--card,#fff)",border:"1px solid var(--line,#e6e2ec)",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,.12)"}}>
+                {mentionCandidates.map((u)=>(
+                  <button key={u.id} type="button" role="option" aria-selected={mentions.includes(u.id)}
+                    className="sb-mention-item" disabled={mentions.includes(u.id)}
+                    style={{display:"block",width:"100%",textAlign:"left",padding:"8px 12px",background:"none",border:"none",cursor:mentions.includes(u.id)?"default":"pointer",opacity:mentions.includes(u.id)?.5:1}}
+                    onClick={()=>addMention(u)}>{u.name}{mentions.includes(u.id)?" ✓":""}</button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Workflow moves through the explicit action above; admins keep a
               tucked-away manual override for corrections (not a duplicate field). */}
