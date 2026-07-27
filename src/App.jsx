@@ -1067,7 +1067,12 @@ function Login({ online = true }) {
     if (c.includes("weak-password")) return "Password should be at least 6 characters.";
     if (c.includes("invalid-email")) return "That doesn't look like a valid email.";
     if (c.includes("too-many-requests")) return "Too many attempts. Please wait a moment and try again.";
-    if (c.includes("popup-closed")) return "Google sign-in was cancelled.";
+    if (c.includes("popup-closed") || c.includes("cancelled-popup")) return "Google sign-in was cancelled.";
+    if (c.includes("popup-blocked")) return "Your browser blocked the sign-in window. Allow pop-ups for this site, or use email sign-in.";
+    // Safari/iOS storage-partitioning: the OAuth handoff lost its state. Retrying
+    // in the same tab usually clears it; email sign-in always works.
+    if (c.includes("missing-initial-state") || /missing initial state/i.test((e && e.message) || ""))
+      return "Google sign-in couldn't complete on this browser. Please tap it again, or sign in with email.";
     return "Something went wrong. Please try again.";
   };
 
@@ -4962,11 +4967,15 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
 
           {qaMode ? (
             // QA is a reviewer — a distinct discipline. No production skills,
-            // location, availability, or staffing controls.
-            <div className="sb-banner" style={{marginBottom:4}}>
-              Reviewers belong to the <b>QA</b> department. They review and approve
-              content and are never part of the production crew — so production skills,
-              location, and availability don't apply.
+            // location, availability, or staffing controls. Structured callout
+            // (icon · title · supporting text) so the role reads at a glance.
+            <div className="sb-rolenote" role="note">
+              <ClipboardDocumentCheckIcon className="hi sb-rolenote-ic" aria-hidden="true" />
+              <div className="sb-rolenote-bd">
+                <div className="sb-rolenote-ti">QA Reviewer</div>
+                <p className="sb-rolenote-tx">Reviews and approves content before it's published.</p>
+                <p className="sb-rolenote-sub">Production skills, location, and availability don't apply.</p>
+              </div>
             </div>
           ) : (<>
           <div className="sb-field"><label>Departments <span className="sb-optional">(one or more)</span></label>

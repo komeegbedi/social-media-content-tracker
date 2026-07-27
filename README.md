@@ -443,6 +443,30 @@ Requires the **Blaze** (pay-as-you-go) plan.
 
 **Rollback:** revert Hosting in the console (or redeploy a previous build); disable a misbehaving function with `firebase functions:delete <name>`.
 
+### Troubleshooting
+
+**Google sign-in fails on iOS/Safari with _"missing initial state … sessionStorage"_.**
+The app is served from `*.web.app` (or a custom domain) while Firebase Auth's OAuth
+handler runs on `*.firebaseapp.com` — **different origins**. Safari's storage
+partitioning gives the handler its own `sessionStorage`, so the sign-in state
+written before the redirect is invisible when the handler reads it. There is no
+client-side workaround; the auth handler must be **same-origin** with the app.
+
+Fix (one-time, in the Google Cloud console — Firebase can't do it for you):
+
+1. **Google Cloud Console → APIs & Services → Credentials →** the OAuth 2.0
+   Client ID *"Web client (auto created by Google Service)"*.
+2. Add to **Authorized redirect URIs**: `https://<your-app-domain>/__/auth/handler`
+   (e.g. `https://ifc-social-media-tracker.web.app/__/auth/handler`).
+3. Add to **Authorized JavaScript origins**: `https://<your-app-domain>`.
+4. Confirm the domain is listed under **Firebase Console → Authentication →
+   Settings → Authorized domains**.
+5. Set `VITE_FIREBASE_AUTH_DOMAIN` to `<your-app-domain>`, rebuild, and redeploy.
+
+> Skipping step 1 and just changing `authDomain` returns **`redirect_uri_mismatch`**.
+> The most robust long-term setup is a **custom domain** used as both the app URL
+> and `authDomain`.
+
 ---
 
 ## Roadmap
