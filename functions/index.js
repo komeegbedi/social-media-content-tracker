@@ -16,3 +16,4 @@ exports.cleanupRetention = require("./cleanupRetention").cleanupRetention;
 exports.weeklyTaskCheck = require("./weeklyTaskCheck").weeklyTaskCheck;
 exports.onFcmTokenWrite = require("./onFcmTokenWrite").onFcmTokenWrite;
 exports.sendTestEmail = require("./sendTestEmail").sendTestEmail;
+exports.removeUser = require("./removeUser").removeUser;

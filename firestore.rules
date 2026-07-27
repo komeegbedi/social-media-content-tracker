@@ -10,11 +10,16 @@ service cloud.firestore {
     function hasProfile() {
       return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
+    // A removed/disabled account is denied everywhere — even if it still carries
+    // an 'admin' role on its tombstone. `disabled` is the authoritative kill switch.
+    function notDisabled() {
+      return myDoc().get('disabled', false) != true;
+    }
     function isAdmin() {
-      return hasProfile() && myDoc().role == 'admin';
+      return hasProfile() && myDoc().role == 'admin' && notDisabled();
     }
     function isApproved() {
-      return hasProfile() && (myDoc().status == 'approved' || myDoc().role == 'admin');
+      return hasProfile() && notDisabled() && (myDoc().status == 'approved' || myDoc().role == 'admin');
     }
     function isQA() {
       return hasProfile() && (myDoc().qa == true || myDoc().role == 'admin');
@@ -121,6 +126,20 @@ service cloud.firestore {
     // Durable per-user-per-day reminder email digest — server-owned. Admins read
     // it for the delivery log; no client ever writes it.
     match /reminderDigests/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Admin operations saga state (e.g. user removal) — server-owned. Admins read
+    // for progress/status; no client ever writes it.
+    match /adminOps/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Immutable administrative audit log — server-authored only. Admins read it;
+    // NO client may ever create, edit, or delete an audit event (not even admins).
+    match /auditEvents/{id} {
       allow read: if isAdmin();
       allow write: if false;
     }

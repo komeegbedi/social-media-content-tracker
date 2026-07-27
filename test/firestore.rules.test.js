@@ -33,6 +33,8 @@ const USERS = {
   caps:   { name: "Cara Caps",  role: "member", status: "approved", captions: true },
   member: { name: "Mel Member", role: "member", status: "approved" },
   pending:{ name: "Peggy Pend", role: "member", status: "pending" },
+  // A removed admin: role still says admin, but the disabled kill switch denies it.
+  exadmin:{ name: "Ex Admin",   role: "admin",  status: "removed", disabled: true },
 };
 
 const baseTask = (over = {}) => ({
@@ -174,6 +176,25 @@ test("issues reject spoofed uid, arbitrary fields, oversized payloads, bad statu
   await assertFails(setDoc(doc(as("member"), "issues", "x3"), { ...ok, note: "x".repeat(4001) })); // oversized
   await assertFails(setDoc(doc(as("member"), "issues", "x4"), { ...ok, status: "resolved" }));  // must be open
   await assertFails(setDoc(doc(as("member"), "issues", "x5"), { ...ok, kind: "spam" }));        // invalid kind
+});
+
+test("a removed/disabled admin is denied everywhere (the disabled kill switch)", async () => {
+  await seed("tasks", "td", baseTask());
+  // Despite role:"admin", the disabled tombstone can't read tasks or the admin logs.
+  await assertFails(getDoc(doc(as("exadmin"), "tasks", "td")));
+  await assertFails(getDoc(doc(as("exadmin"), "issues", "i1")));
+  await assertFails(getDoc(doc(as("exadmin"), "auditEvents", "x")));
+});
+
+test("adminOps + auditEvents are server-owned: admin-read, no client write (audit immutable)", async () => {
+  await seed("adminOps", "remove_x", { type: "user_removal", phase: "done" });
+  await seed("auditEvents", "remove_x", { type: "user_removed", targetUid: "x" });
+  await assertFails(getDoc(doc(as("member"), "adminOps", "remove_x")));
+  await assertSucceeds(getDoc(doc(as("admin"), "adminOps", "remove_x")));
+  await assertSucceeds(getDoc(doc(as("admin"), "auditEvents", "remove_x")));
+  // No client — not even an admin — may write an audit event or op.
+  await assertFails(setDoc(doc(as("admin"), "auditEvents", "y"), { type: "forged" }));
+  await assertFails(setDoc(doc(as("admin"), "adminOps", "y"), { phase: "done" }));
 });
 
 test("reminderDigests is server-owned: admin-read, no client write", async () => {
