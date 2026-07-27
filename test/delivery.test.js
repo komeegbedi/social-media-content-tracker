@@ -10,8 +10,10 @@
 import { test, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-// Admin SDK (via lib.js) must target the emulator before it initialises.
-process.env.GCLOUD_PROJECT ||= "demo-delivery-test";
+// Admin SDK (via lib.js) must target the emulator before it initialises. A
+// dedicated project namespace keeps this file's data isolated from other emulator
+// test files (node --test runs files concurrently on one emulator).
+process.env.GCLOUD_PROJECT = "demo-delivery-test";
 process.env.FIRESTORE_EMULATOR_HOST ||= "127.0.0.1:8080";
 process.env.FUNCTIONS_EMULATOR = "true";
 

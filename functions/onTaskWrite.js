@@ -7,8 +7,7 @@ const {
   loadUsers, loadSettings, notifyUsers, crewRoleLabel, computeFireAt, formatContentTitle,
 } = require("./lib");
 const { resendApiKey } = require("./emailService");
-
-const statusKey = (s) => String(s).replace(/\s+/g, "-");
+const { eventToken, notificationKeyBase } = require("./eventIdentity");
 
 // Rebuild the pending reminderInstances for a task. Never touches processed /
 // failed history; skips instances whose fire time is already in the past (so a
@@ -67,50 +66,57 @@ exports.onTaskWrite = onDocumentWritten(
     const admins = users.filter((u) => u.role === "admin");
     const qaUsers = users.filter((u) => u.qa === true || u.role === "admin");
     const captionUsers = users.filter((u) => u.captions === true);
+    // Immutable per-event token from Firestore event metadata (CloudEvent id, or
+    // the after-snapshot commit time as fallback) — identical on a Firebase retry,
+    // distinct for every later write. Notification id = type + taskId + token + uid,
+    // so a redelivery dedupes while any genuinely new write re-notifies.
+    const token = eventToken(event.id, event.data.after.updateTime);
+    const kb = (type) => notificationKeyBase(type, taskId, token);
 
     // --- assignment notifications ---
     if (after.owner && after.owner !== "Pending" && after.owner !== before?.owner) {
       const ou = byName[after.owner];
       if (ou) await notifyUsers([ou], { type: "assigned", taskId,
         title: `You've been assigned to '${dispTitle}'`, body: "You're leading this piece.",
-        keyBase: `assigned_owner_${taskId}` });
+        keyBase: kb("assigned") });
     }
     const beforeCrew = new Set((before?.support || []).map((s) => s.name));
     for (const s of (after.support || [])) {
       if (beforeCrew.has(s.name)) continue;
       const cu = byName[s.name];
+      // Crew identity is the recipient uid (+ event token); the display name is
+      // only copy. A re-add is a new write → new token → re-notify.
       if (cu) await notifyUsers([cu], { type: "assigned", taskId,
         title: `You've been added to '${dispTitle}'`, body: `As ${crewRoleLabel(s)}.`,
-        keyBase: `assigned_crew_${taskId}_${statusKey(s.name)}` });
+        keyBase: kb("assigned") });
     }
 
     // --- status transition notifications ---
     if (after.status !== before?.status) {
       const owner = byName[after.owner];
-      const keyBase = `status_${taskId}_${statusKey(after.status)}`;
       if (after.status === "In Review") {
         // QA reviewers own the next action (review). Admins get in-app only,
         // and only if they aren't already reviewers, so they aren't push-spammed.
         const reviewers = qaUsers;
         const reviewerIds = new Set(reviewers.map((u) => u.uid));
-        await notifyUsers(reviewers, { type: "qa", taskId, keyBase,
+        await notifyUsers(reviewers, { type: "qa", taskId, keyBase: kb("qa"),
           title: `'${dispTitle}' is awaiting review` });
         const otherAdmins = admins.filter((u) => !reviewerIds.has(u.uid));
-        if (otherAdmins.length) await notifyUsers(otherAdmins, { type: "qa", taskId, keyBase: `${keyBase}_admin`,
+        if (otherAdmins.length) await notifyUsers(otherAdmins, { type: "qa", taskId, keyBase: kb("qa"),
           channels: ["in-app"], title: `'${dispTitle}' was submitted for review` });
       } else if (after.status === "Changes Requested") {
-        await notifyUsers(owner ? [owner] : [], { type: "changes", taskId, keyBase,
+        await notifyUsers(owner ? [owner] : [], { type: "changes", taskId, keyBase: kb("changes"),
           title: `Changes requested on '${dispTitle}'` });
       } else if (after.status === "Approved") {
         // Owner: informational (in-app only). Caption/posting team: action —
         // approval is their cue to caption, so they get push.
-        if (owner) await notifyUsers([owner], { type: "approved", taskId, keyBase, channels: ["in-app"],
+        if (owner) await notifyUsers([owner], { type: "approved", taskId, keyBase: kb("approved"), channels: ["in-app"],
           title: `'${dispTitle}' has been approved` });
         const captioners = captionUsers.filter((u) => !owner || u.uid !== owner.uid);
-        if (captioners.length) await notifyUsers(captioners, { type: "ready", taskId, keyBase: `${keyBase}_caption`,
+        if (captioners.length) await notifyUsers(captioners, { type: "ready", taskId, keyBase: kb("ready"),
           title: `'${dispTitle}' is approved — ready to caption` });
       } else if (after.status === "Ready to Post") {
-        await notifyUsers(captionUsers, { type: "ready", taskId, keyBase,
+        await notifyUsers(captionUsers, { type: "ready", taskId, keyBase: kb("ready"),
           title: `'${dispTitle}' is ready to publish` });
       }
     }

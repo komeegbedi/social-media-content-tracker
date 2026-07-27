@@ -11,7 +11,7 @@
     "seed": "node scripts/seed.js",
     "test": "node --test src/*.test.js",
     "test:functions": "node --test functions/*.test.js && node --check functions/index.js",
-    "test:emulator": "firebase emulators:exec --only firestore \"node --test test/*.test.js\"",
+    "test:emulator": "firebase emulators:exec --only firestore \"node --test --test-concurrency=1 test/*.test.js\"",
     "verify": "npm run build && npm test && npm run test:functions && npm run test:emulator",
     "deploy": "npm run build && firebase deploy --only hosting,firestore:rules,firestore:indexes"
   },
