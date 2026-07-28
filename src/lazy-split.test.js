@@ -48,3 +48,28 @@ test("Firebase core stays shared, not duplicated into the admin chunk", { skip: 
   assert.ok(adminFile && !read(adminFile).includes("persistentLocalCache"),
     "the admin chunk must not re-bundle Firebase core");
 });
+
+/* ---- Phase 5B: optional Firebase services deferred out of the initial payload ---- */
+
+const lazyEsm = jsFiles.filter((f) => f.startsWith("index.esm-"));
+const anyLazyHas = (marker) => lazyEsm.some((f) => read(f).includes(marker));
+
+test("Firebase Functions + Messaging SDKs are NOT in the initial chunk (deferred)", { skip: noBuild }, () => {
+  const idx = read(indexFile);
+  // Distinctive SDK-body endpoints — present only where the real SDK code lives.
+  assert.ok(!idx.includes("cloudfunctions.net"), "functions SDK must not be in the entry chunk");
+  assert.ok(!idx.includes("fcmregistrations.googleapis.com"), "messaging SDK must not be in the entry chunk");
+  assert.ok(anyLazyHas("cloudfunctions.net"), "functions SDK lives in a lazy chunk");
+  assert.ok(anyLazyHas("fcmregistrations.googleapis.com"), "messaging SDK lives in a lazy chunk");
+});
+
+test("App Check SDK is a lazy chunk (loaded only when a key is configured)", { skip: noBuild }, () => {
+  assert.ok(anyLazyHas("recaptcha/api.js"), "app-check SDK body lives in a lazy chunk");
+});
+
+test("no lazy chunk is eagerly preloaded/prefetched on the initial route", { skip: noBuild }, () => {
+  const html = readFileSync("dist/index.html", "utf8");
+  assert.ok(!/rel="(prefetch|preload)"/.test(html), "no prefetch/preload links");
+  // A modulepreload, if any, must cover only the entry — never a lazy chunk.
+  assert.ok(!/modulepreload[^>]*(AdminScreen|index\.esm)/.test(html), "lazy chunks are not modulepreloaded");
+});

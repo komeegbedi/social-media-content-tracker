@@ -20,7 +20,7 @@ export const getView = () => currentView;
 
 // Shared device/context block attached to every issue.
 function context() {
-  const u = auth.currentUser;
+  const u = auth && auth.currentUser;
   return {
     uid: u?.uid || "anonymous",
     email: u?.email || "",
@@ -35,8 +35,10 @@ function context() {
 // Core writer. `kind` is "error" (auto-captured) or "report" (user-filed).
 // Returns true on success. Never throws.
 export async function logIssue({ kind, message = "", stack = "", action = "", taskId = "", note = "", code = "" }) {
-  // We can only write when signed in (rules require it + uid must match).
-  if (!auth.currentUser) {
+  // We can only write when signed in (rules require it + uid must match). `auth`
+  // is a live binding that's undefined until the App Check bootstrap completes, so
+  // guard it too (an error captured during startup won't crash the handler).
+  if (!auth || !auth.currentUser) {
     console.warn("[issue not logged — no signed-in user]", { kind, message, note });
     return false;
   }
@@ -67,7 +69,7 @@ export const reportIssue = ({ note, action = "", taskId = "" }) =>
 // Feature requests reuse the issues pipeline (kind: "feature_request") with
 // structured fields; rules already scope create-to-own-uid and admin triage.
 export async function submitFeatureRequest({ title, description = "", problem = "", beneficiary = "", link = "" }) {
-  if (!auth.currentUser) return false;
+  if (!auth || !auth.currentUser) return false;
   try {
     await addDoc(collection(db, "issues"), {
       kind: "feature_request",

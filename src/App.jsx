@@ -10,8 +10,7 @@ import {
 import {
   collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot, serverTimestamp, runTransaction,
 } from "firebase/firestore";
-import { auth, db, googleProvider, functions } from "./firebase";
-import { httpsCallable } from "firebase/functions";
+import { auth, db, googleProvider, callFunction } from "./firebase";
 import {
   STAGES, statusClass, roleLabel, initials, emailFor, formatContentTitle,
   fmt, daysTo, autoAssign, computeCapacity,
@@ -676,7 +675,7 @@ function AdminEmailTest() {
     if (!isValidEmail(addr)) { setErr("Enter a valid email address, e.g. name@example.com."); setResult(null); return; }
     setErr(""); setResult(null); setBusy(true);
     try {
-      const res = await httpsCallable(functions, "sendTestEmail")({ to: addr });
+      const res = await callFunction("sendTestEmail", { to: addr });
       setResult({ ok: true, msg: `Test email sent to ${res.data?.to || addr}.` });
     } catch (e) {
       // Keep the entered address so the admin can retry; never auto-close the panel.
@@ -1444,13 +1443,14 @@ function Board({ profile, isAdmin }) {
   // Foreground push → brief toast (the bell also updates live via onSnapshot).
   const [toast, setToast] = useState(null);
   useEffect(() => {
-    let unsub = () => {};
-    listenForeground((payload) => {
+    // listenForeground returns a synchronous cleanup (the messaging chunk loads in
+    // the background; the subscription tears down correctly even on a fast unmount).
+    const unsub = listenForeground((payload) => {
       const n = (payload && payload.notification) || {};
       setToast(n.title || "New notification");
       setTimeout(() => setToast(null), 4000);
-    }).then((u) => { unsub = u; });
-    return () => unsub();
+    });
+    return unsub;
   }, []);
 
   // Global action-feedback banner. Shows what's happening in the background:
@@ -1653,7 +1653,7 @@ function Board({ profile, isAdmin }) {
     const assignments = targets.map(t => ({ taskId: t.id, support: autoAssign(t, users, tasks) }));
     showPending("Auto-assigning crew…");
     try {
-      const { data } = await httpsCallable(functions, "bulkAssign")({ opId: `auto_${Date.now()}`, assignments });
+      const { data } = await callFunction("bulkAssign", { opId: `auto_${Date.now()}`, assignments });
       flashBanner(data.failed
         ? `✓ Assigned ${data.applied} · ${data.failed} skipped`
         : `✓ Auto-assigned crew to ${data.applied} task${data.applied !== 1 ? "s" : ""}`);
@@ -1678,7 +1678,7 @@ function Board({ profile, isAdmin }) {
   // Auth disable + chunked task detachment + audit). The client never mutates
   // tasks or deletes the profile directly — that's all trusted backend work.
   const removeUserWithTasks = async (user, { mode, target } = {}) => {
-    const call = httpsCallable(functions, "removeUser");
+    const call = (p) => callFunction("removeUser", p);
     await withFeedback(
       call({ targetUid: user.id, policy: { mode: mode || "unassign", reassignToUid: mode === "reassign" ? target : undefined } }),
       "✓ Removed from team", "Removing from team…");

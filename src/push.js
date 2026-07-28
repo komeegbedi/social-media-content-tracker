@@ -6,10 +6,14 @@
    deliver push. iOS/iPadOS only allow web push for apps added to the
    Home Screen, so we detect that and guide the user first.
    =================================================================== */
-import { getMessaging, getToken, onMessage, isSupported } from "firebase/messaging";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { app, db } from "./firebase";
 import { logIssue } from "./logging";
+import { pushAvailability, foregroundSubscription, memoizeImport, pushEnabled } from "./firebaseBootstrap";
+
+// firebase/messaging is loaded on first push use only, so it stays out of the
+// initial bundle. Memoized on success; a failed import isn't cached (retryable).
+const loadMessaging = memoizeImport(() => import("firebase/messaging"));
 
 const VAPID_KEY = import.meta.env.VITE_FIREBASE_VAPID_KEY || "";
 const SW_URL = "/firebase-messaging-sw.js";
@@ -36,20 +40,26 @@ export function isStandalone() {
 const permission = () => (typeof Notification !== "undefined" ? Notification.permission : "unsupported");
 
 let _supported = null;
-async function pushSupported() {
+// A local feature check — deliberately does NOT import firebase/messaging, so the
+// UI-gating state (which push control to show) never pulls the messaging chunk.
+// The actual token calls below do the full check implicitly (getToken fails safely
+// where unsupported).
+function pushSupported() {
   if (_supported !== null) return _supported;
-  try { _supported = (await isSupported()) && "serviceWorker" in navigator && "Notification" in window; }
-  catch { _supported = false; }
+  _supported = typeof window !== "undefined" && typeof navigator !== "undefined"
+    && "serviceWorker" in navigator && "Notification" in window && "PushManager" in window;
   return _supported;
 }
 
 /* The device's push availability, driving which UI to show:
    "ios-needs-install" | "unsupported" | "not-configured" | "default" | "granted" | "denied" */
 export async function pushState() {
-  if (isIOS() && !isStandalone()) return "ios-needs-install";
-  if (!(await pushSupported())) return "unsupported";
-  if (!VAPID_KEY) return "not-configured";
-  return permission();
+  return pushAvailability({
+    iosNeedsInstall: isIOS() && !isStandalone(),
+    supported: pushSupported(),
+    hasVapid: !!VAPID_KEY,
+    permission: permission(),
+  });
 }
 
 async function registerSW() {
@@ -65,6 +75,7 @@ export async function enablePush(uid) {
     const perm = await Notification.requestPermission();
     if (perm !== "granted") return { ok: false, reason: perm };
     const reg = await registerSW();
+    const { getMessaging, getToken } = await loadMessaging();
     const token = await getToken(getMessaging(app), { vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
     if (!token) return { ok: false, reason: "no-token" };
     await setDoc(doc(db, "users", uid, "fcmTokens", token), {
@@ -91,10 +102,11 @@ export async function refreshPushToken(uid) {
   try {
     if (!uid) return { ok: false, reason: "no-uid" };
     if (isIOS() && !isStandalone()) return { ok: false, reason: "ios-needs-install" };
-    if (!(await pushSupported())) return { ok: false, reason: "unsupported" };
+    if (!pushSupported()) return { ok: false, reason: "unsupported" };
     if (!VAPID_KEY) return { ok: false, reason: "not-configured" };
     if (permission() !== "granted") return { ok: false, reason: permission() }; // never prompt here
     const reg = await registerSW();
+    const { getMessaging, getToken } = await loadMessaging();
     const token = await getToken(getMessaging(app), { vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
     if (!token) return { ok: false, reason: "no-token" };
     await setDoc(doc(db, "users", uid, "fcmTokens", token), {
@@ -107,9 +119,16 @@ export async function refreshPushToken(uid) {
   }
 }
 
-// Foreground messages (app open) → surface via callback. Safe no-op if unsupported.
-export async function listenForeground(cb) {
-  if (!(await pushSupported())) return () => {};
-  try { return onMessage(getMessaging(app), cb); }
-  catch { return () => {}; }
+// Foreground messages (app open) → surface via callback. Returns a SYNCHRONOUS
+// cleanup immediately. The Messaging SDK is loaded ONLY when push can actually
+// deliver (VAPID configured, supported, and permission already granted) — so a
+// user who never enabled push does NOT download the Messaging chunk on mount.
+// When it does subscribe, the chunk loads in the background and the subscription
+// tears down correctly even on a quick unmount (no leak).
+export function listenForeground(cb) {
+  return foregroundSubscription(async () => {
+    if (!pushEnabled({ hasVapid: !!VAPID_KEY, supported: pushSupported(), permission: permission() })) return null;
+    const { getMessaging, onMessage } = await loadMessaging();
+    return onMessage(getMessaging(app), cb);
+  });
 }
