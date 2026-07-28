@@ -61,6 +61,19 @@ test("workflow event filter and admin section come off the query string", () => 
   assert.equal(parseLocation("/team", "?event=x").event, null);
 });
 
+// The Admin surface is now a React.lazy chunk, but the URL/routing that drives it
+// is unchanged — a direct deep link still resolves to the admin screen (which then
+// gates the dynamic import behind isAdmin). This protects deep-link navigation
+// across the lazy boundary.
+test("a direct admin deep link still routes to the admin screen (drives the lazy surface)", () => {
+  assert.equal(parseLocation("/admin", "").screen, "admin");
+  const deep = parseLocation("/admin", "?section=people&user=u1");
+  assert.equal(deep.screen, "admin");
+  assert.equal(deep.section, "people");
+  assert.equal(deep.user, "u1");
+  assert.equal(pathForScreen("admin"), "/admin");     // round-trips → Back/Forward unaffected
+});
+
 test("overlays: at most one editor and one panel; editor wins a malformed both", () => {
   assert.deepEqual(parseOverlay("?compose=new").editor, { mode: "new" });
   assert.deepEqual(parseOverlay("?edit=t9").editor, { mode: "edit", id: "t9" });
