@@ -815,6 +815,54 @@ export function reviewMetrics(tasks) {
   };
 }
 
+/* Concise, restrained timing for a review card — shown ONLY when it helps the
+   reviewer prioritise (overdue, or due very soon). Far-future / no-date → null,
+   so most cards carry no timing at all. tone: "overdue" (actionable urgency) |
+   "soon" (gentle). */
+export function reviewTiming(task) {
+  const d = daysTo(task && task.postDate);
+  if (d === null || d === undefined) return null;
+  if (d < 0) return { text: `${Math.abs(d)}d overdue`, tone: "overdue" };
+  if (d === 0) return { text: "Due today", tone: "soon" };
+  if (d === 1) return { text: "Due tomorrow", tone: "soon" };
+  if (d <= 3) return { text: `Due in ${d} days`, tone: "soon" };
+  return null;
+}
+
+/* The QA reviewer's single, PRIORITISED review queue. Where reviewMetrics buckets
+   by status (with overdue ⊂ awaiting, so items appear twice), this yields ONE
+   mutually-exclusive, ordered experience so each pending review is shown once:
+     upNext      — the single most urgent actionable review (the primary card)
+     alsoWaiting — the rest of the actionable reviews, in the same order
+     blocked     — In Review but blocked (waiting on someone) → placed BELOW
+                   actionable so it never outranks something reviewable now
+     changes     — sent back for changes (secondary/history)
+     recentlyReviewed — recently cleared/bounced (secondary/history, most recent few)
+   Actionable order: overdue → due soon → far / no date; ties broken by the OLDEST
+   submission (longest waiting) first. */
+const REVIEW_NO_DATE = 1e9;
+export function reviewQueue(tasks) {
+  const all = tasks || [];
+  const inReview = all.filter((t) => t.status === "In Review");
+  const rank = (t) => { const d = daysTo(t.postDate); return (d === null || d === undefined) ? REVIEW_NO_DATE : d; };
+  const submittedAt = (t) => { const ev = lastEvent(t, "qa_sent"); return ev ? ev.at : 0; };
+  const byUrgency = (a, b) => (rank(a) - rank(b)) || (submittedAt(a) - submittedAt(b));
+  const actionable = inReview.filter((t) => !t.blockedOn).sort(byUrgency);
+  const blocked = inReview.filter((t) => !!t.blockedOn).sort(byUrgency);
+  const changes = all.filter((t) => t.status === "Changes Requested");
+  const reviewedAt = (t) => { const ev = lastEvent(t, "approved") || lastEvent(t, "changes_requested"); return ev ? ev.at : 0; };
+  const recentlyReviewed = all
+    .filter((t) => reviewedAt(t) > 0 && t.status !== "In Review")
+    .sort((a, b) => reviewedAt(b) - reviewedAt(a))
+    .slice(0, 5);
+  return {
+    upNext: actionable[0] || null,
+    alsoWaiting: actionable.slice(1),
+    blocked, changes, recentlyReviewed,
+    counts: { ready: actionable.length, blocked: blocked.length, changes: changes.length, reviewed: recentlyReviewed.length },
+  };
+}
+
 /* Caption / upload team: their work starts once content is approved. */
 export function postQueue(tasks) {
   const live = (tasks || []).filter((t) => t.status !== "Posted");

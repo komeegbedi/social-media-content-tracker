@@ -19,7 +19,7 @@ import {
   PHASES, statusPhase, nextStep, workflowAction,
   LINK_FIELDS, requiredLinkKeys, missingLinks, QA_STATUSES,
   activityEntry, activityLabel, isApprovalEvent,
-  TYPES, typeClass, qaQueue, reviewMetrics, qaTaskCapabilities, postQueue, pendingMatches, applyAssignment,
+  TYPES, typeClass, qaQueue, reviewMetrics, reviewQueue, reviewTiming, qaTaskCapabilities, postQueue, pendingMatches, applyAssignment,
   personalWins, teamWins, dashboardMetrics, searchTasks, searchPeople,
   monthlyWins, recentWins, contributorWins,
   BOARD_SORTS, BOARD_FILTERS, sortTasks, groupByStatus, applyBoardFilter,
@@ -128,11 +128,14 @@ const TaskAdminContext = createContext(null);
      page can't scroll behind the sheet, restoring the exact position on close), and
    - mark the app root `inert`, so the nav + FAB + page behind the backdrop are
      neither clickable nor focusable (tab order skips them) until the overlay closes.
-   A reference count keeps nested/stacked overlays correct. */
-let _overlayCount = 0;
+   Live overlays are tracked by a Set of per-instance tokens rather than a raw
+   +1/-1 counter: a Set is idempotent and can never desync or go negative, so an
+   over/under-count can't leave the app permanently `inert` (unclickable). The
+   background is locked the moment the set becomes non-empty and released the
+   moment it empties again. */
 let _savedScrollY = 0;
-function lockBackground() {
-  if (_overlayCount++ > 0) return;
+const _activeOverlays = new Set();
+function applyBackgroundLock() {
   _savedScrollY = window.scrollY || window.pageYOffset || 0;
   const b = document.body;
   b.style.position = "fixed";
@@ -142,9 +145,7 @@ function lockBackground() {
   b.style.width = "100%";
   document.getElementById("root")?.setAttribute("inert", "");
 }
-function unlockBackground() {
-  if (--_overlayCount > 0) return;
-  _overlayCount = 0;
+function releaseBackgroundLock() {
   const b = document.body;
   b.style.position = "";
   b.style.top = "";
@@ -154,10 +155,22 @@ function unlockBackground() {
   document.getElementById("root")?.removeAttribute("inert");
   window.scrollTo(0, _savedScrollY);
 }
+function acquireOverlay(token) {
+  const wasEmpty = _activeOverlays.size === 0;
+  _activeOverlays.add(token);
+  if (wasEmpty && _activeOverlays.size === 1) applyBackgroundLock();
+}
+function releaseOverlay(token) {
+  _activeOverlays.delete(token);
+  if (_activeOverlays.size === 0) releaseBackgroundLock();
+}
 export function Portal({ children }) {
+  const token = useRef();
+  if (!token.current) token.current = Symbol("overlay");
   useLayoutEffect(() => {
-    lockBackground();
-    return unlockBackground;
+    const t = token.current;
+    acquireOverlay(t);
+    return () => releaseOverlay(t);
   }, []);
   return createPortal(children, document.body);
 }
@@ -432,12 +445,9 @@ function NotifCenter({ notif, isAdmin, onClose, onNavigate, onSettings }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const active = NOTIF_FILTERS.find(f=>f.id===flt) || NOTIF_FILTERS[0];
   const moreActive = NOTIF_MORE.some(f=>f.id===flt);
-  // Lock the page behind the drawer while it is open.
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prev; };
-  }, []);
+  // Background scroll-lock + inert are handled centrally by <Portal> (body fixed at
+  // the current offset), so no separate overflow lock here — a second, differently-
+  // managed body mutation is exactly what risks leaving the page in a stuck state.
   const filtered = flt==="all" ? items
     : flt==="unread" ? items.filter(n=>!n.read)
     : items.filter(n=>(active.types||[]).includes(n.type));
@@ -1112,6 +1122,9 @@ function Login({ online = true }) {
   const doEmail = async () => {
     setErr(""); setOk(""); setEmailErr("");
     if (!isValidEmail(email)) { setEmailErr("Enter a valid email address, such as name@example.com."); return; }
+    // Dismiss the keyboard/focus before the auth navigation, so iOS never leaves
+    // the page in a focused-input state as the app mounts.
+    try { document.activeElement?.blur?.(); } catch {}
     setBusy(true);
     try {
       if (mode === "register") {
@@ -2321,34 +2334,107 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
 /* ===================================================================
    MINE
    =================================================================== */
-/* The QA reviewer's home base — "Reviews". Optimised for reviewing work, not
-   producing it: their queue, overdue reviews, sent-back items, and what they've
-   recently cleared. No production assignments, shoots, crew, or workload. */
-function Reviews({ tasks, me, openTask }) {
-  const m = useMemo(() => reviewMetrics(tasks), [tasks]);
-  const groups = [
-    { key: "overdue", label: "Overdue reviews", items: m.overdue, accent: " urgent" },
-    { key: "awaiting", label: "Awaiting your review", items: m.awaiting, accent: "" },
-    { key: "changes", label: "Changes requested", items: m.changes, accent: "" },
-    { key: "reviewed", label: "Recently reviewed", items: m.recentlyReviewed, accent: "" },
-  ].filter(g => g.items.length > 0);
-  const nothing = m.awaiting.length === 0 && m.changes.length === 0;
+/* A QA-specific review card — deliberately leaner than the production TaskCard.
+   Reviewers already know everything here is "In Review" and that the next step is
+   their approval, so we drop the status pill, the "Next" line, and the owner
+   avatars. What's left is what helps them act: title, type, a restrained timing
+   note only when it matters, and a blocker only when one exists. The whole card
+   is one 44px+ button that opens the review. `primary` = the "Up next" hero;
+   `done` = a history row (no CTA). */
+function ReviewCard({ t, primary, done, onOpen }) {
+  const timing = reviewTiming(t);
+  const cls = "sb-rvcard" + (primary ? " primary" : "") + (done ? " done" : "");
   return (
-    <div className="sb-page">
-      <div className="sb-h">Reviews</div>
-      <div className="sb-sub">
-        {nothing ? "You're all caught up — nothing is waiting for review."
-          : `${m.counts.awaiting} awaiting review${m.counts.overdue ? ` · ${m.counts.overdue} overdue` : ""}.`}
-      </div>
-      {nothing && groups.length===0 &&
-        <div className="sb-empty"><div className="big"><ClipboardDocumentCheckIcon className="hi hi-empty" aria-hidden="true"/></div>
-          Nothing to review yet. Submitted content will appear here.</div>}
-      {groups.map(g => (
-        <div key={g.key}>
-          <div className={"sb-shead"+g.accent}><h2>{g.label}</h2><span className="sb-tag">{g.items.length}</span></div>
-          <div className="sb-list">{g.items.map(t => <TaskCard key={t.id} t={t} me={me} onClick={()=>openTask(t.id)} />)}</div>
-        </div>
-      ))}
+    <button type="button" className={cls} onClick={onOpen}
+      aria-label={`${done ? "Open" : "Review"} ${t.title}`}>
+      <span className="sb-rvcard-main">
+        <span className="sb-rvcard-head">
+          <span className="sb-rvcard-title">{t.title}</span>
+          <span className={"sb-chip "+typeClass(t.type)}>{t.type}</span>
+        </span>
+        {(timing || t.blockedOn || done) && (
+          <span className="sb-rvcard-meta">
+            {!done && timing && <span className={"sb-rvtime "+timing.tone}>{timing.text}</span>}
+            {t.blockedOn && <span className="sb-rvblock">Waiting on {t.blockedOn}</span>}
+            {done && <span className="sb-rvdone">{t.status==="Changes Requested" ? "Sent back" : t.status}</span>}
+          </span>
+        )}
+      </span>
+      {!done && <span className="sb-rvcard-go" aria-hidden="true">{primary ? "Review" : <ChevronRightIcon className="hi hi-sm"/>}</span>}
+    </button>
+  );
+}
+
+/* A collapsed section for secondary/history content: a compact summary row with a
+   count that expands on demand — so history never fills the landing view. */
+function CollapseRow({ label, count, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="sb-rvcollapse">
+      <button type="button" className="sb-rvcollapse-row" aria-expanded={open} onClick={()=>setOpen(v=>!v)}>
+        <span className="sb-rvcollapse-lbl">{label}</span>
+        <span className="sb-rvcount">{count}</span>
+        <ChevronDownIcon className={"hi hi-sm sb-rvchev"+(open?" open":"")} aria-hidden="true" />
+      </button>
+      {open && <div className="sb-rvcollapse-body">{children}</div>}
+    </section>
+  );
+}
+
+// Supportive one-line summary under the greeting — never an error-dashboard read.
+function reviewIntro(q) {
+  if (q.counts.ready > 0) return `${q.counts.ready} item${q.counts.ready === 1 ? " is" : "s are"} ready for review.`;
+  if (q.counts.blocked > 0) return `Nothing ready right now — ${q.counts.blocked} waiting on others.`;
+  if (q.counts.changes > 0) return `Nothing to review — ${q.counts.changes} out for changes.`;
+  return "You're all caught up. New reviews will appear here.";
+}
+
+/* The QA reviewer's home base — "Reviews". One calm, prioritised queue: a single
+   "Up next", the rest in "Also waiting", blocked work below it, and history
+   collapsed. No production assignments, shoots, crew, or workload. */
+function Reviews({ tasks, me, openTask }) {
+  const q = useMemo(() => reviewQueue(tasks), [tasks]);
+  const first = (me?.name || "there").split(" ")[0];
+  return (
+    <div className="sb-page sb-reviews">
+      <header className="sb-rvhero">
+        <h1 className="sb-rvhero-hi">Ready when you are, {first}</h1>
+        <p className="sb-rvhero-sub">{reviewIntro(q)}</p>
+      </header>
+
+      {q.upNext && (
+        <section aria-labelledby="rv-upnext">
+          <h2 id="rv-upnext" className="sb-rvsec">Up next</h2>
+          <ReviewCard t={q.upNext} primary onOpen={()=>openTask(q.upNext.id)} />
+        </section>
+      )}
+
+      {q.alsoWaiting.length > 0 && (
+        <section aria-labelledby="rv-also">
+          <h2 id="rv-also" className="sb-rvsec">Also waiting <span className="sb-rvcount">{q.alsoWaiting.length}</span></h2>
+          <div className="sb-rvlist">{q.alsoWaiting.map(t => <ReviewCard key={t.id} t={t} onOpen={()=>openTask(t.id)} />)}</div>
+        </section>
+      )}
+
+      {q.blocked.length > 0 && (
+        <section aria-labelledby="rv-blocked">
+          <h2 id="rv-blocked" className="sb-rvsec sb-rvsec-muted">Blocked <span className="sb-rvcount">{q.blocked.length}</span></h2>
+          <p className="sb-rvsec-hint">Waiting on someone else — not ready for your review yet.</p>
+          <div className="sb-rvlist">{q.blocked.map(t => <ReviewCard key={t.id} t={t} onOpen={()=>openTask(t.id)} />)}</div>
+        </section>
+      )}
+
+      {q.changes.length > 0 && (
+        <CollapseRow label="Sent back for changes" count={q.changes.length}>
+          <div className="sb-rvlist">{q.changes.map(t => <ReviewCard key={t.id} t={t} onOpen={()=>openTask(t.id)} />)}</div>
+        </CollapseRow>
+      )}
+
+      {q.recentlyReviewed.length > 0 && (
+        <CollapseRow label="Recently reviewed" count={q.recentlyReviewed.length}>
+          <div className="sb-rvlist">{q.recentlyReviewed.map(t => <ReviewCard key={t.id} t={t} done onOpen={()=>openTask(t.id)} />)}</div>
+        </CollapseRow>
+      )}
     </div>
   );
 }

@@ -260,6 +260,64 @@ a{color:var(--primary)}
 .sb-shead .link{font-size:12.5px;color:var(--violet);font-weight:600;background:none;border:none;padding:0;flex:none}
 .sb-shead .link.subtle{color:var(--muted);font-weight:500;font-size:12px}
 .sb-shead-strong h2{font-size:19px;font-weight:700}
+
+/* ===== QA Reviews — one calm, prioritised review surface =====================
+   A leaner world than the production board: a warm greeting, a single "Up next"
+   card, the rest compact, blocked work demoted, history collapsed. Red is
+   reserved for genuine overdue urgency; everything else is quiet supporting text. */
+.sb-reviews{padding-bottom:calc(var(--nav-h,88px) + env(safe-area-inset-bottom))}
+.sb-rvhero{margin:8px 0 20px}
+.sb-rvhero-hi{font-size:24px;line-height:1.2;font-weight:700;letter-spacing:-.02em;color:var(--ink);margin:0 0 6px}
+.sb-rvhero-sub{font-size:15px;line-height:1.45;color:var(--muted);margin:0}
+
+.sb-rvsec{display:flex;align-items:center;gap:8px;margin:24px 2px 10px;
+  font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.sb-rvsec-muted{opacity:.8}
+.sb-rvsec-hint{font-size:13px;line-height:1.45;color:var(--muted);margin:-4px 2px 10px}
+.sb-rvcount{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;
+  border-radius:999px;background:var(--field);color:var(--muted);font-size:12px;font-weight:600;
+  letter-spacing:0;text-transform:none}
+
+.sb-rvlist{display:flex;flex-direction:column;gap:8px}
+
+/* Each card is one full-width tappable button (comfortably >44px). */
+.sb-rvcard{display:flex;align-items:center;gap:12px;width:100%;text-align:left;min-height:56px;
+  padding:14px 16px;border-radius:14px;background:var(--surface);border:1px solid var(--border);
+  color:var(--text-primary);cursor:pointer;transition:border-color .15s ease,background .15s ease}
+.sb-rvcard:hover{border-color:var(--field-border)}
+.sb-rvcard:focus-visible{outline:2px solid var(--violet);outline-offset:2px}
+.sb-rvcard-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.sb-rvcard-head{display:flex;align-items:center;gap:8px;min-width:0}
+.sb-rvcard-title{flex:1;min-width:0;font-size:15px;font-weight:600;line-height:1.3;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-rvcard-meta{display:flex;align-items:center;flex-wrap:wrap;gap:5px 10px}
+.sb-rvtime{font-size:12.5px;font-weight:600}
+.sb-rvtime.overdue{color:var(--red)}
+.sb-rvtime.soon{color:var(--muted)}
+.sb-rvblock{font-size:12.5px;color:var(--muted)}
+.sb-rvdone{font-size:12.5px;color:var(--muted)}
+.sb-rvcard-go{flex:none;display:inline-flex;align-items:center;color:var(--muted)}
+
+/* "Up next" hero: a little more presence + a real Review button. */
+.sb-rvcard.primary{min-height:72px;padding:18px;border-radius:16px;border-color:var(--violet)}
+.sb-rvcard.primary .sb-rvcard-title{font-size:17px;white-space:normal}
+.sb-rvcard.primary .sb-rvcard-go{align-self:center;font-size:14px;font-weight:700;color:#fff;
+  background:var(--violet);padding:9px 16px;border-radius:10px}
+
+/* History rows are quieter still (no CTA). */
+.sb-rvcard.done{min-height:48px;padding:11px 14px;background:transparent}
+.sb-rvcard.done .sb-rvcard-title{font-weight:500;color:var(--text-primary)}
+
+/* Collapsed secondary sections — a summary row that expands on demand. */
+.sb-rvcollapse{margin-top:14px;border-top:1px solid var(--line)}
+.sb-rvcollapse-row{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:12px 2px;
+  background:none;border:none;color:var(--text-primary);cursor:pointer;text-align:left}
+.sb-rvcollapse-row:focus-visible{outline:2px solid var(--violet);outline-offset:2px;border-radius:8px}
+.sb-rvcollapse-lbl{flex:1;font-size:14px;font-weight:600;color:var(--ink)}
+.sb-rvchev{color:var(--muted);transition:transform .18s ease}
+.sb-rvchev.open{transform:rotate(180deg)}
+.sb-rvcollapse-body{padding:4px 0 8px}
+
 /* Section heading with an optional count badge — title + badge stay grouped
    (never concatenated) and the right-hand link stays aligned. Works at every
    width; the badge is a real chip, not stray text next to the title. */
@@ -1125,9 +1183,11 @@ a{color:var(--primary)}
 .sb-gicon{width:18px;height:18px;display:inline-block}
 .sb-ldiv{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:11px;margin:16px 0}
 .sb-ldiv::before,.sb-ldiv::after{content:"";height:1px;background:var(--line);flex:1}
-/* Taller, roomier inputs */
+/* Taller, roomier inputs. font-size MUST stay >= 16px: iOS Safari/Chrome auto-zoom
+   the page when a smaller input is focused, and the zoom lingers after sign-in.
+   The base .sb-field rule is already 16px; keep the login override at 16px too. */
 .sb-lcard .sb-field{margin-bottom:14px}
-.sb-lcard .sb-field input{padding:13px 14px;font-size:15px;border-radius:12px}
+.sb-lcard .sb-field input{padding:13px 14px;font-size:16px;border-radius:12px}
 /* Primary sign-in button — design-system primary, no coloured glow */
 .sb-lprimary{margin-top:6px;padding:14px;font-size:15.5px;font-weight:700}
 .sb-lprimary:disabled{opacity:.7}
