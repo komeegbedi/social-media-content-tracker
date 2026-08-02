@@ -120,6 +120,9 @@
    (.sb-content) — the body itself never scrolls, which removes the iOS
    standalone rubber-band bounce and any "two competing scrollers" behaviour. */
 html,body,#root{width:100%;height:100%;margin:0}
+/* html shares body's resolved background so the safe-area/chrome region never
+   shows a stale color when the theme changes. */
+html{background:var(--background)}
 body{font-family:Inter,system-ui,sans-serif;color:var(--text-primary);background:var(--background);
   font-size:var(--text-body);-webkit-font-smoothing:antialiased;
   overflow:hidden;overscroll-behavior:none}

@@ -34,8 +34,39 @@ export const resolvePref = (pref) => (pref === "light" || pref === "dark") ? pre
 // The theme currently applied to <html>.
 export const resolvedTheme = () => resolvePref(getThemePref());
 
+// Resolved-theme colors for Safari's browser chrome (theme-color meta) — these
+// MUST match --background for each theme in styles.css, and the fallback in
+// index.html's pre-render bootstrap.
+export const THEME_COLORS = { light: "#F7F7F8", dark: "#08090A" };
+
+// Point the browser chrome at the resolved theme and keep
+// documentElement.style.colorScheme in sync (native form controls + scrollbars).
+// Because this is the RESOLVED theme (not the OS), an in-app override updates
+// Safari's toolbar immediately, without a reload.
+//
+// We REPLACE the <meta name="theme-color"> element rather than only mutating its
+// `content`: some iOS Safari versions ignore an in-place content change but do
+// re-read theme-color when the element is (re)inserted. This also collapses any
+// stale/competing tags (e.g. old media-gated ones) down to exactly one, and is
+// idempotent — it never accumulates metas.
+function applyThemeColor(theme) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (root && root.style) root.style.colorScheme = theme;
+  if (!document.head || typeof document.createElement !== "function") return;
+  const color = THEME_COLORS[theme] || THEME_COLORS.light;
+  const existing = document.querySelectorAll ? document.querySelectorAll('meta[name="theme-color"]') : [];
+  existing.forEach((m) => m.remove());
+  const meta = document.createElement("meta");
+  meta.setAttribute("name", "theme-color");
+  meta.setAttribute("id", "theme-color-meta");
+  meta.setAttribute("content", color);
+  document.head.appendChild(meta);
+}
+
 function applyResolved(theme) {
   if (typeof document !== "undefined") document.documentElement.setAttribute("data-theme", theme);
+  applyThemeColor(theme);
 }
 
 // A brief colour cross-fade on change (skipped under reduced-motion).
