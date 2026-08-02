@@ -3,7 +3,7 @@
 **Plan. Create. Review. Publish.** A content operating system for the **IFC (Immanuel Fellowship Church) Creative Team** — replacing a Google Sheet and a WhatsApp group with a focused, mobile-first web app for planning, producing, reviewing, and posting content.
 
 > [!NOTE]
-> **Project status.** The core app runs in production on Firebase Hosting. Two bodies of work are complete in the codebase but **not yet deployed**: the notification/reminder backend (Cloud Functions, "v1.1") and the URL-driven navigation refactor (on a feature branch). See [Roadmap](#roadmap) and [Deployment](#deployment).
+> **Project status.** The web app runs in production on Firebase Hosting. The client — URL-driven navigation, notification deep-linking, QA-as-a-department, and the capacity engine — is **implemented and tested** on `main`. The one piece **implemented and emulator-tested but not yet deployed** is the notification/reminder **backend** (Cloud Functions, "v1.1"), which needs the Blaze plan. See [Roadmap](#roadmap) and [Deployment](#deployment).
 
 ---
 
@@ -245,9 +245,11 @@ Roles are flags on a user's profile; a person can hold several. Dashboards adapt
 | --- | --- | --- |
 | **Admin** | `role: "admin"` | Full control: tasks, approvals, imports, issues, settings. |
 | **Contributor** | default | My Day shows what needs attention; My Work separates leading vs supporting. |
-| **QA** | `qa: true` | A review queue with Approve / Request changes; only QA/admin can approve (enforced in rules). |
+| **QA reviewer** | `qa: true` | A **department**, not a production role — see below. |
 | **Caption / Upload** | `captions: true` | Work that begins after approval — captions, ready-to-post, overdue. |
 | **Department Lead** | `lead: true` + `department` | Receives the leadership follow-up digest. |
+
+**QA is a distinct department, not another production role.** Reviewers land on a review-focused **Reviews** screen and approve or request changes only while an item is in review. They can **observe** all of production — search any task, read task detail, and view Team capacity — but can never **operate** it: QA carries no production skills or availability, is never staffed as owner/crew, never appears in auto-assignment or recommendations, and never counts toward production capacity. This holds even for an admin who is also QA (admin governs what you manage; QA governs the department you belong to). The exclusions run through central predicates (`isProductionMember` / `isAssignable`) and the user-doc invariant is enforced in Firestore rules.
 
 ### Auto-assignment
 
@@ -259,7 +261,9 @@ The Team Load screen measures the **effort of a person's current responsibilitie
 
 ### Notifications & reminders
 
-An in-app **Notification Center** (bell, unread badge, mark-read, click-through) with per-user preferences. A server-side engine sends the right message to the person who owns the next action, across in-app / push / email channels. **Email is reserved for blocked, required, or escalation cases** so routine activity never fills inboxes. Each task carries a reminder schedule; a scheduled dispatcher delivers due reminders and a daily leadership digest. See [Architecture](#architecture).
+An in-app **Notification Center** (bell, unread badge, mark-read, click-through) with per-user preferences. A server-side engine sends the right message to the person who owns the next action, across in-app / push / email channels. **Email is reserved for blocked, required, or escalation cases** so routine activity never fills inboxes. Each task carries a reminder schedule; a scheduled dispatcher delivers due reminders and a daily leadership digest.
+
+**Every notification deep-links to exactly what it's about** — the task (scrolled to its review or comments section), an event, a filtered Workflow list, or **Admin → People** with the pending person highlighted for an approval request. Destinations come from one resolver (`notificationDestination`) driven by structured metadata, never by parsing text, and are mirrored server-side for push/email. See [Architecture](#architecture).
 
 ### Recurring events
 
@@ -379,11 +383,13 @@ The project has no lint or type-check tooling (plain JSX). Tests run on Node's b
 | Command | What it checks |
 | --- | --- |
 | `npm run build` | Frontend production build (Vite) |
-| `node --test src/*.test.js` | **All frontend unit tests (124)** |
+| `node --test src/*.test.js` | **All frontend unit tests (156)** |
 | `node --test functions/emailService.test.js` | Email normalize/validate + provider-error classification |
 | `node --check functions/*.js` | Cloud Functions syntax (CommonJS, no build step) |
 
-**Frontend suites** cover the recurrence engine, content Title-Case, task-UX helpers, the **capacity engine**, date validation, theme resolution, a stylesheet **contrast guard**, the pure **navigation mapping** (`nav.test.js`), and a **jsdom history-integration** suite (`nav.integration.test.js`) that drives the real router through push/back/forward, overlay-close-on-Back, legacy-link migration, and the unsaved-form blocker.
+There is no separate lint step — the project is plain JSX (no TypeScript), so a clean `npm run build` is the compile/lint gate.
+
+**Frontend suites** cover the recurrence engine, content Title-Case, task-UX helpers, the **capacity engine**, date validation, theme resolution, stylesheet **guards** (input contrast; capacity expand-in-place), **QA-as-a-department** rules (production exclusions, capabilities), the pure **navigation mapping** including **notification destinations** (`nav.test.js`), and a **jsdom history-integration** suite (`nav.integration.test.js`) that drives the real router through push/back/forward, overlay-close-on-Back, launcher-replace, legacy-link migration, and the unsaved-form blocker.
 
 **Testing philosophy:**
 
@@ -471,23 +477,25 @@ Fix (one-time, in the Google Cloud console — Firebase can't do it for you):
 
 ## Roadmap
 
-### Completed
+Each item is marked **implemented** (code on `main`), **tested** (unit/integration), and **deployed** (live in production) where they differ. The web client deploys with Hosting; only the Cloud Functions backend is a separate, still-undeployed surface.
+
+### Completed — implemented, tested, and live
 
 - System-driven 7-stage workflow with auto-archive on Posted
-- Effort-weighted **workload & capacity engine** (v1.2) powering Team Load + auto-assignment
+- Effort-weighted **workload & capacity engine** powering Team capacity + auto-assignment
+- **QA as a department** — review-focused landing (Reviews), read-only production visibility, and hard production exclusions (never staffed, recommended, or counted in capacity), enforced by central predicates
 - Role-aware dashboards (Home, My Day, My Work, Team, Admin)
+- **URL-driven navigation** with Android/browser back-button support, launcher-replace policy, and unsaved-change protection
+- **Notification deep-linking** — every notification opens the exact task section, event, filtered list, or Admin → People pending approval it refers to
 - Recurring-event engine + admin-managed event series
 - Intelligent name matching for imports
-- In-app Notification Center + preferences
-- Notification/reminder **backend** and Resend **email** (built + emulator-verified; _deploy pending_)
+- In-app Notification Center + per-user preferences
 - **Mobile-first design system** (glass nav/header, single-scroll shell, dark mode)
-- **URL-driven navigation** with Android back-button support (built on a feature branch; _merge + deploy pending_)
 - Offline persistence, logging/error capture, "What's New" + feature requests
 
-### In Progress
+### Implemented & emulator-tested, not yet deployed
 
-- Deploying the notification backend and web push to production (verify on the live site)
-- Merging and deploying the URL-driven navigation refactor
+- **Notification/reminder backend** (Cloud Functions) and **Resend email** — fully built and exercised against the emulator; **not deployed** (needs the Blaze plan + config). Web push ships with it.
 
 ### Planned
 
@@ -498,7 +506,7 @@ Fix (one-time, in the Google Cloud console — Firebase can't do it for you):
 - **Content-performance analytics** (Instagram / Facebook / YouTube) and calendar/Drive integrations
 - **PWA & performance** — route-level code-splitting, richer offline support
 - Bulk admin actions; recurring content templates; AI caption suggestions
-- **ID-based task assignments** — replace name-based `owner` / `support[].name` with stable **user IDs**, so assignment integrity can be validated in Firestore rules, renames/removals don't break references, task-history attribution stays reliable, and QA production exclusions can be enforced **server-side** (today they're enforced client-side plus the server-side user-doc invariant). Also unblocks a per-task `reviewerId`.
+- **ID-based task assignments** — replace name-based `owner` / `support[].name` with stable **user IDs**, so assignment integrity can be validated in Firestore rules, renames/removals don't break references, task-history attribution stays reliable, and QA production exclusions can be enforced **server-side** (today they're client-side plus the server-side user-doc invariant). Also unblocks a per-task `reviewerId`.
 
 ---
 

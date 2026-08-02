@@ -32,6 +32,7 @@ export const NOTIF_META = {
   ready:            { icon: PaperAirplaneIcon,          label: "Ready to post",     tint: "tint-success" },
   mention:          { icon: AtSymbolIcon,               label: "Mention",           tint: "tint-info" },
   account_approved: { icon: CheckBadgeIcon,             label: "Account",           tint: "tint-success" },
+  account_pending:  { icon: UserPlusIcon,               label: "Approval needed",   tint: "tint-primary" },
   leadership:       { icon: ChartBarIcon,               label: "Leadership",        tint: "tint-neutral" },
   weeklyTaskCheck:  { icon: ClockIcon,                  label: "Weekly check-in",   tint: "tint-primary" },
 };

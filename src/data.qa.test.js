@@ -5,9 +5,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isQA, isApproved, isProductionMember, isAssignable, isAvailable,
-  autoAssign, searchPeople, reviewMetrics,
+  autoAssign, searchPeople, reviewMetrics, reviewQueue, reviewTiming,
   searchTasks, qaTaskCapabilities, isReviewableState,
+  REVISION_MAX, clampRevision, canSendRevision, revisionCharState, hasUnsentRevision, approveGate,
 } from "./data.js";
+
+// A local-midnight ISO date `off` days from today, so daysTo() returns exactly `off`.
+const iso = (off) => {
+  const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + off);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 test("isProductionMember excludes QA — with NO admin exception", () => {
   const shooter = { status: "approved", skills: ["shoot"] };
@@ -85,6 +92,75 @@ test("reviewMetrics buckets submitted work — a QA concept, not production load
   assert.deepEqual(m.recentlyReviewed.map((t) => t.id), ["d"]);
 });
 
+/* ---- reviewQueue: ONE prioritised queue (each pending review shown once) ---- */
+
+test("reviewQueue: overdue → due-soon → far; the most urgent is upNext, none duplicated", () => {
+  const tasks = [
+    { id: "far", status: "In Review", postDate: iso(200) },
+    { id: "over", status: "In Review", postDate: iso(-4) },   // overdue
+    { id: "soon", status: "In Review", postDate: iso(1) },    // due tomorrow
+  ];
+  const q = reviewQueue(tasks);
+  assert.equal(q.upNext.id, "over");
+  assert.deepEqual(q.alsoWaiting.map((t) => t.id), ["soon", "far"]);
+  const shown = [q.upNext.id, ...q.alsoWaiting.map((t) => t.id)];
+  assert.equal(new Set(shown).size, shown.length, "each pending review appears once");
+  assert.equal(q.counts.ready, 3);
+});
+
+test("reviewQueue: ties break by oldest submission (longest waiting first)", () => {
+  const tasks = [
+    { id: "newer", status: "In Review", postDate: iso(-3), activity: [{ type: "qa_sent", at: 200 }] },
+    { id: "older", status: "In Review", postDate: iso(-3), activity: [{ type: "qa_sent", at: 100 }] },
+  ];
+  const q = reviewQueue(tasks);
+  assert.equal(q.upNext.id, "older");
+  assert.deepEqual(q.alsoWaiting.map((t) => t.id), ["newer"]);
+});
+
+test("reviewQueue: blocked reviews are separated below actionable, never upNext", () => {
+  const tasks = [
+    { id: "blk", status: "In Review", postDate: iso(-10), blockedOn: "Uncle Leke" }, // most overdue BUT blocked
+    { id: "act", status: "In Review", postDate: iso(2) },
+  ];
+  const q = reviewQueue(tasks);
+  assert.equal(q.upNext.id, "act", "actionable outranks a more-overdue blocked item");
+  assert.equal(q.alsoWaiting.length, 0);
+  assert.deepEqual(q.blocked.map((t) => t.id), ["blk"]);
+  assert.deepEqual(q.counts, { ready: 1, blocked: 1, changes: 0, reviewed: 0 });
+});
+
+test("reviewQueue: caught-up when nothing is In Review", () => {
+  const q = reviewQueue([{ id: "x", status: "Approved" }, { id: "y", status: "Posted" }]);
+  assert.equal(q.upNext, null);
+  assert.equal(q.counts.ready, 0);
+  assert.equal(q.alsoWaiting.length, 0);
+  assert.equal(q.blocked.length, 0);
+});
+
+test("reviewQueue: changes + recently-reviewed are separate secondary buckets", () => {
+  const tasks = [
+    { id: "ch", status: "Changes Requested", postDate: iso(5) },
+    { id: "ap", status: "Approved", activity: [{ type: "approved", at: 100 }] },
+    { id: "ir", status: "In Review", postDate: iso(3) },
+  ];
+  const q = reviewQueue(tasks);
+  assert.deepEqual(q.changes.map((t) => t.id), ["ch"]);
+  assert.deepEqual(q.recentlyReviewed.map((t) => t.id), ["ap"]);
+  assert.equal(q.upNext.id, "ir");
+});
+
+test("reviewTiming: shown only when it helps (overdue / due soon), else null", () => {
+  assert.equal(reviewTiming({ postDate: iso(-3) }).tone, "overdue");
+  assert.match(reviewTiming({ postDate: iso(-3) }).text, /3d overdue/);
+  assert.equal(reviewTiming({ postDate: iso(0) }).text, "Due today");
+  assert.equal(reviewTiming({ postDate: iso(1) }).text, "Due tomorrow");
+  assert.equal(reviewTiming({ postDate: iso(3) }).tone, "soon");
+  assert.equal(reviewTiming({ postDate: iso(30) }), null, "far future → no timing noise");
+  assert.equal(reviewTiming({ postDate: null }), null);
+  assert.equal(reviewTiming({}), null);
+});
+
 /* ---- QA can OBSERVE production (broad read), even though it can't OPERATE it ---- */
 
 test("QA task search spans every status (planning → posted → archived)", () => {
@@ -152,4 +228,49 @@ test("Admin + QA: administers the app, but is NEVER production personnel", () =>
   const roster = [qaAdmin, shooter, owner].filter(isProductionMember).map((u) => u.name);
   assert.deepEqual(roster.sort(), ["Ben", "Cy"]);
   assert.ok(!roster.includes("Ada"));
+});
+
+/* ---- QA "Request changes" revision composer (pure rules) ---- */
+
+test("canSendRevision: blocks blank, whitespace-only, in-flight, and over-limit", () => {
+  assert.equal(canSendRevision(""), false);
+  assert.equal(canSendRevision("   \n\t "), false, "whitespace-only can't submit");
+  assert.equal(canSendRevision("Tighten the hook"), true);
+  assert.equal(canSendRevision("valid", { sending: true }), false, "no duplicate submit while sending");
+  assert.equal(canSendRevision("x".repeat(REVISION_MAX)), true);
+  assert.equal(canSendRevision("x".repeat(REVISION_MAX + 1)), false, "over the backend limit");
+});
+
+test("clampRevision enforces the 2,000-char backend limit (e.g. a big paste)", () => {
+  assert.equal(REVISION_MAX, 2000);
+  assert.equal(clampRevision("x".repeat(2500)).length, 2000);
+  assert.equal(clampRevision("short"), "short");
+  assert.equal(clampRevision(undefined), "");
+});
+
+test("multiline content is preserved verbatim through clamp (Return = newline, not submit)", () => {
+  const multi = "Line one.\nLine two.\n\nLine four with detail.";
+  assert.equal(clampRevision(multi), multi);
+});
+
+test("revisionCharState surfaces the counter only near the limit", () => {
+  assert.equal(revisionCharState("hi").nearLimit, false);
+  const near = revisionCharState("x".repeat(1900));
+  assert.equal(near.nearLimit, true);
+  assert.equal(near.remaining, 100);
+  assert.equal(revisionCharState("x".repeat(2000)).remaining, 0);
+});
+
+test("hasUnsentRevision drives the discard warning (non-empty, non-whitespace)", () => {
+  assert.equal(hasUnsentRevision(""), false);
+  assert.equal(hasUnsentRevision("   "), false);
+  assert.equal(hasUnsentRevision("needs work"), true);
+});
+
+test("approveGate: sending blocks; a dirty draft confirms; otherwise approve", () => {
+  assert.equal(approveGate({ dirty: false, sending: true }), "sending");
+  assert.equal(approveGate({ dirty: true, sending: true }), "sending", "in-flight wins over dirty");
+  assert.equal(approveGate({ dirty: true, sending: false }), "confirm-discard");
+  assert.equal(approveGate({ dirty: false, sending: false }), "approve");
+  assert.equal(approveGate({}), "approve");
 });

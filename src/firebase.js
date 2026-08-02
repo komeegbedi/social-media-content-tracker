@@ -2,8 +2,11 @@ import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, connectAuthEmulator } from "firebase/auth";
 import { initializeFirestore, connectFirestoreEmulator,
   persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
-import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
-import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
+import { memoizeImport, appCheckPlan, bootstrapFirebase } from "./firebaseBootstrap";
+// firebase/functions, firebase/messaging AND firebase/app-check are all loaded
+// dynamically (getFunctionsInstance/callFunction, push.js, and the bootstrap
+// below), so they stay out of the initial bundle — app-check only loads when a
+// reCAPTCHA key is configured.
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -15,40 +18,76 @@ const firebaseConfig = {
 };
 
 export const app = initializeApp(firebaseConfig);
+const _useEmulator = import.meta.env.VITE_USE_EMULATOR === "true";
+const _appCheckKey = import.meta.env.VITE_FIREBASE_APPCHECK_KEY;
 
-// App Check (optional hardening): only initializes when a reCAPTCHA v3 site key
-// is configured, so local dev and un-provisioned deploys are unaffected. Enforce
-// it per-service in the Firebase console once the key is set.
-const appCheckKey = import.meta.env.VITE_FIREBASE_APPCHECK_KEY;
-if (appCheckKey && typeof window !== "undefined" && import.meta.env.VITE_USE_EMULATOR !== "true") {
-  try { initializeAppCheck(app, { provider: new ReCaptchaV3Provider(appCheckKey), isTokenAutoRefreshEnabled: true }); }
-  catch { /* non-fatal — app still works without App Check */ }
+// Auth + Firestore are LIVE BINDINGS assigned only AFTER App Check init (in the
+// bootstrap below), so no attested service is constructed before attestation
+// exists. Importers get live bindings; no consumer runs before firebaseReady
+// resolves (main.jsx gates rendering on it), so these are always assigned by use.
+export let auth;
+export let db;
+export const googleProvider = new GoogleAuthProvider();
+
+function constructServices() {
+  auth = getAuth(app);
+  // Firestore transport + cache:
+  // - Auto-detect long-polling (Safari/iOS + flaky networks recover more reliably).
+  // - Persistent (IndexedDB) local cache in production for instant, offline-capable
+  //   loads; disabled against the emulator so re-seeding never shows stale data.
+  db = initializeFirestore(app, {
+    experimentalAutoDetectLongPolling: true,
+    ...(_useEmulator ? {} : { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }),
+  });
+  if (_useEmulator) {
+    connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+    connectFirestoreEmulator(db, "127.0.0.1", 8080);
+  }
 }
 
-export const auth = getAuth(app);
-// Firestore transport + cache:
-// - Auto-detect long-polling instead of the default streaming transport. On
-//   Safari / iOS and flaky mobile networks the streaming channel can get stuck
-//   in a half-open state after a connection drop; long-polling recovers more
-//   reliably.
-// - Persistent (IndexedDB) local cache in production: after the first visit,
-//   data renders INSTANTLY from disk while the server syncs in the background,
-//   and it works offline. Disabled against the emulator so re-seeding during
-//   dev never shows stale cached data. Falls back gracefully (e.g. private
-//   browsing / multiple older tabs) without breaking the app.
-const _useEmulator = import.meta.env.VITE_USE_EMULATOR === "true";
-export const db = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true,
-  ...(_useEmulator ? {} : { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }),
-});
-export const googleProvider = new GoogleAuthProvider();
-// Callable Cloud Functions (e.g. the admin email test) — same region as deploy.
-export const functions = getFunctions(app, "northamerica-northeast1");
+/* Startup bootstrap — the promise main.jsx renders behind.
 
-// Local testing: route Auth + Firestore + Functions to the Firebase Emulator Suite.
-// Enable with VITE_USE_EMULATOR=true (see README → Local testing).
-if (import.meta.env.VITE_USE_EMULATOR === "true") {
-  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
-  connectFirestoreEmulator(db, "127.0.0.1", 8080);
-  connectFunctionsEmulator(functions, "127.0.0.1", 5001);
+   When a reCAPTCHA key is configured we dynamically import firebase/app-check and
+   initialize it BEFORE constructing Auth/Firestore, so no request is ever
+   unattested. FAIL-CLOSED: if the app-check chunk can't load or initializeAppCheck
+   throws, this REJECTS and Auth/Firestore are never constructed — main.jsx shows a
+   bootstrap error screen (the app never mounts). A first-token blip is soft: the
+   SDK is initialized and retries per request, so we proceed and render.
+
+   No key / emulator → nothing to attest; services construct and it resolves fast.
+
+   Debug provider: VITE_FIREBASE_APPCHECK_DEBUG=true uses App Check's debug token in
+   a real (non-emulator) dev/staging build — PRINTED TO THE CONSOLE for you to
+   register in the Firebase console, never hard-coded/committed. */
+const _plan = appCheckPlan({
+  key: _appCheckKey, useEmulator: _useEmulator,
+  hasWindow: typeof window !== "undefined",
+  debug: import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG === "true",
+});
+export const firebaseReady = bootstrapFirebase(_plan, {
+  setDebug: () => { self.FIREBASE_APPCHECK_DEBUG_TOKEN = true; },
+  loadAppCheck: () => import("firebase/app-check"),
+  initAppCheck: (m) => m.initializeAppCheck(app, { provider: new m.ReCaptchaV3Provider(_appCheckKey), isTokenAutoRefreshEnabled: true }),
+  firstToken: (m, ac) => m.getToken(ac, false),
+  onTokenWarn: (e) => { try { console.warn("App Check first token failed; the SDK will retry per request.", e && e.message); } catch {} },
+  constructServices,
+});
+
+/* Callable Cloud Functions — loaded on first use so firebase/functions stays out
+   of the initial bundle. Memoized on success; a failed import isn't cached, so a
+   retry re-imports. */
+export const getFunctionsInstance = memoizeImport(async () => {
+  const { getFunctions, connectFunctionsEmulator } = await import("firebase/functions");
+  const fns = getFunctions(app, "northamerica-northeast1");
+  if (_useEmulator) connectFunctionsEmulator(fns, "127.0.0.1", 5001);
+  return fns;
+});
+
+/* Invoke a callable, loading firebase/functions (getFunctions AND httpsCallable)
+   on demand. httpsCallable must be imported here too — importing it statically
+   anywhere pulls the whole functions SDK into the initial bundle. Rejections
+   propagate unchanged (same HttpsError .code the callers already map). */
+export async function callFunction(name, payload) {
+  const [{ httpsCallable }, fns] = await Promise.all([import("firebase/functions"), getFunctionsInstance()]);
+  return httpsCallable(fns, name)(payload);
 }

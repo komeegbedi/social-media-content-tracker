@@ -815,6 +815,93 @@ export function reviewMetrics(tasks) {
   };
 }
 
+/* Concise, restrained timing for a review card — shown ONLY when it helps the
+   reviewer prioritise (overdue, or due very soon). Far-future / no-date → null,
+   so most cards carry no timing at all. tone: "overdue" (actionable urgency) |
+   "soon" (gentle). */
+export function reviewTiming(task) {
+  const d = daysTo(task && task.postDate);
+  if (d === null || d === undefined) return null;
+  if (d < 0) return { text: `${Math.abs(d)}d overdue`, tone: "overdue" };
+  if (d === 0) return { text: "Due today", tone: "soon" };
+  if (d === 1) return { text: "Due tomorrow", tone: "soon" };
+  if (d <= 3) return { text: `Due in ${d} days`, tone: "soon" };
+  return null;
+}
+
+/* The QA reviewer's single, PRIORITISED review queue. Where reviewMetrics buckets
+   by status (with overdue ⊂ awaiting, so items appear twice), this yields ONE
+   mutually-exclusive, ordered experience so each pending review is shown once:
+     upNext      — the single most urgent actionable review (the primary card)
+     alsoWaiting — the rest of the actionable reviews, in the same order
+     blocked     — In Review but blocked (waiting on someone) → placed BELOW
+                   actionable so it never outranks something reviewable now
+     changes     — sent back for changes (secondary/history)
+     recentlyReviewed — recently cleared/bounced (secondary/history, most recent few)
+   Actionable order: overdue → due soon → far / no date; ties broken by the OLDEST
+   submission (longest waiting) first. */
+const REVIEW_NO_DATE = 1e9;
+export function reviewQueue(tasks) {
+  const all = tasks || [];
+  const inReview = all.filter((t) => t.status === "In Review");
+  const rank = (t) => { const d = daysTo(t.postDate); return (d === null || d === undefined) ? REVIEW_NO_DATE : d; };
+  const submittedAt = (t) => { const ev = lastEvent(t, "qa_sent"); return ev ? ev.at : 0; };
+  const byUrgency = (a, b) => (rank(a) - rank(b)) || (submittedAt(a) - submittedAt(b));
+  const actionable = inReview.filter((t) => !t.blockedOn).sort(byUrgency);
+  const blocked = inReview.filter((t) => !!t.blockedOn).sort(byUrgency);
+  const changes = all.filter((t) => t.status === "Changes Requested");
+  const reviewedAt = (t) => { const ev = lastEvent(t, "approved") || lastEvent(t, "changes_requested"); return ev ? ev.at : 0; };
+  const recentlyReviewed = all
+    .filter((t) => reviewedAt(t) > 0 && t.status !== "In Review")
+    .sort((a, b) => reviewedAt(b) - reviewedAt(a))
+    .slice(0, 5);
+  return {
+    upNext: actionable[0] || null,
+    alsoWaiting: actionable.slice(1),
+    blocked, changes, recentlyReviewed,
+    counts: { ready: actionable.length, blocked: blocked.length, changes: changes.length, reviewed: recentlyReviewed.length },
+  };
+}
+
+/* QA "Request changes" revision composer — pure logic. React owns focus, scroll,
+   and keyboard; these functions own the rules so they're unit-testable. The
+   2,000-char cap mirrors the backend limit on the changes-requested note. */
+export const REVISION_MAX = 2000;
+
+// Hard-cap typed input so a paste can never exceed the backend limit.
+export function clampRevision(text) {
+  return (text || "").slice(0, REVISION_MAX);
+}
+
+// A revision can be sent only when it has real (non-whitespace) content, is within
+// the limit, and no send is already in flight (guards accidental double-submits).
+export function canSendRevision(text, { sending } = {}) {
+  const v = (text || "");
+  return !sending && v.trim().length > 0 && v.length <= REVISION_MAX;
+}
+
+// Character-count model for the subtle near-limit counter (hidden until close).
+export function revisionCharState(text, threshold = 200) {
+  const length = (text || "").length;
+  const remaining = REVISION_MAX - length;
+  return { length, remaining, max: REVISION_MAX, nearLimit: remaining <= threshold };
+}
+
+// Collapsing/closing the composer with real content in it should warn first.
+export function hasUnsentRevision(text) {
+  return (text || "").trim().length > 0;
+}
+
+// What Approve should do given the revision composer's state:
+//   "sending"         — a request is in flight; ignore Approve (no racing writes)
+//   "confirm-discard" — an unsent draft exists; confirm before discarding it
+//   "approve"         — safe to approve immediately
+export function approveGate({ dirty, sending } = {}) {
+  if (sending) return "sending";
+  if (dirty) return "confirm-discard";
+  return "approve";
+}
+
 /* Caption / upload team: their work starts once content is approved. */
 export function postQueue(tasks) {
   const live = (tasks || []).filter((t) => t.status !== "Posted");
@@ -1551,4 +1638,53 @@ export function computeCapacity(tasks, users) {
     });
   });
   return cap;
+}
+
+/* ---- Comments: merge legacy embedded array with the canonical subcollection ----
+   During the migration window a task's discussion lives in two places at once:
+   the old embedded `task.comments[]` array and the new `tasks/{id}/comments`
+   subcollection. The migration copies each embedded comment into a subcollection
+   doc PRESERVING its original who/txt/timestamp, so the two representations of the
+   same comment share an identity and must render only once. */
+
+// Normalise any timestamp shape to epoch-millis: a raw number (legacy Date.now()),
+// a Firestore Timestamp (.toMillis()), a plain {seconds,nanoseconds} (from a
+// snapshot serialised over the wire), or a Date.
+export function tmMillis(v) {
+  if (v == null) return 0;
+  if (typeof v === "number") return v;
+  if (typeof v.toMillis === "function") return v.toMillis();
+  if (typeof v.seconds === "number") return v.seconds * 1000 + Math.floor((v.nanoseconds || 0) / 1e6);
+  if (v instanceof Date) return v.getTime();
+  return 0;
+}
+
+// Team members a user can @mention: approved teammates other than themselves,
+// sorted by name. The UID (`id`) is the identity that gets stored; the name is
+// only for display + the copy.
+export function mentionableUsers(users, me) {
+  return (users || [])
+    .filter((u) => u && u.id !== (me && me.id) && isApproved(u))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+}
+
+// Identity of a comment for dedup: author + text + when. A migrated subcollection
+// doc keeps the original values, so it collides with its embedded twin and the two
+// collapse to one. New subcollection comments (server timestamp) never collide with
+// a legacy one.
+export function commentKey(c) {
+  return `${c.who ?? ""} ${c.txt ?? ""} ${tmMillis(c.tm)}`;
+}
+
+// Union of embedded + subcollection comments, deduped by identity (the canonical
+// subcollection copy wins), oldest first — the order the Discussion thread reads in.
+export function mergeComments(embedded = [], subDocs = []) {
+  const byKey = new Map();
+  for (const c of embedded || []) {
+    byKey.set(commentKey(c), { who: c.who, txt: c.txt, tm: tmMillis(c.tm), source: "legacy" });
+  }
+  for (const c of subDocs || []) {
+    byKey.set(commentKey(c), { who: c.who, txt: c.txt, tm: tmMillis(c.tm), source: "sub", id: c.id });
+  }
+  return [...byKey.values()].sort((a, b) => a.tm - b.tm);
 }

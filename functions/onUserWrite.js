@@ -15,16 +15,16 @@ exports.onUserWrite = onDocumentWritten(
     if (!after) return;
 
     // New pending registration → alert every admin (in-app + push + email). #9
-    // Push/email deep-link straight to Admin → People → Pending Approvals.
+    // A DISTINCT type ("account_pending", not the leadership digest) so it routes
+    // to Admin → People and highlights this exact user — never to Workflow.
     if (!before && after.status === "pending") {
       const { list } = await loadUsers();
       const admins = list.filter((u) => u.role === "admin" && u.uid !== uid);
       await notifyUsers(admins, {
-        type: "leadership", required: true, priority: "critical",
+        type: "account_pending", userId: uid, required: true, priority: "critical",
         channels: ["in-app", "push", "email"], keyBase: `pending_${uid}`,
         title: "New team member awaiting approval",
         body: `${after.name || "Someone"} is waiting for account approval.`,
-        route: "/?tab=admin&sec=people",
       });
       return;
     }

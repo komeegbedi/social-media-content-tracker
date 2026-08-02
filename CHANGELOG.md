@@ -2,6 +2,24 @@
 
 All notable changes to IFC Creatives Board are documented here.
 
+## Production hardening + Safari theme sync + QA composer — deployed 2026-08-02 (git a6ed75e)
+
+Deployed to production in order: Firestore rules + indexes, then Cloud Functions
+(unchanged from the live set — idempotent), then Hosting.
+
+### Added / Changed
+- **Hosting cache policy**: `index.html` and the messaging service worker are served `no-cache, max-age=0, must-revalidate`; content-hashed `/assets/**` are `public, max-age=31536000, immutable`. New builds take effect immediately (removes the stale-build lag). Emulator-verified via `npm run test:headers` (`scripts/verify-headers.mjs`).
+- **Theme-color / color-scheme**: one standards-compliant `<meta name="theme-color">`, dynamically **replaced** to the RESOLVED app theme, with `documentElement.style.colorScheme` and the `html` background kept in sync (safe-area regions included). No media-gated duplicate tags.
+- **QA "Request changes" composer**: replaced the placeholder `<textarea rows=2>` with a real multiline revision composer — persistent "What needs to change?" label, helper copy, 16px text (no iOS zoom), 2,000-char cap with a near-limit counter, full-width "Send revision request", submitting/success/failure states, Return = newline (never submit). Complete unsaved-draft protection across **every** exit path (scrim, ✕, browser Back, Approve, other route) via the route-aware guard + `approveGate`. Real React interaction tests (vitest + Testing Library).
+
+### Manual verification — iPhone 12 Pro, iOS 26.5.2, Safari (2026-08-02)
+- **App theme (manual Light/Dark and Match System)**: the application updates **immediately** in all cases. ✅
+- **Match System**: updates **both** the app and Safari's browser chrome. ✅
+- **QA composer** — keyboard positioning, multiline Return, unsaved-draft warnings, duplicate-submission prevention, and revision notification: **all PASS** (acceptance criteria fully met). ✅
+
+### Known limitations
+- **iOS Safari 26.5.2 — browser chrome under a *manual* theme override**: the standards-compliant theme-color signal is honoured for "Match System" (app and toolbar both update), but under a **manual** in-app Light/Dark override the bottom toolbar continues to follow the **device** appearance. The Safari-chrome sync is therefore *implemented to the extent supported by the browser; the iOS Safari manual-override limitation is verified* (iPhone 12 Pro / iOS Safari 26.5.2) — not an unresolved cache bug. No polling, timeouts, reloads, or duplicate meta tags were added to force it.
+
 ## [1.1.2] — Mobile-First Design System & Experience Refresh (unreleased)
 
 Visual/interaction redesign only — v1.0/v1.1 functionality, backend, and data structures unchanged. Not deployed.

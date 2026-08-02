@@ -41,6 +41,7 @@ export const PARAM = {
   filter: "filter",     // /workflow?filter=attention
   focus: "focus",       // /content/:id?focus=comments|review  (deep-link a section)
   comment: "comment",   // /content/:id?focus=comments&comment=<id>  (highlight target)
+  user: "user",         // /admin?section=people&user=<uid>  (highlight a person)
 };
 export const PANELS = ["profile", "notifications", "search"];
 // Sections of the content detail a notification can jump straight to.
@@ -63,7 +64,7 @@ export function parseLocation(pathname, search) {
   const p = params(search);
   const base = {
     screen: "notfound", contentId: null, memberId: null,
-    section: null, event: null, filter: null, focus: null, comment: null,
+    section: null, event: null, filter: null, focus: null, comment: null, user: null,
     overlay: parseOverlay(p),
     redirect: null,
   };
@@ -79,7 +80,10 @@ export function parseLocation(pathname, search) {
       out.event = p.get(PARAM.event) || null;
       out.filter = p.get(PARAM.filter) || null;   // e.g. ?filter=attention from a summary
     }
-    if (screen === "admin") out.section = p.get(PARAM.section) || null;
+    if (screen === "admin") {
+      out.section = p.get(PARAM.section) || null;
+      out.user = p.get(PARAM.user) || null;        // highlight a person (e.g. a pending approval)
+    }
     return out;
   }
   // /content/:id — optional section focus + comment highlight (from a notification).
@@ -157,7 +161,7 @@ export function withParams(search, changes) {
     else p.set(k, v);
   }
   // Stable key order for deterministic output.
-  const order = [PARAM.compose, PARAM.edit, PARAM.panel, PARAM.event, PARAM.section, PARAM.filter, PARAM.focus, PARAM.comment];
+  const order = [PARAM.compose, PARAM.edit, PARAM.panel, PARAM.event, PARAM.section, PARAM.filter, PARAM.focus, PARAM.comment, PARAM.user];
   const out = new URLSearchParams();
   for (const k of order) if (p.has(k)) out.set(k, p.get(k));
   const s = out.toString();
@@ -214,6 +218,7 @@ export function notificationDestination(n) {
   if (!n) return { pathname: "/", search: "" };
   const type = n.type;
 
+  // Content is the strongest signal — anything about a task opens that task.
   if (n.taskId) {
     const focus =
       type === "qa" ? "review"
@@ -229,12 +234,22 @@ export function notificationDestination(n) {
   if (n.eventOccurrenceId)
     return { pathname: "/workflow", search: withParams("", { [PARAM.event]: n.eventOccurrenceId }) };
 
-  // Summary / follow-up digest → the exact items behind it, not a dashboard.
+  // People/account notifications → Admin → People (never Workflow). A pending
+  // approval highlights the exact person via ?user. An explicit adminSection is
+  // honoured for forward-compatible account/permission alerts.
+  if (type === "account_pending" || n.adminSection) {
+    return {
+      pathname: "/admin",
+      search: withParams("", { [PARAM.section]: n.adminSection || "people", [PARAM.user]: n.userId || null }),
+    };
+  }
+
+  // Follow-up DIGEST (a production summary) → the exact items behind it.
   if (type === "leadership")
     return { pathname: "/workflow", search: withParams("", { [PARAM.filter]: "attention" }) };
 
   if (type === "weeklyTaskCheck") return { pathname: "/my-day", search: "" };
-  if (type === "account_approved") return { pathname: "/", search: "" };
+  if (type === "account_approved") return { pathname: "/", search: "" };  // Home IS the point — welcome
 
   return { pathname: "/", search: "" };   // last-resort only for unknown types
 }
