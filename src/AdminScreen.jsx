@@ -8,6 +8,7 @@
    the main chunk, not duplicated); everything else comes from the real modules.
    =================================================================== */
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { adminKebab } from "./adminActions.js";
 import { db } from "./firebase";
 import { collection, doc, updateDoc, addDoc, serverTimestamp } from "firebase/firestore";
 import {
@@ -27,14 +28,8 @@ import {
   loadPref, savePref, useUnsavedGuard, ENABLE_CSV_IMPORT,
 } from "./App.jsx";
 
-/* Shared kebab actions for an admin content card. */
-const adminKebab = (t, h) => [
-  { label:"Open", onClick:()=>h.open(t.id) },
-  { label:"Edit", onClick:()=>h.edit(t) },
-  { label:"Duplicate", onClick:()=>h.duplicate(t) },
-  ...(t.status!=="Posted" ? [{ label:"Archive", onClick:()=>h.archive(t) }] : []),
-  { label:"Delete", danger:true, onClick:()=>h.del(t.id, t.title) },
-];
+// Admin content-card kebab actions live in a pure module (adminActions.js) so the
+// "no one-click mark-posted shortcut" invariant is unit-testable.
 
 /* Admin content card — surfaces status, owner, the problem (blocker/gap) and
    due date up front so an admin can triage without opening the card. */
@@ -181,7 +176,7 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
   );
 }
 
-export default function Admin({ users, tasks, teamUsers, issues, eventSeries, secReq, focusUser, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onArchiveTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
+export default function Admin({ users, tasks, teamUsers, issues, eventSeries, secReq, focusUser, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
   // Start on the requested section (deep-link / notification) so we never flash
   // "Overview" before switching — that intermediate render looked jumpy.
   const [sec, setSec] = useState(() => secReq?.sec || "overview");
@@ -192,7 +187,7 @@ export default function Admin({ users, tasks, teamUsers, issues, eventSeries, se
 
   // Card action handlers, bundled once and threaded through the panels.
   const [confirmDel, setConfirmDel] = useState(null);
-  const h = { open:onOpenTask, edit:onEditTask, archive:onArchiveTask,
+  const h = { open:onOpenTask, edit:onEditTask,
               duplicate:onDuplicateTask, del:(id,title)=>setConfirmDel({id,title}), auto:onAutoOne };
   const goContent = (filter="all") => { setContentFilter(filter); setSec("content"); };
 

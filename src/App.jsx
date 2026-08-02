@@ -19,8 +19,8 @@ import {
   PHASES, statusPhase, nextStep, workflowAction,
   LINK_FIELDS, requiredLinkKeys, missingLinks, QA_STATUSES,
   activityEntry, activityLabel, isApprovalEvent,
-  TYPES, typeClass, qaQueue, reviewMetrics, reviewQueue, reviewTiming, qaTaskCapabilities, postQueue, pendingMatches, applyAssignment,
-  approveGate,
+  TYPES, typeClass, qaQueue, reviewMetrics, reviewQueue, reviewTiming, postQueue, pendingMatches, applyAssignment,
+  approveGate, canMakeReviewDecision, canAdminOverride,
   personalWins, teamWins, dashboardMetrics, searchTasks, searchPeople,
   monthlyWins, recentWins, contributorWins,
   BOARD_SORTS, BOARD_FILTERS, sortTasks, groupByStatus, applyBoardFilter,
@@ -52,6 +52,7 @@ import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging"
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
 import { useNav, useScrollRestoration, useDirtyNavGuard } from "./navHooks.js";
 import RevisionComposer from "./RevisionComposer.jsx";
+import AdminOverrideDialog from "./AdminOverrideDialog.jsx";
 import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM, notificationDestination } from "./nav.js";
 
 /* The admin dashboard is a lazy-loaded chunk (React.lazy). It's only rendered for
@@ -1581,13 +1582,10 @@ function Board({ profile, isAdmin }) {
 
   const deleteTask = (id) => withFeedback(deleteDoc(doc(db, "tasks", id)), "✓ Content deleted", "Deleting content…");
 
-  // Archive = move to the Posted/completed status (no separate flag in the model).
-  const archiveTask = (task) => withFeedback(
-    updateDoc(doc(db, "tasks", task.id), {
-      status: "Posted", archivedAt: serverTimestamp(),
-      activity: [...(task.activity||[]), activityEntry("posted", me.name, "Posted")],
-      updatedAt: serverTimestamp(),
-    }), "✓ Marked as posted", "Updating…");
+  // (No admin "Mark posted" shortcut: forcing Posted out of the normal
+  // Ready-to-Post→Posted step is an exceptional jump and must go through the
+  // Administrative override panel — with a real reason and confirmation — not a
+  // one-click canned-reason action. Normal posting uses the guided workflow.)
 
   // Duplicate = fresh copy at the start of the workflow, no produced artifacts.
   const duplicateTask = (task) => {
@@ -1610,11 +1608,15 @@ function Board({ profile, isAdmin }) {
     "In Progress":"started", "In Review":"qa_sent", "Approved":"approved",
     "Changes Requested":"changes_requested", "Ready to Post":"ready", "Posted":"posted",
   }[status] || "status");
-  // Admin manual status override (the status segmented control).
+  // Trustworthy attribution for a workflow activity entry: the caller's uid and
+  // their capability at action time (rules require the appended entry's uid to be
+  // the caller, so no one can forge another actor into the history).
+  const actorMeta = () => ({ uid: me.id, cap: me.qa ? "qa" : (me.role === "admin" ? "admin" : "member") });
+  // Status change that a legal transition permits (owner/QA/captions per the rules).
   const setStatus = (task, status) => withFeedback(
     updateDoc(doc(db, "tasks", task.id), {
       status, ...(status === "Posted" ? { archivedAt: serverTimestamp() } : {}),
-      activity: [...(task.activity||[]), activityEntry(eventType(status), me.name, status)],
+      activity: [...(task.activity||[]), activityEntry(eventType(status), me.name, status, actorMeta())],
       updatedAt: serverTimestamp(),
     }), `✓ Moved to ${status}`);
   // The guided workflow action (Start work / Submit for QA / Mark ready / Posted).
@@ -1623,16 +1625,24 @@ function Board({ profile, isAdmin }) {
     updateDoc(doc(db, "tasks", task.id), {
       status: action.to, ...extra,
       ...(action.to === "Posted" ? { archivedAt: serverTimestamp() } : {}),
-      activity: [...(task.activity||[]), activityEntry(action.kind, me.name, action.to)],
+      activity: [...(task.activity||[]), activityEntry(action.kind, me.name, action.to, actorMeta())],
       updatedAt: serverTimestamp(),
     }), `✓ Moved to ${action.to}`);
-  // QA "request changes": send back as the first-class "Changes Requested" status.
+  // QA "request changes": the QA decision (qa === true only — the rules enforce it).
   const qaRequestChanges = (task, note) => withFeedback(
     updateDoc(doc(db, "tasks", task.id), {
       status: "Changes Requested",
-      activity: [...(task.activity||[]), activityEntry("changes_requested", me.name, note)],
+      activity: [...(task.activity||[]), activityEntry("changes_requested", me.name, note, actorMeta())],
       updatedAt: serverTimestamp(),
     }), "✓ Changes requested");
+  // Administrative override — a server-controlled callable, NOT a client status
+  // write. The normal client path denies an admin the In Review→Approved /
+  // Changes Requested transition, so this is the ONLY admin route to it; the server
+  // records an explicit admin_override audit event + activity with its own
+  // attribution and timestamp. Never presented as a QA decision.
+  const adminOverride = (task, { toStatus, reason }) => withFeedback(
+    callFunction("adminOverrideStatus", { taskId: task.id, toStatus, reason }).then((r) => r && r.data),
+    `✓ Administratively moved to ${toStatus}`);
   // Collaborative fields any approved member can set from a task's detail view.
   const setBlocked = async (id, blockedOn) =>
     updateDoc(doc(db, "tasks", id), { blockedOn, updatedAt: serverTimestamp() });
@@ -1720,7 +1730,6 @@ function Board({ profile, isAdmin }) {
   const taskAdmin = useMemo(() => isAdmin ? {
     onEdit: (t) => { setOpenId(null); setEditTask(t); },
     onDuplicate: (t) => duplicateTask(t),
-    onArchive: (t) => archiveTask(t),
     onDelete: async (t) => { if (openId === t.id) setOpenId(null); await deleteTask(t.id); },
   } : null, [isAdmin, openId, me]);
 
@@ -1798,7 +1807,7 @@ function Board({ profile, isAdmin }) {
                     secReq={adminSecReq} focusUser={nav.user}
                     onEditUser={setEditUser} onEditTask={setEditTask}
                     onDeleteUser={removeUser} onRemoveUser={removeUserWithTasks} onDeleteTask={deleteTask}
-                    onArchiveTask={archiveTask} onDuplicateTask={duplicateTask} onOpenTask={setOpenId}
+                    onDuplicateTask={duplicateTask} onOpenTask={setOpenId}
                     onAutoAll={autoAll} onAutoOne={autoOne} onImport={importTasks} onResolveIssue={resolveIssue}
                     onAssignSuggested={assignSuggested} onNewForEvent={newForEvent} />
                 </Suspense>
@@ -1892,13 +1901,14 @@ function Board({ profile, isAdmin }) {
 
       {openTask && (
         <TaskDetail key={openTask.id} task={openTask} me={me} isAdmin={isAdmin}
-          isQA={isAdmin || !!me.qa}
+          isQA={!!me.qa}
           users={users}
           focus={nav.focus} highlightComment={nav.comment}
           onClose={()=>setOpenId(null)}
           onStatus={(s)=>setStatus(openTask, s)}
           onAction={(action, extra)=>runWorkflow(openTask, action, extra)}
           onApprove={()=>setStatus(openTask, "Approved")}
+          onAdminOverride={(payload)=>adminOverride(openTask, payload)}
           onLinks={(links)=>setLinks(openTask, links)}
           onRequestChanges={(note)=>qaRequestChanges(openTask, note)}
           onBlocked={(b)=>setBlocked(openTask.id, b)}
@@ -1906,7 +1916,6 @@ function Board({ profile, isAdmin }) {
           onReact={(emo)=>toggleReact(openTask, emo)}
           onSaved={()=>flashBanner("✓ Saved just now")}
           onDuplicate={isAdmin ? async ()=>{ await duplicateTask(openTask); setOpenId(null); } : undefined}
-          onArchive={isAdmin ? async ()=>{ await archiveTask(openTask); setOpenId(null); } : undefined}
           onDelete={isAdmin ? async ()=>{ await deleteTask(openTask.id); setOpenId(null); } : undefined}
           onEdit={()=>setEditTask(openTask)} />
       )}
@@ -2999,7 +3008,7 @@ export function KebabMenu({ items }) {
      and a thrown error is surfaced inline (the caller's data is never lost).
    Focus starts on the SAFE (cancel) action, so Enter can't trigger deletion
    unless the user deliberately tabs to the destructive button. */
-export function ConfirmDialog({ title, body, consequences, confirmLabel = "Delete", cancelLabel = "Cancel",
+export function ConfirmDialog({ title, body, consequences, note, confirmLabel = "Delete", cancelLabel = "Cancel",
                          tone, icon, danger = true, busyLabel, onConfirm, onClose }) {
   const t = tone || (danger ? "danger" : "neutral");
   const ic = icon || (t === "danger" ? "danger" : t === "warning" ? "warning" : "neutral");
@@ -3031,6 +3040,7 @@ export function ConfirmDialog({ title, body, consequences, confirmLabel = "Delet
         {body && <p id="sb-confirm-b">{body}</p>}
         {consequences && consequences.length>0 &&
           <ul className="sb-confirm-list">{consequences.map((c,i)=><li key={i}>{c}</li>)}</ul>}
+        {note && <p className="sb-confirm-note">{note}</p>}
         {err && <div className="sb-lerr" role="alert" style={{marginTop:12,marginBottom:0}}>{err}</div>}
         <div className="sb-btnrow" style={{marginTop:16}}>
           <button ref={cancelRef} className="sb-btn ghost" onClick={onClose} disabled={busy}>{cancelLabel}</button>
@@ -3042,7 +3052,6 @@ export function ConfirmDialog({ title, body, consequences, confirmLabel = "Delet
     </Portal>
   );
 }
-
 
 /* ===================================================================
    TASK CARD
@@ -3056,7 +3065,6 @@ function TaskAdminMenu({ t, admin, className }) {
       <KebabMenu items={[
         { label:"Edit content", onClick:()=>admin.onEdit(t) },
         { label:"Duplicate", onClick:()=>admin.onDuplicate(t) },
-        ...(t.status!=="Posted" ? [{ label:"Mark as posted", onClick:()=>admin.onArchive(t) }] : []),
         { label:"Delete content", danger:true, onClick:()=>setConfirmDel(true) },
       ]} />
       {confirmDel && <ConfirmDialog
@@ -3203,7 +3211,7 @@ function MissingContent({ onBack }) {
   );
 }
 
-function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, onClose, onStatus, onAction, onApprove, onLinks, onRequestChanges, onBlocked, onComment, onReact, onEdit, onDuplicate, onArchive, onDelete, onSaved }) {
+function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, onClose, onStatus, onAction, onApprove, onAdminOverride, onLinks, onRequestChanges, onBlocked, onComment, onReact, onEdit, onDuplicate, onDelete, onSaved }) {
   const [confirmDel, setConfirmDel] = useState(false);   // admin delete confirmation
   const [draft, setDraft] = useState("");
   // @mentions: uids selected from the team (the identity that gets stored); the
@@ -3223,7 +3231,10 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   const [blocked, setBlocked] = useState(task.blockedOn || "");
   const [links, setLinksDraft] = useState(task.links || {});
   const [postLink, setPostLink] = useState(task.postLink || "");
-  const [showOverride, setShowOverride] = useState(false);
+  const [showOverride, setShowOverride] = useState(false);      // admin override panel revealed
+  const [overrideTo, setOverrideTo] = useState("");             // destination status
+  const [overrideReason, setOverrideReason] = useState("");     // required reason
+  const [overrideConfirm, setOverrideConfirm] = useState(false);// confirmation dialog
   const [askChanges, setAskChanges] = useState(false);          // "Request changes" composer revealed
   const [qaDirty, setQaDirty] = useState(false);                // composer has unsent, non-whitespace text
   const [qaSending, setQaSending] = useState(false);            // revision request in flight
@@ -3268,6 +3279,9 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
     onApprove();
   };
   const approveDiscardingDraft = () => { setAskChanges(false); setConfirmApprove(false); onApprove(); };
+  // Close the workflow-correction flow and clear its draft (used by Cancel and on
+  // a successful override). A FAILED submit does NOT call this — the draft persists.
+  const closeOverride = () => { setShowOverride(false); setOverrideConfirm(false); setOverrideTo(""); setOverrideReason(""); };
   // Discussion streams from the canonical tasks/{id}/comments subcollection. During
   // the migration window a task may still carry the legacy embedded array as well,
   // so merge and dedup the two — each comment renders exactly once (see mergeComments).
@@ -3290,10 +3304,14 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   const isLink = task.link && task.link.startsWith("http");
   const phase = statusPhase(task.status);
   // A pure QA reviewer (QA and not admin) can OBSERVE production but not OPERATE
-  // it: no guided production step, no edit/assign/delete — only review actions in
-  // a reviewable state (qaTaskCapabilities is the single source of that policy).
+  // it: no guided production step, no edit/assign/delete — only review actions,
+  // gated by canMakeReviewDecision (the single source of the review policy).
   const reviewerOnly = !!me.qa && !isAdmin;
-  const qaCaps = qaTaskCapabilities(task);
+  // Review authority (Approve / Request changes) is qa === true only — an admin
+  // does NOT inherit it. This is the single source for showing the QA panel, and
+  // it mirrors the firestore.rules boundary. Admin override is a separate axis.
+  const canReview = canMakeReviewDecision(me, task);   // active + approved + qa===true + In Review
+  const canOverride = canAdminOverride(me);            // active admin — an exceptional, audited action
   const action = reviewerOnly ? null : workflowAction(task, me);   // the single guided step for this user
   const required = requiredLinkKeys(task.type);
   // Only the type's required links (plus any already filled) — keeps it focused.
@@ -3392,11 +3410,11 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
             <div className="sb-banner" style={{marginBottom:14}}>⏳ Submitted. Awaiting QA review.</div>
           )}
 
-          {/* QA panel — Approve / Request changes. Gated by the SAME central
-              policy the rest of the UI reads (qaTaskCapabilities), so the button
-              and the rule can't drift: review actions appear only in a reviewable
-              state; other states are view-only. */}
-          {isQA && qaCaps.canReview && (
+          {/* QA panel — Approve / Request changes. Gated by canMakeReviewDecision
+              (active + approved + qa===true + In Review), the SAME predicate the
+              firestore.rules review boundary enforces — so the control and the rule
+              can't drift, and an Admin-only user never sees it. Admin ≠ QA. */}
+          {canReview && (
             <div className={"sb-qa"+(flashSection==="review"?" sb-flash":"")} ref={reviewRef}>
               <b>QA review</b>
               <div className="sb-btnrow">
@@ -3579,24 +3597,40 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
             )}
           </div>
 
-          {/* Workflow moves through the explicit action above; admins keep a
-              tucked-away manual override for corrections (not a duplicate field). */}
-          {isAdmin && <>
+          {/* Admin controls = application management, SEPARATE from the QA review
+              panel above (Admin ≠ QA). Three tiers: content management, then the
+              prominent workflow-correction entry point, then a Danger zone last. */}
+          {canOverride && <>
             <div className="sb-shead" style={{marginTop:20}}><h2>Admin controls</h2></div>
+
+            {/* 1 · Content management */}
             <div className="sb-btnrow">
               <button className="sb-btn ghost" onClick={onEdit}>Edit details</button>
               {onDuplicate && <button className="sb-btn ghost" onClick={onDuplicate}>Duplicate</button>}
-              {onArchive && task.status!=="Posted" && <button className="sb-btn ghost" onClick={onArchive}>Mark posted</button>}
             </div>
-            {onDelete && <button className="sb-btn danger" style={{marginTop:9}} onClick={()=>setConfirmDel(true)}>Delete content</button>}
-            <button className="sb-quietlink" style={{marginTop:10}} onClick={()=>setShowOverride(o=>!o)} aria-expanded={showOverride}>
-              {showOverride ? "Hide manual status override" : "Change status manually"}</button>
-            {showOverride && <div className="sb-field" style={{marginTop:8}}>
-              <div className="sb-seg" style={{flexWrap:"wrap"}}>
-                {STAGES.map(s=>(
-                  <button key={s} className={"sb-segbtn"+(task.status===s?" on":"")} onClick={()=>onStatus(s)}>{s}</button>))}
+
+            {/* 2 · Workflow correction — a prominent, available (not primary,
+                 not destructive) entry point that OPENS a focused dialog. */}
+            {onAdminOverride && (
+              <button type="button" className={"sb-corr-entry"+(showOverride?" open":"")}
+                onClick={()=>setShowOverride(true)} aria-haspopup="dialog" aria-expanded={showOverride}>
+                <span className="sb-corr-entry-ic" aria-hidden="true"><ExclamationTriangleIcon className="hi hi-sm" /></span>
+                <span className="sb-corr-entry-tx">
+                  <span className="sb-corr-entry-ti">Correct workflow status
+                    <span className="sb-corr-badge">Admin only</span></span>
+                  <span className="sb-corr-entry-sub">Move this content to a different stage when its current status is incorrect. Every correction is recorded.</span>
+                </span>
+                <ChevronRightIcon className="hi hi-sm sb-corr-entry-chev" aria-hidden="true" />
+              </button>
+            )}
+
+            {/* 3 · Danger zone — visually set apart and placed LAST. */}
+            {onDelete && (
+              <div className="sb-danger">
+                <div className="sb-danger-hd"><span className="sb-danger-lbl">Danger zone</span></div>
+                <button className="sb-btn danger" onClick={()=>setConfirmDel(true)}>Delete content</button>
               </div>
-            </div>}
+            )}
           </>}
         </div>
       </div>
@@ -3606,6 +3640,31 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
       body="This permanently removes the content — its links, reminders and history. This can't be undone."
       confirmLabel="Delete content" cancelLabel="Cancel"
       onConfirm={async ()=>{ await onDelete(); }} onClose={()=>setConfirmDel(false)} />}
+    {/* Workflow-correction flow: a FOCUSED dialog collects the destination + reason,
+        then a confirmation step submits through the audited callable. One modal at a
+        time; the draft (overrideTo/overrideReason) lives here so a failed submit
+        preserves it, and success clears everything. */}
+    {showOverride && !overrideConfirm && canOverride && onAdminOverride && (
+      <Portal><AdminOverrideDialog task={task}
+        to={overrideTo} setTo={setOverrideTo} reason={overrideReason} setReason={setOverrideReason}
+        onReview={()=>setOverrideConfirm(true)} onClose={closeOverride} /></Portal>
+    )}
+    {showOverride && overrideConfirm && canOverride && onAdminOverride && (() => {
+      const to = overrideTo, reason = overrideReason.trim();
+      const valid = !!to && !!reason && to !== task.status;
+      return <ConfirmDialog tone="warning" icon="warning"
+        title="Confirm status correction?"
+        body={`This will move “${task.title}” from “${task.status}” to “${to || "—"}”.`}
+        consequences={[`Current status: ${task.status}`, `New status: ${to || "—"}`, `Reason: ${reason || "—"}`]}
+        note="This bypasses the normal workflow and will be recorded as an administrative override. It does not count as a QA review decision."
+        confirmLabel="Confirm correction" cancelLabel="Cancel" busyLabel="Applying…"
+        onConfirm={async ()=>{
+          if (!valid) throw new Error("Choose a different destination status and a reason.");
+          await onAdminOverride({ toStatus: to, reason });
+          closeOverride();
+        }}
+        onClose={()=>setOverrideConfirm(false)} />;
+    })()}
     {/* Route-aware guard: any navigation away (scrim / ✕ / Back / another route)
         while a revision draft is unsent is intercepted with a discard confirm. */}
     {qaLeaveGuard}
@@ -4251,11 +4310,20 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
           <div className="sb-field"><label>Access level</label>
             <select value={f.role} onChange={e=>set("role",e.target.value)}>
               <option value="member">Member: can view all tasks</option>
-              <option value="admin">Admin: full control</option></select></div>
+              <option value="admin">Admin: manages the application</option></select>
+            {f.role==="admin" && !f.qa && (
+              <p className="sb-sub" style={{margin:"6px 0 0"}}>
+                Admin governs the system (people, settings, corrections). It does <b>not</b> grant
+                content-review authority — add the QA reviewer role below for that.
+              </p>
+            )}
+          </div>
 
-          {/* Roles first — choosing QA reframes the whole form. */}
+          {/* Admin and QA are SEPARATE capability axes. Admin manages the app; QA
+              reviewer grants content-review (Approve / Request changes) authority.
+              Selecting Admin alone never implies approval authority. */}
           <div className="sb-field"><label>Roles &amp; permissions</label>
-            <Toggle label="QA reviewer: reviews &amp; approves content (not production crew)" v={f.qa} on={()=>setQa(!f.qa)} />
+            <Toggle label="QA reviewer: grants content-review authority (Approve / Request changes) — not production crew" v={f.qa} on={()=>setQa(!f.qa)} />
             {!qaMode && <>
               <Toggle label="Department lead: leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
               <Toggle label="Captions & upload: handles posting after approval" v={f.captions} on={()=>set("captions",!f.captions)} />

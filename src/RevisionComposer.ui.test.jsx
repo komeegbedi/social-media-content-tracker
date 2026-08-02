@@ -5,7 +5,7 @@ import { describe, test, expect, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import RevisionComposer from "./RevisionComposer.jsx";
-import { approveGate } from "./data.js";
+import { approveGate, canMakeReviewDecision } from "./data.js";
 
 // A never-resolving promise + its resolve/reject handles — to hold a send "in flight".
 function deferred() {
@@ -153,5 +153,42 @@ describe("QA panel — Approve with an unsent draft", () => {
     render(<QaPanelHarness onSend={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: /^approve$/i }));
     expect(screen.getByTestId("approved")).toHaveTextContent("1");
+  });
+});
+
+// The QA panel is gated by canMakeReviewDecision (the SAME predicate the security
+// rules enforce) — Admin ≠ QA. This renders the real gate for each user type.
+function ReviewGate({ me }) {
+  const task = { status: "In Review" };
+  return canMakeReviewDecision(me, task)
+    ? <div>
+        <button>Approve</button>
+        <button>Request changes</button>
+      </div>
+    : <p>No review controls</p>;
+}
+
+describe("QA controls visibility — Admin does not inherit review authority", () => {
+  const inReviewControls = () => screen.queryByRole("button", { name: /^approve$/i });
+
+  test("Admin-only does NOT see the QA controls", () => {
+    render(<ReviewGate me={{ role: "admin", qa: false, status: "approved" }} />);
+    expect(inReviewControls()).not.toBeInTheDocument();
+    expect(screen.getByText(/no review controls/i)).toBeInTheDocument();
+  });
+
+  test("QA-only sees the QA controls", () => {
+    render(<ReviewGate me={{ role: "member", qa: true, status: "approved" }} />);
+    expect(inReviewControls()).toBeInTheDocument();
+  });
+
+  test("Admin+QA sees the QA controls (because qa === true)", () => {
+    render(<ReviewGate me={{ role: "admin", qa: true, status: "approved" }} />);
+    expect(inReviewControls()).toBeInTheDocument();
+  });
+
+  test("Member does not see the QA controls", () => {
+    render(<ReviewGate me={{ role: "member", qa: false, status: "approved" }} />);
+    expect(inReviewControls()).not.toBeInTheDocument();
   });
 });

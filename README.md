@@ -124,6 +124,7 @@ A deliberately small, flat codebase. Most "components" are functions inside `App
 │   ├── dispatchReminders.js   # Hourly reminder dispatcher + leadership digest
 │   ├── weeklyTaskCheck.js     # Saturday 9 PM team check-in
 │   ├── cleanupRetention.js    # Daily retention pruning
+│   ├── adminOverride.js       # Admin-only callable: audited status override (never a QA decision)
 │   └── sendTestEmail.js       # Admin-only callable to verify the email pipeline
 │
 └── scripts/
@@ -243,11 +244,29 @@ Roles are flags on a user's profile; a person can hold several. Dashboards adapt
 
 | Role | How it's set | Experience |
 | --- | --- | --- |
-| **Admin** | `role: "admin"` | Full control: tasks, approvals, imports, issues, settings. |
+| **Admin** | `role: "admin"` | Manages the **application**: people, imports, settings, issues, and workflow corrections. Admin does **not** grant content-review authority. |
 | **Contributor** | default | My Day shows what needs attention; My Work separates leading vs supporting. |
-| **QA reviewer** | `qa: true` | A **department**, not a production role — see below. |
+| **QA reviewer** | `qa: true` | Grants **content-review authority** (Approve / Request changes). A **department**, not a production role — see below. |
 | **Caption / Upload** | `captions: true` | Work that begins after approval — captions, ready-to-post, overdue. |
 | **Department Lead** | `lead: true` + `department` | Receives the leadership follow-up digest. |
+
+**Admin and QA are separate capability axes — not a hierarchy.**
+
+- **Admin** manages the system and can perform explicit, audited administrative overrides.
+- **QA** makes normal content-review decisions (Approve / Request changes).
+- An Admin does **not** automatically inherit QA review authority. A user who is both may review because **`qa === true`**, not because they are an Admin.
+- **Administrative override** is an exceptional, audited recovery operation (see below) — never a QA decision.
+
+Normal review authorization is a single predicate — `canMakeReviewDecision(user, task)` = active **and** approved **and** `qa === true` **and** `task.status === "In Review"` — used by the UI **and** mirrored by the Firestore rules boundary (`isQA()` = approved + `qa == true`, with **no** admin bypass). The rules deny an Admin-only user the In Review → Approved / Changes Requested transition directly; an Admin reaches those only through the audited override callable.
+
+| User type | Approve | Request changes | Administrative override |
+| --- | --- | --- | --- |
+| Member | No | No | No |
+| Admin only | No | No | Yes |
+| QA only | Yes | Yes | No |
+| Admin + QA | Yes | Yes | Yes |
+
+**Administrative override.** When an Admin must correct or recover the workflow — including forcing a status that is normally a QA decision — they use a deliberate **Administrative override** control (visually separated from the QA panel, never the Approve/Request-changes buttons). It requires selecting a destination status and a non-empty reason, shows a confirmation with the current status, destination, and reason, and runs through the `adminOverrideStatus` **Cloud Function** (server-controlled). The server records an explicit **`admin_override`** activity + immutable `auditEvents` record with the authenticated Admin's uid + name, the previous and resulting statuses, the reason, and a **server** timestamp — so the history clearly says *administratively overridden*, never *QA-approved*. Client-supplied identity, timestamps, and audit fields are never trusted.
 
 **QA is a distinct department, not another production role.** Reviewers land on a review-focused **Reviews** screen and approve or request changes only while an item is in review. They can **observe** all of production — search any task, read task detail, and view Team capacity — but can never **operate** it: QA carries no production skills or availability, is never staffed as owner/crew, never appears in auto-assignment or recommendations, and never counts toward production capacity. This holds even for an admin who is also QA (admin governs what you manage; QA governs the department you belong to). The exclusions run through central predicates (`isProductionMember` / `isAssignable`) and the user-doc invariant is enforced in Firestore rules.
 

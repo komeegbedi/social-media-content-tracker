@@ -21,8 +21,12 @@ service cloud.firestore {
     function isApproved() {
       return hasProfile() && notDisabled() && (myDoc().status == 'approved' || myDoc().role == 'admin');
     }
+    // QA review authority is a SEPARATE axis from Admin. `qa == true` is the sole
+    // grant — an Admin does NOT inherit review authority. A user who is both may
+    // review because qa == true, not because they are an Admin. (Mirrors
+    // canMakeReviewDecision in src/data.js.)
     function isQA() {
-      return hasProfile() && (myDoc().qa == true || myDoc().role == 'admin');
+      return isApproved() && myDoc().get('qa', false) == true;
     }
 
     // ---- task workflow (the 7-stage state machine, mirrored from src/data.js) ----
@@ -30,25 +34,73 @@ service cloud.firestore {
       return ['Planned', 'In Progress', 'In Review', 'Changes Requested',
               'Approved', 'Ready to Post', 'Posted'];
     }
-    // Is a proposed `from -> to` status change legal for THIS actor?
-    //   owner/admin   : Planned→In Progress, In Progress→In Review, Changes Requested→In Review
-    //   QA/admin      : In Review→Approved | Changes Requested   (the QA decision)
-    //   captions/admin: Approved→Ready to Post, Ready to Post→Posted
-    //   admin         : any valid status (manual correction)
-    // A no-op (from == to) is always allowed so members can edit other fields.
+    // The QA REVIEW DECISION: the two transitions that constitute normal content
+    // review. These require qa == true and are NEVER granted by the Admin axis —
+    // an Admin reaches Approved from In Review only through the audited override
+    // callable (Admin SDK), producing an `admin_override` event, not a fake QA one.
+    function isQaDecision(from, to) {
+      return from == 'In Review' && (to == 'Approved' || to == 'Changes Requested');
+    }
+    // The newly-appended activity entry (only meaningful when the log grew by one).
+    function grewByOne() {
+      return request.resource.data.get('activity', []).size()
+           == resource.data.get('activity', []).size() + 1;
+    }
+    function newEntry() {
+      let a = request.resource.data.get('activity', []);
+      return a[a.size() - 1];
+    }
+    // A QA decision must be HARD-attributed AND correctly typed: the appended entry
+    // carries the caller's own uid (no anonymous/impersonated review) and its event
+    // type matches the destination — an approval is recorded as exactly 'approved',
+    // a request-changes as 'changes_requested' (never mislabelled, e.g. as an override).
+    function reviewDecisionAttributed(to) {
+      return grewByOne()
+        && newEntry().get('uid', '') == request.auth.uid
+        && newEntry().get('type', '') == (to == 'Approved' ? 'approved' : 'changes_requested');
+    }
+    // A client may NEVER append an admin_override entry — that event is produced
+    // ONLY by the server-authored override callable (Admin SDK, which bypasses
+    // rules). This holds for EVERY client update: members, QA, and admins alike.
+    function noClientOverrideEntry() {
+      return !grewByOne() || newEntry().get('type', '') != 'admin_override';
+    }
+    // Is a proposed `from -> to` status change legal for THIS actor via a DIRECT
+    // client write?
+    //   owner        : Planned→In Progress, In Progress→In Review, Changes Requested→In Review
+    //   QA (qa==true): In Review→Approved | Changes Requested   (the QA decision, attributed)
+    //   captions     : Approved→Ready to Post, Ready to Post→Posted
+    // An Admin drives the same NORMAL FORWARD steps as an owner-/caption-substitute
+    // (mirrors src/data.js workflowAction) — but this grants NO shortcut to the QA
+    // decision and NO arbitrary, backward, or lifecycle-bypassing jump. Therefore:
+    //   • the ONLY direct path into Approved / Changes Requested is In Review by a
+    //     qa===true actor with authenticated attribution (an Admin-only user can
+    //     never reach them directly, from any status);
+    //   • Ready to Post / Posted are reachable only from their immediate predecessor
+    //     (no Planned→Posted style bypass);
+    //   • every OTHER exceptional correction (backward moves, bypass jumps, an Admin
+    //     forcing a QA-decision status) MUST go through the server-authored, audited
+    //     adminOverrideStatus callable, which records an admin_override event.
+    // A no-op (from == to) is always allowed so members/admins can edit other fields.
     function transitionAllowed(from, to) {
-      let isOwner = resource.data.owner == myDoc().name;
-      let isCap = myDoc().get('captions', false) == true;
+      let ownerLike = resource.data.owner == myDoc().name || isAdmin();
+      let capLike = myDoc().get('captions', false) == true || isAdmin();
       return from == to
-        || isAdmin()
-        || (isOwner && (
+        || (isQA() && isQaDecision(from, to) && reviewDecisionAttributed(to))
+        || (ownerLike && (
               (from == 'Planned' && to == 'In Progress') ||
               (from == 'In Progress' && to == 'In Review') ||
               (from == 'Changes Requested' && to == 'In Review')))
-        || (isQA() && from == 'In Review' && (to == 'Approved' || to == 'Changes Requested'))
-        || (isCap && (
+        || (capLike && (
               (from == 'Approved' && to == 'Ready to Post') ||
               (from == 'Ready to Post' && to == 'Posted')));
+    }
+    // Attribution integrity for EVERY task write: when the audit log grows, the new
+    // entry's uid (when the client supplies one) must be the caller — no forging
+    // another actor into the history. Backward-compatible with older entries that
+    // carry no uid (they default to the caller and pass).
+    function activityAttributionOk() {
+      return !grewByOne() || newEntry().get('uid', request.auth.uid) == request.auth.uid;
     }
     // Integrity checks applied to EVERY task write (members AND admins):
     //  • status is a real status value;
@@ -178,13 +230,16 @@ service cloud.firestore {
       // Only admins create or delete tasks.
       allow create, delete: if isAdmin();
 
-      // Every write must pass base integrity (valid status, append-only audit
-      // log, archivedAt semantics). On top of that:
-      //  • admins may change anything else;
+      // Every write must pass base integrity (valid status, append-only audit log,
+      // archivedAt semantics) and attribution integrity. On top of that:
+      //  • admins may edit any fields, but a STATUS change must still be a legal
+      //    transition — which for admins EXCLUDES the QA review decision (that goes
+      //    through the audited override callable, never a direct client write);
       //  • approved members may touch only collaboration fields, and any status
-      //    change must be a role-legal transition (owner/QA/captions matrix).
-      allow update: if taskIntegrityOk() && (
-        isAdmin()
+      //    change must be a role-legal transition (owner / QA(qa==true) / captions).
+      allow update: if taskIntegrityOk() && activityAttributionOk() && noClientOverrideEntry() && (
+        (isAdmin()
+            && transitionAllowed(resource.data.status, request.resource.data.status))
         || (isApproved()
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['status', 'comments', 'reactions', 'updatedAt', 'archivedAt',

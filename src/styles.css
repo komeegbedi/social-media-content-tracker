@@ -442,6 +442,64 @@ a{color:var(--primary)}
 .sb-rvc-err{background:var(--red-soft);color:var(--red);border-radius:9px;padding:8px 10px;font-size:13px;font-weight:500}
 .sb-rvc-send{width:100%;margin-top:2px}
 .sb-rvc-send:disabled{opacity:.5;cursor:not-allowed}
+/* ── Workflow correction (administrative override) ──────────────────────────
+   The entry point is a prominent, AMBER (caution, not destructive) full-width row:
+   icon · text block · chevron. It reads as important + available, never as the
+   page's primary action, and never like Delete (red is reserved for destruction). */
+.sb-corr-entry{width:100%;box-sizing:border-box;display:flex;align-items:center;gap:12px;
+  margin-top:12px;padding:12px 14px;min-height:64px;text-align:left;cursor:pointer;
+  background:var(--amber-soft);border:1px solid var(--amber);border-radius:13px;
+  color:var(--text-primary)}
+.sb-corr-entry:hover{filter:brightness(.98)}
+.sb-corr-entry:active{transform:translateY(1px)}
+.sb-corr-entry.open{box-shadow:0 0 0 3px var(--amber-soft)}
+.sb-corr-entry:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.sb-corr-entry-ic{flex:none;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;
+  background:var(--amber);color:#3a2a06}
+.sb-corr-entry-tx{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px}
+.sb-corr-entry-ti{font-size:14px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sb-corr-entry-sub{font-size:12.5px;line-height:1.4;color:var(--text-secondary)}
+.sb-corr-badge{flex:none;font-size:10.5px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;
+  padding:2px 7px;border-radius:999px;background:var(--amber);color:#3a2a06}
+.sb-corr-entry-chev{flex:none;color:var(--amber);opacity:.9}
+
+/* The focused "Correct workflow status" dialog (modeled on .sb-confirm; a bit wider
+   for the form). Warning text lives in ONE wrapping container beside a fixed-width
+   icon, so it never fragments into columns. */
+.sb-corr{background:var(--surface-elevated);border-radius:var(--r-panel);padding:22px;width:100%;max-width:460px;
+  margin:auto;box-shadow:var(--shadow-lg);animation:modalIn var(--motion-standard) var(--ease-enter);
+  display:flex;flex-direction:column;gap:12px;max-height:calc(100dvh - 24px);overflow-y:auto}
+@media(max-width:559px){ .sb-corr{margin:auto 0 0;border-radius:var(--r-panel) var(--r-panel) 0 0;max-width:100%;
+  max-height:90dvh;padding-bottom:calc(22px + env(safe-area-inset-bottom))} }
+.sb-corr-hd{display:flex;align-items:center;gap:11px}
+.sb-corr-hd b{font-size:17px;flex:1 1 auto;min-width:0}
+.sb-corr-ic{flex:none;width:36px;height:36px;border-radius:10px;display:grid;place-items:center;
+  background:var(--warning-muted);color:var(--warning)}
+.sb-corr-ic .hi{width:20px;height:20px}
+.sb-corr-x{flex:none}
+.sb-corr-intro{margin:0;font-size:13px;line-height:1.5;color:var(--text-secondary)}
+.sb-corr-cur{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--background-muted)}
+.sb-corr-cur-lbl{font-size:12px;font-weight:600;color:var(--muted)}
+.sb-corr-cur-val{font-size:13.5px;font-weight:600;color:var(--text-primary)}
+.sb-corr .sb-field{margin-bottom:0}
+.sb-corr-reason{width:100%;box-sizing:border-box;min-height:88px;resize:vertical;
+  border:1px solid var(--field-border);border-radius:11px;padding:10px 12px;
+  font-size:16px;line-height:1.4;font-family:inherit;background:var(--field);color:var(--text-primary)}
+.sb-corr-reason:focus{outline:2px solid var(--violet);border-color:transparent}
+.sb-corr-help{margin:6px 0 0;font-size:12px;line-height:1.4;color:var(--text-muted)}
+.sb-corr-actions{margin-top:4px}
+@media(max-width:400px){ .sb-corr-actions{flex-direction:column-reverse} .sb-corr-actions .sb-btn{width:100%} }
+
+/* Caution note inside a confirmation dialog (structured, not color-only). */
+.sb-confirm-note{margin:12px 0 0;font-size:12.5px;line-height:1.45;color:var(--warning);
+  background:var(--warning-muted);border-radius:9px;padding:9px 11px}
+
+/* Danger zone — set apart at the bottom of Admin controls, clearly last. */
+.sb-danger{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}
+.sb-danger-hd{margin-bottom:8px}
+.sb-danger-lbl{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--red)}
+.sb-danger .sb-btn.danger{width:100%;margin-top:0}
 .sb-due{font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:6px}
 .due-over{background:var(--red-soft);color:var(--red)}
 .due-soon{background:var(--amber-soft);color:var(--amber)}

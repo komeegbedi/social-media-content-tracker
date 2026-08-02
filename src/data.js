@@ -181,7 +181,10 @@ export const QA_STATUSES = ["In Review", "Approved", "Posted"];
 
 // ---- activity timeline ----
 // One entry per meaningful event on a task. `at` is a millisecond timestamp.
-export const activityEntry = (type, by, note = "") => ({ type, by, at: Date.now(), note });
+// Activity entry. `meta` carries trustworthy attribution (uid + capability at the
+// time) alongside the display name; older entries without it still render fine.
+export const activityEntry = (type, by, note = "", meta = null) =>
+  ({ type, by, at: Date.now(), note, ...(meta && typeof meta === "object" ? meta : {}) });
 // Human label for an activity entry (approval history is just the QA subset).
 export function activityLabel(e) {
   switch (e.type) {
@@ -192,12 +195,17 @@ export function activityLabel(e) {
     case "changes_requested": return "Requested changes";
     case "ready": return "Marked ready to post";
     case "posted": return "Posted";
+    // Administrative override is deliberately NOT a QA decision — it reads as an
+    // admin correction in the timeline, never "Approved by a reviewer".
+    case "admin_override": return `Administrative override → ${e.to || e.note || "status changed"}`;
     case "status": return `Moved to ${e.note || "next stage"}`;
     case "assigned": return e.note || "Assignment changed";
     case "comment": return "Commented";
     default: return e.type;
   }
 }
+// True for administrative-override history entries (rendered distinctly).
+export const isAdminOverrideEvent = (e) => !!e && e.type === "admin_override";
 export const isApprovalEvent = (e) =>
   ["qa_sent", "approved", "changes_requested", "ready", "started"].includes(e.type);
 
@@ -1005,9 +1013,33 @@ export function userDepartments(user) {
 
 export const isApproved = (user) => !!(user && (user.status === "approved" || user.role === "admin"));
 
-// Is this a QA reviewer? `qa` is the authoret­ative permission flag (also gates
-// firestore.rules and the review notifications).
+// Active = not the disabled kill-switch. The `disabled` tombstone denies a user
+// everywhere even if their role/qa flags still say otherwise.
+export const isActiveUser = (user) => !!(user && user.disabled !== true);
+
+// Is this a QA reviewer? `qa` is the AUTHORITATIVE permission flag (also gates
+// firestore.rules and the review notifications). Admin does NOT imply QA.
 export const isQA = (user) => !!(user && user.qa === true);
+
+// Is this an application admin (governs the system)? Separate axis from QA.
+export const isAdminUser = (user) => !!(user && user.role === "admin" && isActiveUser(user));
+
+/* ── The review-authority boundary (Admin and QA are separate capability axes) ──
+   Admin governs the application; QA makes content-review decisions. An admin does
+   NOT inherit review authority — a user who is both may review because qa === true,
+   not because they are an admin. This predicate is the single source of truth for
+   the Approve / Request-changes controls AND is mirrored by firestore.rules; the UI
+   never gates review on `isAdmin`. */
+export function canMakeReviewDecision(user, task) {
+  return isActiveUser(user)                    // active (not disabled)
+    && isApproved(user)                        // approved (or admin) account
+    && user.qa === true                        // QA capability — NEVER admin-implied
+    && !!task && task.status === "In Review";  // only a reviewable status
+}
+
+// An administrative override is an exceptional, audited recovery action, available
+// ONLY to active admins and deliberately distinct from a QA review decision.
+export const canAdminOverride = (user) => isAdminUser(user);
 
 // Eligible to be staffed on production work. QA is excluded even when they are
 // also an admin — admin governs what you can MANAGE, QA governs the department

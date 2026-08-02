@@ -30,6 +30,9 @@ const USERS = {
   admin:  { name: "Ada Admin",  role: "admin",  status: "approved" },
   owner:  { name: "Otis Owner", role: "member", status: "approved" },
   qa:     { name: "Quinn QA",   role: "member", status: "approved", qa: true },
+  // Admin and QA are separate axes — a user may hold both. `adminqa` reviews
+  // because qa === true; `admin` (below) must NOT be able to review.
+  adminqa:{ name: "Andy AdminQA", role: "admin", status: "approved", qa: true },
   caps:   { name: "Cara Caps",  role: "member", status: "approved", captions: true },
   member: { name: "Mel Member", role: "member", status: "approved" },
   pending:{ name: "Peggy Pend", role: "member", status: "pending" },
@@ -67,16 +70,220 @@ test("owner may Start work (Planned → In Progress); a bystander member may not
   await assertFails(move("member"));                    // not the owner → denied
 });
 
-test("only QA/admin may make the QA decision (In Review → Approved)", async () => {
-  await seed("tasks", "t2", baseTask({ status: "In Review" }));
+// Admin and QA are SEPARATE capability axes: the QA decision requires qa === true,
+// and the Admin role does NOT inherit it. An Admin's route to Approved-from-In-Review
+// is the audited override callable (Admin SDK), never a direct client write.
+test("QA decision (In Review → Approved): qa===true only; Admin-only is DENIED", async () => {
   const approve = (uid) => updateDoc(doc(as(uid), "tasks", "t2"), {
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "x", uid, at: 2 }],
+    updatedAt: serverTimestamp(),
+  });
+  const reseed = () => seed("tasks", "t2", baseTask({ status: "In Review" }));
+  await reseed(); await assertFails(approve("member"));     // Member: no
+  await reseed(); await assertFails(approve("owner"));      // owner can't self-approve
+  await reseed(); await assertFails(approve("admin"));      // ADMIN-ONLY: no — admin ≠ QA
+  await reseed(); await assertSucceeds(approve("qa"));      // QA-only: yes
+  await reseed(); await assertSucceeds(approve("adminqa")); // Admin+QA: yes (because qa===true)
+});
+
+test("QA decision (In Review → Changes Requested): qa===true only; Admin-only DENIED", async () => {
+  const reqChanges = (uid) => updateDoc(doc(as(uid), "tasks", "t2r"), {
+    status: "Changes Requested",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "changes_requested", by: "x", uid, at: 2 }],
+    updatedAt: serverTimestamp(),
+  });
+  const reseed = () => seed("tasks", "t2r", baseTask({ status: "In Review" }));
+  await reseed(); await assertFails(reqChanges("member"));
+  await reseed(); await assertFails(reqChanges("admin"));   // ADMIN-ONLY: no
+  await reseed(); await assertSucceeds(reqChanges("qa"));
+  await reseed(); await assertSucceeds(reqChanges("adminqa"));
+});
+
+test("QA review authority only applies from In Review (Planned → Approved denied for a reviewer)", async () => {
+  await seed("tasks", "t2b", baseTask({ status: "Planned" }));
+  const approveFrom = (uid) => updateDoc(doc(as(uid), "tasks", "t2b"), {
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "x", uid, at: 2 }],
+    updatedAt: serverTimestamp(),
+  });
+  // The QA decision is In Review → Approved | Changes Requested; from anywhere else
+  // the reviewer path grants nothing. (An admin may still CORRECT the workflow via
+  // the Admin axis — a separate power, verified elsewhere — but qa-only cannot.)
+  await assertFails(approveFrom("qa"));
+  await assertFails(approveFrom("member"));
+});
+
+test("a QA decision must be self-attributed — forging another actor's uid (or omitting it) is denied", async () => {
+  await seed("tasks", "t2c", baseTask({ status: "In Review" }));
+  // Quinn (qa) records the approval under someone else's uid → denied.
+  await assertFails(updateDoc(doc(as("qa"), "tasks", "t2c"), {
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "Ada Admin", uid: "admin", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+  // An anonymous review entry (no uid) is also denied.
+  await seed("tasks", "t2c", baseTask({ status: "In Review" }));
+  await assertFails(updateDoc(doc(as("qa"), "tasks", "t2c"), {
     status: "Approved",
     activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "x", at: 2 }],
     updatedAt: serverTimestamp(),
+  }));
+});
+
+// The tightened invariant: an Admin-only user can NEVER directly write Approved or
+// Changes Requested (from any status), and can never bypass the lifecycle into
+// Ready to Post / Posted. Exceptional corrections go through adminOverrideStatus.
+const directWrite = (uid, taskId, to, type) => updateDoc(doc(as(uid), "tasks", taskId), {
+  status: to,
+  activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type, by: "Ada Admin", uid, at: 2 }],
+  updatedAt: serverTimestamp(),
+});
+
+test("Admin-only CANNOT directly write Approved or Changes Requested from ANY status", async () => {
+  for (const from of ["Planned", "In Progress", "In Review", "Changes Requested", "Approved", "Ready to Post"]) {
+    if (from !== "Approved") {              // from==to is a no-op field edit, not a transition
+      await seed("tasks", "ta", baseTask({ status: from }));
+      await assertFails(directWrite("admin", "ta", "Approved", "approved"));
+    }
+    if (from !== "Changes Requested") {
+      await seed("tasks", "ta", baseTask({ status: from }));
+      await assertFails(directWrite("admin", "ta", "Changes Requested", "changes_requested"));
+    }
+  }
+});
+
+test("Admin-only Planned → Approved / Changes Requested is denied (spec cases)", async () => {
+  await seed("tasks", "tp", baseTask({ status: "Planned" }));
+  await assertFails(directWrite("admin", "tp", "Approved", "approved"));
+  await seed("tasks", "tp", baseTask({ status: "Planned" }));
+  await assertFails(directWrite("admin", "tp", "Changes Requested", "changes_requested"));
+});
+
+test("Admin-only cannot bypass the review lifecycle into Ready to Post / Posted", async () => {
+  const bypasses = [
+    ["Planned", "Ready to Post"], ["Planned", "Posted"],
+    ["In Progress", "Ready to Post"], ["In Progress", "Posted"],
+    ["In Review", "Posted"],
+  ];
+  for (const [from, to] of bypasses) {
+    await seed("tasks", "tj", baseTask({ status: from }));
+    await assertFails(directWrite("admin", "tj", to, "status"));
+  }
+});
+
+test("Admin-only direct admin_override-LABELLED write remains denied (no forgery)", async () => {
+  // Labelling the entry admin_override does not grant the transition — only the
+  // server-authored callable (Admin SDK) may produce a genuine override.
+  for (const [from, to] of [["In Review", "Approved"], ["Planned", "Posted"], ["Approved", "Changes Requested"]]) {
+    await seed("tasks", "to", baseTask({ status: from }));
+    await assertFails(directWrite("admin", "to", to, "admin_override"));
+  }
+});
+
+test("Admin MAY drive the normal FORWARD workflow (owner/caption substitute) and edit fields", async () => {
+  // Forward steps the guided workflow grants an admin (as owner-/caption-substitute).
+  await seed("tasks", "tf", baseTask({ status: "Planned" }));
+  await assertSucceeds(directWrite("admin", "tf", "In Progress", "started"));
+  await seed("tasks", "tf", baseTask({ status: "In Progress" }));
+  await assertSucceeds(directWrite("admin", "tf", "In Review", "qa_sent"));
+  await seed("tasks", "tf", baseTask({ status: "Approved" }));
+  await assertSucceeds(directWrite("admin", "tf", "Ready to Post", "ready"));
+  await seed("tasks", "tf", baseTask({ status: "Ready to Post" }));
+  await assertSucceeds(directWrite("admin", "tf", "Posted", "posted"));
+  // Ordinary field edit with NO status change is allowed (admin management).
+  await seed("tasks", "tf", baseTask({ status: "In Review" }));
+  await assertSucceeds(updateDoc(doc(as("admin"), "tasks", "tf"), {
+    title: "Renamed by admin", blockedOn: "waiting on assets", updatedAt: serverTimestamp(),
+  }));
+});
+
+test("the audited override PATH (server context, like the callable) CAN reach Approved where the direct client write is denied", async () => {
+  await seed("tasks", "tc", baseTask({ status: "In Review" }));
+  // Direct client write by an admin → denied.
+  await assertFails(directWrite("admin", "tc", "Approved", "approved"));
+  // The callable writes via the Admin SDK (privileged context), producing a
+  // server-authored admin_override event + immutable audit — this succeeds.
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const fs = ctx.firestore();
+    await setDoc(doc(fs, "tasks", "tc"), {
+      ...baseTask({ status: "In Review" }), status: "Approved",
+      activity: [{ type: "created", by: "Ada Admin", at: 1 },
+                 { type: "admin_override", by: "Ada Admin", uid: "admin", cap: "admin",
+                   from: "In Review", to: "Approved", reason: "original reviewer unavailable", at: 2 }],
+    });
+    await setDoc(doc(fs, "auditEvents", "ovr1"), {
+      type: "admin_override", taskId: "tc", actorUid: "admin", actorName: "Ada Admin",
+      actorCap: "admin", fromStatus: "In Review", toStatus: "Approved", reason: "original reviewer unavailable",
+    });
   });
-  await assertFails(approve("owner"));                  // owner can't self-approve
-  await seed("tasks", "t2", baseTask({ status: "In Review" }));
-  await assertSucceeds(approve("qa"));
+  let after;
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    after = (await getDoc(doc(ctx.firestore(), "tasks", "tc"))).data();
+  });
+  assert.equal(after.status, "Approved");
+  assert.equal(after.activity[after.activity.length - 1].type, "admin_override", "history says override, not QA-approved");
+});
+
+/* ---- a client can never FORGE an admin_override, and QA events must be typed ---- */
+
+test("QA cannot label an approval as admin_override (no forged override)", async () => {
+  await seed("tasks", "tq", baseTask({ status: "In Review" }));
+  await assertFails(updateDoc(doc(as("qa"), "tasks", "tq"), {
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "admin_override", by: "Quinn QA", uid: "qa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Admin cannot label a legal forward transition as admin_override", async () => {
+  await seed("tasks", "tq2", baseTask({ status: "Planned" }));
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "tq2"), {
+    status: "In Progress",   // legal admin forward step, but the override label is a client forgery
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "admin_override", by: "Ada Admin", uid: "admin", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("a no-op client update cannot append a fake admin_override (any role)", async () => {
+  for (const uid of ["admin", "qa", "member"]) {
+    await seed("tasks", "tq3", baseTask({ status: "In Progress" }));
+    await assertFails(updateDoc(doc(as(uid), "tasks", "tq3"), {
+      status: "In Progress",   // no-op status, sneaking an override event into the log
+      activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "admin_override", by: "x", uid, at: 2 }],
+      updatedAt: serverTimestamp(),
+    }));
+  }
+});
+
+test("QA approval requires an 'approved' event; request-changes requires 'changes_requested'", async () => {
+  // Approved destination, wrong event type → denied.
+  await seed("tasks", "tq4", baseTask({ status: "In Review" }));
+  await assertFails(updateDoc(doc(as("qa"), "tasks", "tq4"), {
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "changes_requested", by: "Quinn QA", uid: "qa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+  // Changes Requested destination, wrong event type → denied.
+  await seed("tasks", "tq4", baseTask({ status: "In Review" }));
+  await assertFails(updateDoc(doc(as("qa"), "tasks", "tq4"), {
+    status: "Changes Requested",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "Quinn QA", uid: "qa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+  // Correct event types succeed.
+  await seed("tasks", "tq4", baseTask({ status: "In Review" }));
+  await assertSucceeds(updateDoc(doc(as("qa"), "tasks", "tq4"), {
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "Quinn QA", uid: "qa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+  await seed("tasks", "tq4", baseTask({ status: "In Review" }));
+  await assertSucceeds(updateDoc(doc(as("qa"), "tasks", "tq4"), {
+    status: "Changes Requested",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "changes_requested", by: "Quinn QA", uid: "qa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
 });
 
 test("only captions/admin may post (Ready to Post → Posted) and it may set archivedAt", async () => {

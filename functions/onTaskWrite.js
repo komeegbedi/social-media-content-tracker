@@ -70,6 +70,18 @@ async function materializeReminders(taskId, task) {
   });
 }
 
+// Recipient policy for an "In Review" event (pure, testable). Review authority is
+// qa === true ONLY: admin-only users are never reviewers (they get an informational
+// notice instead), and an Admin+QA user is a reviewer excluded from the info list so
+// they never receive a duplicate.
+function reviewRecipients(users) {
+  const reviewers = (users || []).filter((u) => u.qa === true);
+  const reviewerIds = new Set(reviewers.map((u) => u.uid));
+  const infoAdmins = (users || []).filter((u) => u.role === "admin" && !reviewerIds.has(u.uid));
+  return { reviewers, infoAdmins };
+}
+exports.reviewRecipients = reviewRecipients;
+
 exports.onTaskWrite = onDocumentWritten(
   { document: "tasks/{taskId}", memory: "256MiB", timeoutSeconds: 60, secrets: [resendApiKey] },
   async (event) => {
@@ -88,7 +100,6 @@ exports.onTaskWrite = onDocumentWritten(
     const { list: users, byName } = await loadUsers();
     const dispTitle = formatContentTitle(after.title);   // Title Case for all notification text
     const admins = users.filter((u) => u.role === "admin");
-    const qaUsers = users.filter((u) => u.qa === true || u.role === "admin");
     const captionUsers = users.filter((u) => u.captions === true);
     // Immutable per-event token from Firestore event metadata (CloudEvent id, or
     // the after-snapshot commit time as fallback) — identical on a Firebase retry,
@@ -118,16 +129,38 @@ exports.onTaskWrite = onDocumentWritten(
     // --- status transition notifications ---
     if (after.status !== before?.status) {
       const owner = byName[after.owner];
-      if (after.status === "In Review") {
-        // QA reviewers own the next action (review). Admins get in-app only,
-        // and only if they aren't already reviewers, so they aren't push-spammed.
-        const reviewers = qaUsers;
-        const reviewerIds = new Set(reviewers.map((u) => u.uid));
+      // An administrative override is announced as exactly that — never as a QA
+      // decision. Detected from the newest activity entry the override callable wrote.
+      const acts = after.activity || [];
+      const lastEntry = acts[acts.length - 1];
+      const isOverride = !!lastEntry && lastEntry.type === "admin_override";
+
+      if (isOverride) {
+        const actor = lastEntry.by || "an admin";
+        const recips = [];
+        if (owner) recips.push(owner);
+        const otherAdmins = admins.filter((u) => u.uid !== lastEntry.uid && (!owner || u.uid !== owner.uid));
+        recips.push(...otherAdmins);
+        if (recips.length) await notifyUsers(recips, { type: "admin_override", taskId, keyBase: kb("admin_override"),
+          channels: ["in-app"],
+          title: `'${dispTitle}' was administratively moved to ${after.status}`,
+          body: `Administrative override by ${actor} — not a QA decision.` });
+        // Downstream caption/posting may still proceed on an override to Approved.
+        if (after.status === "Approved") {
+          const captioners = captionUsers.filter((u) => !owner || u.uid !== owner.uid);
+          if (captioners.length) await notifyUsers(captioners, { type: "ready", taskId, keyBase: kb("ready"),
+            title: `'${dispTitle}' is approved — ready to caption` });
+        }
+      } else if (after.status === "In Review") {
+        // Actionable review → ACTUAL QA reviewers (qa === true) only. Admin-only
+        // users get a clearly INFORMATIONAL notice (in-app, no review focus); an
+        // Admin+QA user is a reviewer and is excluded from it (no duplicate).
+        const { reviewers, infoAdmins } = reviewRecipients(users);
         await notifyUsers(reviewers, { type: "qa", taskId, keyBase: kb("qa"),
           title: `'${dispTitle}' is awaiting review` });
-        const otherAdmins = admins.filter((u) => !reviewerIds.has(u.uid));
-        if (otherAdmins.length) await notifyUsers(otherAdmins, { type: "qa", taskId, keyBase: kb("qa"),
-          channels: ["in-app"], title: `'${dispTitle}' was submitted for review` });
+        if (infoAdmins.length) await notifyUsers(infoAdmins, { type: "review_info", taskId, keyBase: kb("review_info"),
+          channels: ["in-app"], title: `'${dispTitle}' was submitted for review`,
+          body: "For your visibility — QA owns the review." });
       } else if (after.status === "Changes Requested") {
         await notifyUsers(owner ? [owner] : [], { type: "changes", taskId, keyBase: kb("changes"),
           title: `Changes requested on '${dispTitle}'` });

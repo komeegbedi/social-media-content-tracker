@@ -8,6 +8,7 @@ import {
   autoAssign, searchPeople, reviewMetrics, reviewQueue, reviewTiming,
   searchTasks, qaTaskCapabilities, isReviewableState,
   REVISION_MAX, clampRevision, canSendRevision, revisionCharState, hasUnsentRevision, approveGate,
+  canMakeReviewDecision, canAdminOverride, isActiveUser,
 } from "./data.js";
 
 // A local-midnight ISO date `off` days from today, so daysTo() returns exactly `off`.
@@ -273,4 +274,47 @@ test("approveGate: sending blocks; a dirty draft confirms; otherwise approve", (
   assert.equal(approveGate({ dirty: true, sending: false }), "confirm-discard");
   assert.equal(approveGate({ dirty: false, sending: false }), "approve");
   assert.equal(approveGate({}), "approve");
+});
+
+/* ---- Admin vs QA are SEPARATE capability axes (the review-authority boundary) ---- */
+
+const member  = { qa: false, role: "member", status: "approved" };
+const adminOnly = { qa: false, role: "admin",  status: "approved" };
+const qaOnly  = { qa: true,  role: "member", status: "approved" };
+const adminQa = { qa: true,  role: "admin",  status: "approved" };
+const inReview = { status: "In Review" };
+
+test("canMakeReviewDecision matrix: only qa===true reviews (Admin does NOT inherit)", () => {
+  assert.equal(canMakeReviewDecision(member,    inReview), false, "Member: no");
+  assert.equal(canMakeReviewDecision(adminOnly, inReview), false, "Admin-only: no — admin ≠ QA");
+  assert.equal(canMakeReviewDecision(qaOnly,    inReview), true,  "QA-only: yes");
+  assert.equal(canMakeReviewDecision(adminQa,   inReview), true,  "Admin+QA: yes (because qa===true)");
+});
+
+test("canMakeReviewDecision requires the In Review status", () => {
+  for (const s of ["Planned", "In Progress", "Changes Requested", "Approved", "Ready to Post", "Posted"]) {
+    assert.equal(canMakeReviewDecision(qaOnly, { status: s }), false, `${s} is not reviewable`);
+    assert.equal(canMakeReviewDecision(adminQa, { status: s }), false, `${s} is not reviewable`);
+  }
+});
+
+test("canMakeReviewDecision requires an active, approved account", () => {
+  assert.equal(canMakeReviewDecision({ ...qaOnly, disabled: true }, inReview), false, "disabled reviewer denied");
+  assert.equal(canMakeReviewDecision({ qa: true, role: "member", status: "pending" }, inReview), false, "unapproved reviewer denied");
+  assert.equal(canMakeReviewDecision(null, inReview), false);
+  assert.equal(canMakeReviewDecision(qaOnly, null), false);
+});
+
+test("canAdminOverride: active admins only, independent of QA", () => {
+  assert.equal(canAdminOverride(adminOnly), true,  "Admin-only can override");
+  assert.equal(canAdminOverride(adminQa),   true,  "Admin+QA can override");
+  assert.equal(canAdminOverride(qaOnly),    false, "QA-only cannot override");
+  assert.equal(canAdminOverride(member),    false, "Member cannot override");
+  assert.equal(canAdminOverride({ ...adminOnly, disabled: true }), false, "disabled admin cannot override");
+});
+
+test("isActiveUser reflects the disabled kill switch", () => {
+  assert.equal(isActiveUser({ role: "admin" }), true);
+  assert.equal(isActiveUser({ role: "admin", disabled: true }), false);
+  assert.equal(isActiveUser(null), false);
 });
