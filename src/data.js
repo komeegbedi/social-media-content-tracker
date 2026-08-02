@@ -863,6 +863,45 @@ export function reviewQueue(tasks) {
   };
 }
 
+/* QA "Request changes" revision composer — pure logic. React owns focus, scroll,
+   and keyboard; these functions own the rules so they're unit-testable. The
+   2,000-char cap mirrors the backend limit on the changes-requested note. */
+export const REVISION_MAX = 2000;
+
+// Hard-cap typed input so a paste can never exceed the backend limit.
+export function clampRevision(text) {
+  return (text || "").slice(0, REVISION_MAX);
+}
+
+// A revision can be sent only when it has real (non-whitespace) content, is within
+// the limit, and no send is already in flight (guards accidental double-submits).
+export function canSendRevision(text, { sending } = {}) {
+  const v = (text || "");
+  return !sending && v.trim().length > 0 && v.length <= REVISION_MAX;
+}
+
+// Character-count model for the subtle near-limit counter (hidden until close).
+export function revisionCharState(text, threshold = 200) {
+  const length = (text || "").length;
+  const remaining = REVISION_MAX - length;
+  return { length, remaining, max: REVISION_MAX, nearLimit: remaining <= threshold };
+}
+
+// Collapsing/closing the composer with real content in it should warn first.
+export function hasUnsentRevision(text) {
+  return (text || "").trim().length > 0;
+}
+
+// What Approve should do given the revision composer's state:
+//   "sending"         — a request is in flight; ignore Approve (no racing writes)
+//   "confirm-discard" — an unsent draft exists; confirm before discarding it
+//   "approve"         — safe to approve immediately
+export function approveGate({ dirty, sending } = {}) {
+  if (sending) return "sending";
+  if (dirty) return "confirm-discard";
+  return "approve";
+}
+
 /* Caption / upload team: their work starts once content is approved. */
 export function postQueue(tasks) {
   const live = (tasks || []).filter((t) => t.status !== "Posted");

@@ -20,6 +20,7 @@ import {
   LINK_FIELDS, requiredLinkKeys, missingLinks, QA_STATUSES,
   activityEntry, activityLabel, isApprovalEvent,
   TYPES, typeClass, qaQueue, reviewMetrics, reviewQueue, reviewTiming, qaTaskCapabilities, postQueue, pendingMatches, applyAssignment,
+  approveGate,
   personalWins, teamWins, dashboardMetrics, searchTasks, searchPeople,
   monthlyWins, recentWins, contributorWins,
   BOARD_SORTS, BOARD_FILTERS, sortTasks, groupByStatus, applyBoardFilter,
@@ -50,6 +51,7 @@ import {
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
 import { useNav, useScrollRestoration, useDirtyNavGuard } from "./navHooks.js";
+import RevisionComposer from "./RevisionComposer.jsx";
 import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM, notificationDestination } from "./nav.js";
 
 /* The admin dashboard is a lazy-loaded chunk (React.lazy). It's only rendered for
@@ -3221,9 +3223,12 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   const [blocked, setBlocked] = useState(task.blockedOn || "");
   const [links, setLinksDraft] = useState(task.links || {});
   const [postLink, setPostLink] = useState(task.postLink || "");
-  const [changeNote, setChangeNote] = useState("");
   const [showOverride, setShowOverride] = useState(false);
-  const [askChanges, setAskChanges] = useState(false);
+  const [askChanges, setAskChanges] = useState(false);          // "Request changes" composer revealed
+  const [qaDirty, setQaDirty] = useState(false);                // composer has unsent, non-whitespace text
+  const [qaSending, setQaSending] = useState(false);            // revision request in flight
+  const [confirmDiscardNote, setConfirmDiscardNote] = useState(false); // collapse the composer with a draft
+  const [confirmApprove, setConfirmApprove] = useState(false);  // Approve while a draft exists
   const [warn, setWarn] = useState("");
   const [copiedKey, setCopiedKey] = useState(""); // #7 — copy feedback for the read-only reference link
   // Deep-link focus: a notification can open this content straight to its QA
@@ -3243,6 +3248,26 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
     }, 220);   // let the sheet finish its open animation first
     return () => clearTimeout(t);
   }, [focus]);
+  // A revealed composer with unsent, non-whitespace text = a dirty draft. It drives
+  // EVERY exit path: the route-aware guard below (scrim / ✕ / Back / other route
+  // all navigate, so the blocker catches them) and the Approve gate.
+  const draftDirty = askChanges && qaDirty;
+  const { leaveGuard: qaLeaveGuard } = useUnsavedRouteGuard(draftDirty);
+  // Toggling "Request changes" closed with a draft asks first; opening is free.
+  const toggleAskChanges = () => {
+    if (draftDirty) { setConfirmDiscardNote(true); return; }
+    setAskChanges((v) => !v);
+  };
+  // Collapsing the composer unmounts RevisionComposer, which discards its draft.
+  const discardChangeNote = () => { setAskChanges(false); setConfirmDiscardNote(false); };
+  // Approve is blocked mid-submit, and asks before discarding an unsent draft.
+  const onApproveGuarded = () => {
+    const gate = approveGate({ dirty: draftDirty, sending: qaSending });
+    if (gate === "sending") return;
+    if (gate === "confirm-discard") { setConfirmApprove(true); return; }
+    onApprove();
+  };
+  const approveDiscardingDraft = () => { setAskChanges(false); setConfirmApprove(false); onApprove(); };
   // Discussion streams from the canonical tasks/{id}/comments subcollection. During
   // the migration window a task may still carry the legacy embedded array as well,
   // so merge and dedup the two — each comment renders exactly once (see mergeComments).
@@ -3375,16 +3400,31 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
             <div className={"sb-qa"+(flashSection==="review"?" sb-flash":"")} ref={reviewRef}>
               <b>QA review</b>
               <div className="sb-btnrow">
-                <button className="sb-btn green compact" onClick={onApprove}>Approve</button>
-                <button className="sb-btn ghost subtle-danger compact" onClick={()=>setAskChanges(v=>!v)}>Request changes</button>
+                <button className="sb-btn green compact" onClick={onApproveGuarded} disabled={qaSending}>Approve</button>
+                <button className="sb-btn ghost subtle-danger compact" aria-expanded={askChanges}
+                  onClick={toggleAskChanges} disabled={qaSending}>Request changes</button>
               </div>
-              {askChanges && <>
-                <textarea rows={2} value={changeNote} placeholder="What needs to change?"
-                  onChange={e=>setChangeNote(e.target.value)} />
-                <button className="sb-btn compact" disabled={!changeNote.trim()}
-                  onClick={()=>{ onRequestChanges(changeNote.trim()); setChangeNote(""); setAskChanges(false); }}>
-                  Send back for revisions</button>
-              </>}
+              {askChanges && (
+                <RevisionComposer
+                  onSend={onRequestChanges}
+                  onSent={()=>setAskChanges(false)}
+                  onDirtyChange={setQaDirty}
+                  onSendingChange={setQaSending} />
+              )}
+              {confirmDiscardNote && (
+                <ConfirmDialog tone="warning" icon="warning"
+                  title="Discard your revision note?"
+                  body="You've written a revision request that hasn't been sent. If you discard it now, it will be lost."
+                  cancelLabel="Keep writing" confirmLabel="Discard"
+                  onConfirm={discardChangeNote} onClose={()=>setConfirmDiscardNote(false)} />
+              )}
+              {confirmApprove && (
+                <ConfirmDialog tone="warning" icon="warning"
+                  title="Discard your revision note and approve?"
+                  body="You've written a revision request that hasn't been sent. Approving this content will discard it."
+                  cancelLabel="Keep writing" confirmLabel="Discard & approve"
+                  onConfirm={approveDiscardingDraft} onClose={()=>setConfirmApprove(false)} />
+              )}
             </div>
           )}
 
@@ -3566,6 +3606,9 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
       body="This permanently removes the content — its links, reminders and history. This can't be undone."
       confirmLabel="Delete content" cancelLabel="Cancel"
       onConfirm={async ()=>{ await onDelete(); }} onClose={()=>setConfirmDel(false)} />}
+    {/* Route-aware guard: any navigation away (scrim / ✕ / Back / another route)
+        while a revision draft is unsent is intercepted with a discard confirm. */}
+    {qaLeaveGuard}
     </Portal>
   );
 }

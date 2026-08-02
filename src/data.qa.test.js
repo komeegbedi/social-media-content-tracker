@@ -7,6 +7,7 @@ import {
   isQA, isApproved, isProductionMember, isAssignable, isAvailable,
   autoAssign, searchPeople, reviewMetrics, reviewQueue, reviewTiming,
   searchTasks, qaTaskCapabilities, isReviewableState,
+  REVISION_MAX, clampRevision, canSendRevision, revisionCharState, hasUnsentRevision, approveGate,
 } from "./data.js";
 
 // A local-midnight ISO date `off` days from today, so daysTo() returns exactly `off`.
@@ -227,4 +228,49 @@ test("Admin + QA: administers the app, but is NEVER production personnel", () =>
   const roster = [qaAdmin, shooter, owner].filter(isProductionMember).map((u) => u.name);
   assert.deepEqual(roster.sort(), ["Ben", "Cy"]);
   assert.ok(!roster.includes("Ada"));
+});
+
+/* ---- QA "Request changes" revision composer (pure rules) ---- */
+
+test("canSendRevision: blocks blank, whitespace-only, in-flight, and over-limit", () => {
+  assert.equal(canSendRevision(""), false);
+  assert.equal(canSendRevision("   \n\t "), false, "whitespace-only can't submit");
+  assert.equal(canSendRevision("Tighten the hook"), true);
+  assert.equal(canSendRevision("valid", { sending: true }), false, "no duplicate submit while sending");
+  assert.equal(canSendRevision("x".repeat(REVISION_MAX)), true);
+  assert.equal(canSendRevision("x".repeat(REVISION_MAX + 1)), false, "over the backend limit");
+});
+
+test("clampRevision enforces the 2,000-char backend limit (e.g. a big paste)", () => {
+  assert.equal(REVISION_MAX, 2000);
+  assert.equal(clampRevision("x".repeat(2500)).length, 2000);
+  assert.equal(clampRevision("short"), "short");
+  assert.equal(clampRevision(undefined), "");
+});
+
+test("multiline content is preserved verbatim through clamp (Return = newline, not submit)", () => {
+  const multi = "Line one.\nLine two.\n\nLine four with detail.";
+  assert.equal(clampRevision(multi), multi);
+});
+
+test("revisionCharState surfaces the counter only near the limit", () => {
+  assert.equal(revisionCharState("hi").nearLimit, false);
+  const near = revisionCharState("x".repeat(1900));
+  assert.equal(near.nearLimit, true);
+  assert.equal(near.remaining, 100);
+  assert.equal(revisionCharState("x".repeat(2000)).remaining, 0);
+});
+
+test("hasUnsentRevision drives the discard warning (non-empty, non-whitespace)", () => {
+  assert.equal(hasUnsentRevision(""), false);
+  assert.equal(hasUnsentRevision("   "), false);
+  assert.equal(hasUnsentRevision("needs work"), true);
+});
+
+test("approveGate: sending blocks; a dirty draft confirms; otherwise approve", () => {
+  assert.equal(approveGate({ dirty: false, sending: true }), "sending");
+  assert.equal(approveGate({ dirty: true, sending: true }), "sending", "in-flight wins over dirty");
+  assert.equal(approveGate({ dirty: true, sending: false }), "confirm-discard");
+  assert.equal(approveGate({ dirty: false, sending: false }), "approve");
+  assert.equal(approveGate({}), "approve");
 });
