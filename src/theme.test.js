@@ -102,7 +102,11 @@ test("legacy sb-theme value is honoured once", () => {
   assert.equal(getThemePref(), "dark");
 });
 
-// --- Safari browser-chrome color follows the RESOLVED theme, immediately ---
+// --- Standards-compliant chrome signal: the theme-color meta + colorScheme track
+//     the RESOLVED theme. These assert the DOM contract (what we emit), which
+//     compliant browsers honour. They do NOT assert the rendered browser chrome:
+//     iOS Safari 26.5.2 reflects "Match System" but not a manual override — a
+//     verified platform limitation, not a bug (see src/theme.js). ---
 
 test("Light → Dark → Light updates theme-color meta + colorScheme immediately", () => {
   setThemePref("light");

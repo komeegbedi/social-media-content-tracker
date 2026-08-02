@@ -41,14 +41,20 @@ export const THEME_COLORS = { light: "#F7F7F8", dark: "#08090A" };
 
 // Point the browser chrome at the resolved theme and keep
 // documentElement.style.colorScheme in sync (native form controls + scrollbars).
-// Because this is the RESOLVED theme (not the OS), an in-app override updates
-// Safari's toolbar immediately, without a reload.
+// This is the standards-compliant theme-color signal, set to the RESOLVED theme
+// (not the OS). Browsers/Safari versions that honour theme-color tint their chrome
+// from it; others fall back to the device appearance.
 //
 // We REPLACE the <meta name="theme-color"> element rather than only mutating its
-// `content`: some iOS Safari versions ignore an in-place content change but do
-// re-read theme-color when the element is (re)inserted. This also collapses any
+// `content`: some browsers ignore an in-place content change but do re-read
+// theme-color when the element is (re)inserted. This also collapses any
 // stale/competing tags (e.g. old media-gated ones) down to exactly one, and is
 // idempotent — it never accumulates metas.
+//
+// Verified platform limitation (iPhone 12 Pro / iOS Safari 26.5.2): under a MANUAL
+// in-app Light/Dark override the bottom toolbar keeps following the device
+// appearance regardless of this meta; "Match System" tracks both app and chrome.
+// This is a browser limitation — deliberately NO polling/timeouts/reloads to force it.
 function applyThemeColor(theme) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;

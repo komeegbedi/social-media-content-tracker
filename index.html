@@ -3,10 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <!-- ONE dynamic theme-color meta, updated by src/theme.js to the RESOLVED
-         theme (not the OS). Media-gated tags would follow the OS and leave
-         Safari's bottom chrome stale after an in-app Light/Dark override.
-         Colors match --background in src/styles.css (light #F7F7F8 / dark #08090A). -->
+    <!-- ONE standards-compliant theme-color meta, set by src/theme.js to the
+         RESOLVED theme (not the OS). Browsers that honour theme-color tint their
+         chrome from it. NOTE: iOS Safari 26.5.2 does not reflect a MANUAL in-app
+         override in the toolbar (it follows the device); "Match System" works.
+         Verified platform limitation — no hacks. Colors match --background in
+         src/styles.css (light #F7F7F8 / dark #08090A). -->
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" id="theme-color-meta" content="#F7F7F8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

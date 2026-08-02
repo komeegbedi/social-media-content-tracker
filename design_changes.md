@@ -1097,3 +1097,35 @@ accessibility setting before diagnosing "missing" animation.
 The goal is not identical rendering everywhere — it is that every supported
 browser preserves the same interaction meaning and polish with no missing or
 broken motion.
+
+---
+
+## Theme-color (Safari chrome) & QA revision composer — manual verification
+
+**Device of record:** iPhone 12 Pro, iOS 26.5.2, Safari — verified 2026-08-02.
+
+### Theme-color / browser chrome — expected behaviour
+- **Manual app theme (Light/Dark):** the *application* updates immediately in the
+  open tab. This is the guaranteed behaviour and must always pass.
+- **Match System:** changing the iOS appearance updates **both** the app and
+  Safari's bottom browser chrome, in the same tab. Must pass.
+- **iOS Safari 26.5.2 limitation (accepted):** under a **manual** in-app override,
+  Safari's bottom toolbar may keep following the **device** appearance rather than
+  the app's chosen theme. This is a verified platform limitation, not a cache bug.
+  The theme-color/`color-scheme` implementation is standards-compliant and left as
+  is — do **not** add polling, timeouts, reloads, duplicate `<meta>` tags, or other
+  hacks to force the toolbar. Browsers/versions that honour theme-color under a
+  manual override will pick it up automatically.
+- Implementation notes: exactly one dynamically-**replaced** `<meta name="theme-color">`
+  set to the resolved theme; `documentElement.style.colorScheme` and the `html`
+  background stay in sync (covers the safe-area region). See `src/theme.js`.
+
+### QA "Request changes" composer — acceptance criteria (ALL PASSED 2026-08-02)
+- Keyboard positioning: composer sits comfortably above the iOS keyboard. ✅
+- Multiline: Return inserts a new line and never submits. ✅
+- Unsaved-draft protection: every exit path (scrim, ✕, browser Back, Approve, other
+  route) warns before discarding a non-empty draft. ✅
+- Duplicate-submission prevention: repeated taps cannot fire duplicate requests. ✅
+- Revision notification delivered. ✅
+- Failed send retains the draft; blank/whitespace cannot be sent; 2,000-char cap
+  enforced (covered by automated tests + confirmed in use). ✅
