@@ -31,12 +31,27 @@ function isOverrideAuthorized(caller) {
   return !!caller && caller.role === "admin" && caller.disabled !== true;
 }
 
+// A revision (requestedChanges) is required when — and only when — an override
+// sends content back to Changes Requested.
+function requiresRequestedChanges(toStatus) {
+  return toStatus === "Changes Requested";
+}
+
 // Validate the request. Returns an error code (for the HttpsError map) or null.
-function validateOverrideInput({ toStatus, reason } = {}) {
+// The administrative `reason` (audit justification) is ALWAYS required; a separate
+// `requestedChanges` (revision instructions for the owner) is required — enforced
+// on the SERVER, not just the UI — when the destination is Changes Requested.
+function validateOverrideInput({ toStatus, reason, requestedChanges } = {}) {
   if (!STATUSES.includes(toStatus)) return "bad-status";
   const r = String(reason || "").trim();
   if (!r) return "no-reason";
   if (r.length > 2000) return "reason-too-long";
+  if (requiresRequestedChanges(toStatus)) {
+    if (typeof requestedChanges !== "string") return "no-requested-changes";
+    const rc = requestedChanges.trim();
+    if (!rc) return "no-requested-changes";                 // rejects whitespace-only
+    if (rc.length > 2000) return "requested-changes-too-long";
+  }
   return null;
 }
 
@@ -44,19 +59,23 @@ function validateOverrideInput({ toStatus, reason } = {}) {
 // capability) comes from the caller's own profile, NOT from client input; the
 // caller passes `now` for the client-side entry timestamp while the doc-level
 // updatedAt/at use the server clock. Returns null for a no-op (same status).
-function buildOverride({ task, toStatus, reason, actorUid, actorName, now }) {
+// `requestedChanges` is trimmed and included ONLY when the destination is Changes
+// Requested; it is omitted from the stored records for every other destination.
+function buildOverride({ task, toStatus, reason, requestedChanges, actorUid, actorName, now }) {
   const fromStatus = task.status;
   if (fromStatus === toStatus) return null;
   const r = String(reason).trim();
   const name = actorName || "Admin";
+  const rc = requiresRequestedChanges(toStatus) ? String(requestedChanges || "").trim() : "";
+  const revision = rc ? { requestedChanges: rc } : {};
   const entry = {
     type: "admin_override", by: name, uid: actorUid, cap: "admin",
-    from: fromStatus, to: toStatus, note: r, reason: r, at: now,
+    from: fromStatus, to: toStatus, note: r, reason: r, at: now, ...revision,
   };
   const audit = {
     type: "admin_override", taskId: task.id || null, title: task.title || "",
     actorUid, actorName: name, actorCap: "admin",
-    fromStatus, toStatus, reason: r,
+    fromStatus, toStatus, reason: r, ...revision,
   };
   // Archive invariant, enforced on BOTH directions: Posted ⇒ set archivedAt;
   // any other destination ⇒ clear it (so overriding backward out of Posted
@@ -90,11 +109,16 @@ exports.adminOverrideStatus = onCall(
     const taskId = String((req.data && req.data.taskId) || "").trim();
     const toStatus = String((req.data && req.data.toStatus) || "").trim();
     const reason = String((req.data && req.data.reason) || "").trim();
+    // Kept as the raw client string (not pre-trimmed) so type validation is honest;
+    // buildOverride trims it before storage.
+    const requestedChanges = (req.data && req.data.requestedChanges);
     if (!taskId) throw new HttpsError("invalid-argument", "Missing content reference.");
-    const inputErr = validateOverrideInput({ toStatus, reason });
+    const inputErr = validateOverrideInput({ toStatus, reason, requestedChanges });
     if (inputErr === "bad-status") throw new HttpsError("invalid-argument", "Choose a valid destination status.");
     if (inputErr === "no-reason") throw new HttpsError("invalid-argument", "A reason is required for an administrative override.");
     if (inputErr === "reason-too-long") throw new HttpsError("invalid-argument", "Reason is too long (2000 characters max).");
+    if (inputErr === "no-requested-changes") throw new HttpsError("invalid-argument", "Describe what needs to change for the content owner.");
+    if (inputErr === "requested-changes-too-long") throw new HttpsError("invalid-argument", "The revision instructions are too long (2000 characters max).");
 
     const taskRef = db.doc(`tasks/${taskId}`);
     const actorName = (caller.name && String(caller.name)) || "Admin";
@@ -107,7 +131,7 @@ exports.adminOverrideStatus = onCall(
         const task = { id: taskId, ...snap.data() };
 
         // Server-authored records — attribution from the caller's profile, never client input.
-        const built = buildOverride({ task, toStatus, reason, actorUid: uid, actorName, now: Date.now() });
+        const built = buildOverride({ task, toStatus, reason, requestedChanges, actorUid: uid, actorName, now: Date.now() });
         if (!built) return { noop: true, fromStatus: task.status };
 
         const update = {
@@ -132,8 +156,12 @@ exports.adminOverrideStatus = onCall(
       throw new HttpsError("unavailable", "Couldn't apply the override just now. Please try again.");
     }
 
+    // No-op guard: the destination equals the CURRENT status read inside the
+    // transaction (so this also catches a race where the task reached that status
+    // after the dialog opened). buildOverride returned null, so NOTHING was written —
+    // no activity entry, no audit event, no updatedAt/archivedAt change.
     if (result.noop)
-      throw new HttpsError("failed-precondition", `The content is already "${result.fromStatus}".`);
+      throw new HttpsError("failed-precondition", "The content is already in this status. Choose a different destination.");
 
     // Affected-people notifications are owned by onTaskWrite, which detects the
     // admin_override activity entry and uses override-specific copy (so the action

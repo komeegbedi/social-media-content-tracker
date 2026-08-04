@@ -141,10 +141,16 @@ exports.onTaskWrite = onDocumentWritten(
         if (owner) recips.push(owner);
         const otherAdmins = admins.filter((u) => u.uid !== lastEntry.uid && (!owner || u.uid !== owner.uid));
         recips.push(...otherAdmins);
+        // An override to Changes Requested carries actionable revision instructions
+        // (requestedChanges) for the owner — surface them, not just "moved to X".
+        const overTitle = after.status === "Changes Requested"
+          ? `'${dispTitle}' was sent back for revision`
+          : `'${dispTitle}' was administratively moved to ${after.status}`;
+        const overBody = (after.status === "Changes Requested" && lastEntry.requestedChanges)
+          ? `Administrative override — what needs to change: ${lastEntry.requestedChanges}`
+          : `Administrative override by ${actor} — not a QA decision.`;
         if (recips.length) await notifyUsers(recips, { type: "admin_override", taskId, keyBase: kb("admin_override"),
-          channels: ["in-app"],
-          title: `'${dispTitle}' was administratively moved to ${after.status}`,
-          body: `Administrative override by ${actor} — not a QA decision.` });
+          channels: ["in-app"], title: overTitle, body: overBody });
         // Downstream caption/posting may still proceed on an override to Approved.
         if (after.status === "Approved") {
           const captioners = captionUsers.filter((u) => !owner || u.uid !== owner.uid);

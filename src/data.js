@@ -206,6 +206,43 @@ export function activityLabel(e) {
 }
 // True for administrative-override history entries (rendered distinctly).
 export const isAdminOverrideEvent = (e) => !!e && e.type === "admin_override";
+
+// Shown when an administrative override sent content back for revision but carries
+// no instructions (a legacy override predating requestedChanges) — we NEVER expose
+// the administrative audit reason to the creator.
+export const ADMIN_OVERRIDE_NO_INSTRUCTIONS =
+  "Changes were requested through an administrative correction. Contact an administrator for the revision details.";
+
+/* The newest creator-facing "changes requested" feedback for a task, resolved
+   SOURCE-FIRST so an administrative audit reason is never surfaced as revision
+   guidance:
+     - a QA `changes_requested` event → its `note`;
+     - an `admin_override` whose destination is Changes Requested → its
+       `requestedChanges` ONLY (never `note`/`reason`); a legacy override without
+       requestedChanges yields hasInstructions:false + a neutral fallback.
+   Scans newest-first; the newest applicable event wins. Returns null if none.
+   Shape: { text, source: "qa"|"admin_override", by, at, hasInstructions }. */
+export function latestChangeRequest(task) {
+  const acts = (task && task.activity) || [];
+  for (let i = acts.length - 1; i >= 0; i--) {
+    const e = acts[i];
+    if (!e) continue;
+    if (e.type === "changes_requested") {
+      const note = (typeof e.note === "string" ? e.note : "").trim();
+      return { text: note, source: "qa", by: e.by, at: e.at, hasInstructions: !!note };
+    }
+    if (e.type === "admin_override" && e.to === "Changes Requested") {
+      // ONLY requestedChanges is creator-facing — never note/reason.
+      const rc = (typeof e.requestedChanges === "string" ? e.requestedChanges : "").trim();
+      const has = !!rc;
+      return {
+        text: has ? rc : ADMIN_OVERRIDE_NO_INSTRUCTIONS,
+        source: "admin_override", by: e.by, at: e.at, hasInstructions: has,
+      };
+    }
+  }
+  return null;
+}
 export const isApprovalEvent = (e) =>
   ["qa_sent", "approved", "changes_requested", "ready", "started"].includes(e.type);
 

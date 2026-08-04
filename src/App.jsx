@@ -20,7 +20,7 @@ import {
   LINK_FIELDS, requiredLinkKeys, missingLinks, QA_STATUSES,
   activityEntry, activityLabel, isApprovalEvent,
   TYPES, typeClass, qaQueue, reviewMetrics, reviewQueue, reviewTiming, postQueue, pendingMatches, applyAssignment,
-  approveGate, canMakeReviewDecision, canAdminOverride,
+  approveGate, canMakeReviewDecision, canAdminOverride, latestChangeRequest,
   personalWins, teamWins, dashboardMetrics, searchTasks, searchPeople,
   monthlyWins, recentWins, contributorWins,
   BOARD_SORTS, BOARD_FILTERS, sortTasks, groupByStatus, applyBoardFilter,
@@ -1640,8 +1640,8 @@ function Board({ profile, isAdmin }) {
   // Changes Requested transition, so this is the ONLY admin route to it; the server
   // records an explicit admin_override audit event + activity with its own
   // attribution and timestamp. Never presented as a QA decision.
-  const adminOverride = (task, { toStatus, reason }) => withFeedback(
-    callFunction("adminOverrideStatus", { taskId: task.id, toStatus, reason }).then((r) => r && r.data),
+  const adminOverride = (task, { toStatus, reason, requestedChanges }) => withFeedback(
+    callFunction("adminOverrideStatus", { taskId: task.id, toStatus, reason, requestedChanges }).then((r) => r && r.data),
     `✓ Administratively moved to ${toStatus}`);
   // Collaborative fields any approved member can set from a task's detail view.
   const setBlocked = async (id, blockedOn) =>
@@ -3233,7 +3233,8 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   const [postLink, setPostLink] = useState(task.postLink || "");
   const [showOverride, setShowOverride] = useState(false);      // admin override panel revealed
   const [overrideTo, setOverrideTo] = useState("");             // destination status
-  const [overrideReason, setOverrideReason] = useState("");     // required reason
+  const [overrideReason, setOverrideReason] = useState("");     // required audit reason
+  const [overrideChanges, setOverrideChanges] = useState("");   // revision instructions (Changes Requested only)
   const [overrideConfirm, setOverrideConfirm] = useState(false);// confirmation dialog
   const [askChanges, setAskChanges] = useState(false);          // "Request changes" composer revealed
   const [qaDirty, setQaDirty] = useState(false);                // composer has unsent, non-whitespace text
@@ -3281,7 +3282,13 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   const approveDiscardingDraft = () => { setAskChanges(false); setConfirmApprove(false); onApprove(); };
   // Close the workflow-correction flow and clear its draft (used by Cancel and on
   // a successful override). A FAILED submit does NOT call this — the draft persists.
-  const closeOverride = () => { setShowOverride(false); setOverrideConfirm(false); setOverrideTo(""); setOverrideReason(""); };
+  const closeOverride = () => { setShowOverride(false); setOverrideConfirm(false); setOverrideTo(""); setOverrideReason(""); setOverrideChanges(""); };
+  // Concurrency: if another user/process moves the task to the selected destination
+  // while the confirmation is open, that would be a no-op — kick back to the dialog
+  // (whose own guard clears the stale selection). The server is still authoritative.
+  useEffect(() => {
+    if (overrideConfirm && overrideTo && overrideTo === task.status) setOverrideConfirm(false);
+  }, [task.status, overrideConfirm, overrideTo]);
   // Discussion streams from the canonical tasks/{id}/comments subcollection. During
   // the migration window a task may still carry the legacy embedded array as well,
   // so merge and dedup the two — each comment renders exactly once (see mergeComments).
@@ -3317,7 +3324,11 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   // Only the type's required links (plus any already filled) — keeps it focused.
   const linkKeys = Object.keys(LINK_FIELDS).filter(k => required.includes(k) || (links[k]||"").trim());
   const postStage = ["Ready to Post","Posted"].includes(task.status);
-  const lastFeedback = [...(task.activity||[])].reverse().find(e => e.type==="changes_requested")?.note;
+  // The "Changes requested" feedback shown to the OWNER — resolved source-first by
+  // latestChangeRequest so an admin override's audit reason is never exposed as
+  // revision guidance (a legacy override without instructions shows a neutral note).
+  const changeRequest = latestChangeRequest(task);
+  const lastFeedback = changeRequest ? changeRequest.text : undefined;
   // Persist a content-link edit, but only if it's a valid URL (or cleared) AND
   // actually changed (trailing/whitespace-only edits don't count). The UrlInput
   // shows the inline "not a valid URL" error itself. #6/#12
@@ -3647,20 +3658,37 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
     {showOverride && !overrideConfirm && canOverride && onAdminOverride && (
       <Portal><AdminOverrideDialog task={task}
         to={overrideTo} setTo={setOverrideTo} reason={overrideReason} setReason={setOverrideReason}
+        requestedChanges={overrideChanges} setRequestedChanges={setOverrideChanges}
         onReview={()=>setOverrideConfirm(true)} onClose={closeOverride} /></Portal>
     )}
-    {showOverride && overrideConfirm && canOverride && onAdminOverride && (() => {
-      const to = overrideTo, reason = overrideReason.trim();
-      const valid = !!to && !!reason && to !== task.status;
+    {/* Never render a confirmation whose current and new status are identical
+        (the concurrent-update effect above also closes it on a race). */}
+    {showOverride && overrideConfirm && canOverride && onAdminOverride && overrideTo !== task.status && (() => {
+      const to = overrideTo, reason = overrideReason.trim(), rc = overrideChanges.trim();
+      const isCR = to === "Changes Requested";
+      const valid = !!to && !!reason && to !== task.status && (!isCR || !!rc);
+      const summary = [
+        `Current status: ${task.status}`,
+        `New status: ${to || "—"}`,
+        ...(isCR ? [`What needs to change: ${rc || "—"}`] : []),
+        `Reason for administrative override: ${reason || "—"}`,
+      ];
       return <ConfirmDialog tone="warning" icon="warning"
         title="Confirm status correction?"
         body={`This will move “${task.title}” from “${task.status}” to “${to || "—"}”.`}
-        consequences={[`Current status: ${task.status}`, `New status: ${to || "—"}`, `Reason: ${reason || "—"}`]}
-        note="This bypasses the normal workflow and will be recorded as an administrative override. It does not count as a QA review decision."
+        consequences={summary}
+        note={isCR
+          ? "This will send the content back for revision through an administrative override. It will not be recorded as a QA review decision."
+          : "This bypasses the normal workflow and will be recorded as an administrative override. It does not count as a QA review decision."}
         confirmLabel="Confirm correction" cancelLabel="Cancel" busyLabel="Applying…"
         onConfirm={async ()=>{
-          if (!valid) throw new Error("Choose a different destination status and a reason.");
-          await onAdminOverride({ toStatus: to, reason });
+          // Re-verify against the LATEST status right before the callable (server is
+          // still authoritative and rejects a no-op with failed-precondition).
+          if (to === task.status) throw new Error("Choose a status different from the current status.");
+          if (!valid) throw new Error(isCR
+            ? "Add revision instructions and a reason for the override."
+            : "Choose a different destination status and a reason.");
+          await onAdminOverride({ toStatus: to, reason, requestedChanges: isCR ? rc : undefined });
           closeOverride();
         }}
         onClose={()=>setOverrideConfirm(false)} />;

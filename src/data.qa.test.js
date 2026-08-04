@@ -9,6 +9,7 @@ import {
   searchTasks, qaTaskCapabilities, isReviewableState,
   REVISION_MAX, clampRevision, canSendRevision, revisionCharState, hasUnsentRevision, approveGate,
   canMakeReviewDecision, canAdminOverride, isActiveUser,
+  latestChangeRequest, ADMIN_OVERRIDE_NO_INSTRUCTIONS,
 } from "./data.js";
 
 // A local-midnight ISO date `off` days from today, so daysTo() returns exactly `off`.
@@ -317,4 +318,53 @@ test("isActiveUser reflects the disabled kill switch", () => {
   assert.equal(isActiveUser({ role: "admin" }), true);
   assert.equal(isActiveUser({ role: "admin", disabled: true }), false);
   assert.equal(isActiveUser(null), false);
+});
+
+/* ---- latestChangeRequest: creator-facing feedback never exposes an admin reason ---- */
+
+test("latestChangeRequest: normal QA feedback comes from changes_requested.note", () => {
+  const t = { activity: [{ type: "created" }, { type: "changes_requested", by: "Quinn QA", note: "Tighten the hook.", at: 5 }] };
+  const cr = latestChangeRequest(t);
+  assert.equal(cr.text, "Tighten the hook.");
+  assert.equal(cr.source, "qa");
+  assert.equal(cr.hasInstructions, true);
+});
+
+test("latestChangeRequest: a current override uses requestedChanges — NEVER its note/reason", () => {
+  const t = { activity: [{ type: "admin_override", to: "Changes Requested",
+    requestedChanges: "Shorten the opening to 3s.", note: "reviewer OOO", reason: "reviewer OOO", by: "Ada", at: 6 }] };
+  const cr = latestChangeRequest(t);
+  assert.equal(cr.text, "Shorten the opening to 3s.");
+  assert.equal(cr.source, "admin_override");
+  assert.equal(cr.hasInstructions, true);
+  assert.notEqual(cr.text, "reviewer OOO");
+});
+
+test("latestChangeRequest: a LEGACY override without requestedChanges never exposes the audit reason", () => {
+  const t = { activity: [{ type: "admin_override", to: "Changes Requested",
+    note: "SENSITIVE audit reason", reason: "SENSITIVE audit reason", by: "Ada", at: 3 }] };
+  const cr = latestChangeRequest(t);
+  assert.equal(cr.hasInstructions, false);
+  assert.equal(cr.text, ADMIN_OVERRIDE_NO_INSTRUCTIONS);
+  assert.ok(!cr.text.includes("SENSITIVE"), "audit reason must not leak");
+});
+
+test("latestChangeRequest: the newest applicable event wins", () => {
+  const t = { activity: [
+    { type: "admin_override", to: "Changes Requested", requestedChanges: "older override note", at: 1 },
+    { type: "changes_requested", note: "newest QA feedback", at: 9 },
+  ] };
+  assert.equal(latestChangeRequest(t).text, "newest QA feedback");
+  assert.equal(latestChangeRequest(t).source, "qa");
+});
+
+test("latestChangeRequest: an override to a non-Changes-Requested destination is not change feedback", () => {
+  const t = { activity: [{ type: "admin_override", to: "Approved", note: "approved via override", reason: "x", at: 4 }] };
+  assert.equal(latestChangeRequest(t), null);
+});
+
+test("latestChangeRequest: no applicable event → null", () => {
+  assert.equal(latestChangeRequest({ activity: [{ type: "created" }, { type: "started" }] }), null);
+  assert.equal(latestChangeRequest({}), null);
+  assert.equal(latestChangeRequest(null), null);
 });
