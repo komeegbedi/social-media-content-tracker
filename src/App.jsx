@@ -4351,7 +4351,7 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
               Medium; the summary reflects a non-default choice so it's not hidden. */}
           <details className="sb-moreblock">
             <summary className="sb-more-summary">
-              <span>More details</span>
+              <span className="sb-more-label">More details</span>
               <span className="sb-more-hint">Priority, related event, reference link</span>
               <ChevronDownIcon className="hi hi-sm sb-more-chev" aria-hidden="true"/>
             </summary>

@@ -581,7 +581,7 @@ function AdminContent({ tasks, trashed = [], h, filter, setFilter, onRestoreTask
 
   return (
     <>
-      <div className="sb-btnrow" style={{marginBottom:12}}>
+      <div className="sb-btnrow" style={{marginBottom:12, flexWrap:"wrap", rowGap:8, alignItems:"center"}}>
         <button className="sb-btn compact" onClick={onNewContent}><PlusIcon className="hi hi-sm" aria-hidden="true"/> New content</button>
         <button className="sb-tertiary" onClick={onAutoAll}><BoltIcon className="hi hi-sm" aria-hidden="true"/> Auto-assign empty</button>
         <button className="sb-tertiary" onClick={()=>setTrashView(true)}><TrashIcon className="hi hi-sm" aria-hidden="true"/> Trash{trashed.length>0?` · ${trashed.length}`:""}</button>

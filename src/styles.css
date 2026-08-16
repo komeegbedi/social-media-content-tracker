@@ -683,10 +683,14 @@ a{color:var(--accent-foreground)}
 .sb-dock{flex:none;display:flex;flex-direction:column;
   padding:0 16px calc(12px + env(safe-area-inset-bottom));
   background:linear-gradient(to top,var(--background) 62%,transparent)}
+.sb-dock{position:relative}
 @media(min-width:900px){ .sb-dock{display:none} }
-/* The New action gets its own reserved row above the bar — right-aligned, so it
-   is prominent yet still inside the reserved region (never over content). */
-.sb-fabrow{display:flex;justify-content:flex-end;padding:10px 2px 12px}
+/* The New action floats compactly just above the nav (bottom-right) rather than
+   reserving a full-width row — that empty reserved band read as wasted black space.
+   It's out of flow (absolute), so the dock height is just the nav; the small FAB
+   overlaps only the very bottom-right corner of scrolling content, Material-style. */
+.sb-fabrow{position:absolute;inset-inline-end:6px;bottom:100%;margin-bottom:10px;
+  display:flex;justify-content:flex-end;z-index:var(--z-navigation)}
 
 .sb-fab{position:relative;width:56px;height:56px;
   border-radius:18px;background:var(--accent-fill);color:#fff;border:none;box-shadow:var(--shadow-lg);
@@ -1128,6 +1132,7 @@ a{color:var(--accent-foreground)}
 .sb-more-summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;
   padding:12px 14px;min-height:48px;font-weight:600;font-size:14px;color:var(--text-primary)}
 .sb-more-summary::-webkit-details-marker{display:none}
+.sb-more-label{white-space:nowrap;flex:none}
 .sb-more-hint{font-weight:400;font-size:12.5px;color:var(--text-muted);min-width:0;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
 .sb-more-chev{margin-inline-start:auto;color:var(--text-muted);flex:none;transition:transform var(--motion-fast) var(--ease-out)}
@@ -2052,6 +2057,7 @@ a{color:var(--accent-foreground)}
 .sb-toolbar .sb-btn.compact{margin-top:0}
 .sb-tertiary{display:inline-flex;align-items:center;gap:6px;background:none;border:none;
   color:var(--text-secondary);font-size:13px;font-weight:600;padding:9px 10px;min-height:38px;
+  white-space:nowrap;flex:none;
   border-radius:var(--r-control);cursor:pointer;transition:background var(--motion-micro) var(--ease-out)}
 .sb-tertiary:hover{background:var(--surface-muted);color:var(--text-primary)}
 @media(max-width:559px){ .sb-toolbar{display:grid;grid-template-columns:1fr 1fr} .sb-tertiary{justify-content:center} }
