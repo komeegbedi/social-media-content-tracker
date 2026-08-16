@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { logIssue } from "./logging";
+import { formatRelativeShort } from "./dateFormat.js";
 
 import {
   UserPlusIcon, BellAlertIcon, ExclamationTriangleIcon, ClipboardDocumentCheckIcon,
@@ -72,15 +73,9 @@ export function effectivePrefs(user) {
 }
 
 // Human "2h ago" from a Firestore Timestamp | Date | ms.
+// Compact "3d ago" relative time — centralised in the Intl date layer.
 export function timeAgo(ts) {
-  if (!ts) return "";
-  const ms = ts.toMillis ? ts.toMillis() : (ts instanceof Date ? ts.getTime() : ts);
-  const s = Math.round((Date.now() - ms) / 1000);
-  if (s < 60) return "just now";
-  const m = Math.round(s / 60); if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
-  const d = Math.round(h / 24); if (d < 7) return `${d}d ago`;
-  return `${Math.round(d / 7)}w ago`;
+  return formatRelativeShort(ts, { fallback: "" });
 }
 
 /* Live-subscribe to my notifications, newest first, paginated via "load more".

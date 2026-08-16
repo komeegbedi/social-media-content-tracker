@@ -5,8 +5,16 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  isOverrideAuthorized, validateOverrideInput, buildOverride, OVERRIDE_STATUSES,
+  isOverrideAuthorized, validateOverrideInput, overridePrecondition, buildOverride, OVERRIDE_STATUSES,
 } = require("./adminOverride");
+
+test("overridePrecondition rejects missing and TRASHED content, allows active", () => {
+  assert.deepEqual(overridePrecondition(false, null), ["not-found", "That content no longer exists."]);
+  const trashed = overridePrecondition(true, { status: "In Review", deletedAt: new Date() });
+  assert.equal(trashed[0], "failed-precondition");
+  assert.match(trashed[1], /Trash/);
+  assert.equal(overridePrecondition(true, { status: "In Review" }), null); // active → proceed
+});
 
 test("override is authorised for ACTIVE ADMINS only — never QA-derived", () => {
   assert.equal(isOverrideAuthorized({ role: "admin", status: "approved" }), true);

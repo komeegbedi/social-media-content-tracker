@@ -15,7 +15,8 @@ test("no one-click shortcut bypasses the override ceremony (any status)", () => 
     for (const forbidden of ["mark posted", "mark as posted", "archive"]) {
       assert.ok(!labels.includes(forbidden), `"${forbidden}" must NOT be an admin shortcut (status: ${status})`);
     }
-    // The safe management actions are still present.
-    assert.deepEqual(labels, ["open", "edit", "duplicate", "delete"]);
+    // The safe management actions are still present. Removal is a reversible
+    // "Move to Trash" (soft-delete), never a one-click permanent delete.
+    assert.deepEqual(labels, ["open", "edit", "duplicate", "move to trash"]);
   }
 });

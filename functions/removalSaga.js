@@ -67,11 +67,18 @@ async function deleteAllTokens(db, uid) {
 }
 
 // Immutable, server-authored audit event. create-if-absent → idempotent.
+// Truthful lifecycle metadata: the Auth account is DISABLED (never deleted), but
+// removal strips email/prefs/tokens and detaches work, and there is no product
+// restore path — so this is NOT operationally reversible. We record exactly that,
+// rather than a misleading `reversible: true`.
 async function writeAuditEvent(db, opId, { targetUid, targetName, removedBy }) {
   try {
     await db.collection("auditEvents").doc(opId).create({
       type: "user_removed", opId, targetUid, targetName: targetName || "",
-      removedBy: removedBy || "", reversible: true, at: FieldValue.serverTimestamp(),
+      removedBy: removedBy || "",
+      authAccountPreserved: true,     // Auth account disabled, not deleted
+      restorationAvailable: false,    // no one-click restore exists; re-onboarding is manual
+      at: FieldValue.serverTimestamp(),
     });
   } catch (e) { if (e.code !== 6) throw e; } // ALREADY_EXISTS → already audited
 }

@@ -80,3 +80,45 @@ test("Posted cancels pending instances but keeps processed history", async () =>
   assert.equal(list.filter((i) => i.status === "processed").length, 1); // history kept
   assert.ok(!list.some((i) => i.id === list0[0].id)); // the previously-pending one is gone
 });
+
+/* SCENARIO A — MATERIALIZATION (scheduling side). Trashing a task cancels its
+   pending reminder instances at (re)build time so none survive to be dispatched;
+   restore rebuilds only the valid FUTURE schedule. (Scenario B — a due instance the
+   dispatcher claims for an already-trashed task — is in test/reminders-trash.test.js.) */
+test("Scenario A · Trash cancels pending reminder instances (status preserved, not Posted)", async () => {
+  await materializeReminders(TASK, task());
+  assert.equal((await instances()).filter((i) => i.status === "pending").length, 1);
+  // Soft-delete: deletedAt present, status is STILL the working status (not Posted).
+  await materializeReminders(TASK, task({ deletedAt: new Date() }));
+  assert.equal((await instances()).filter((i) => i.status === "pending").length, 0);
+});
+
+test("Scenario A · Restore recreates only valid FUTURE instances and preserves processed history", async () => {
+  await materializeReminders(TASK, task());
+  const list0 = await instances();
+  await col().doc(list0[0].id).update({ status: "processed", processedAt: new Date() }); // one already fired
+  // A separate future reminder that is pending when we trash.
+  await materializeReminders(TASK, task({ reminders: [
+    { id: "d1", offset: 3, when: "before", channels: ["in-app"], recipients: ["owner"], enabled: true },
+    { id: "d2", offset: 1, when: "before", channels: ["in-app"], recipients: ["owner"], enabled: true },
+  ] }));
+  assert.ok((await instances()).filter((i) => i.status === "pending").length >= 1);
+
+  // Trash → all pending cancelled, processed kept.
+  await materializeReminders(TASK, task({ deletedAt: new Date(), reminders: [
+    { id: "d1", offset: 3, when: "before", channels: ["in-app"], recipients: ["owner"], enabled: true },
+    { id: "d2", offset: 1, when: "before", channels: ["in-app"], recipients: ["owner"], enabled: true },
+  ] }));
+  let list = await instances();
+  assert.equal(list.filter((i) => i.status === "pending").length, 0, "trash cancels all pending");
+  assert.equal(list.filter((i) => i.status === "processed").length, 1, "processed history survives trash");
+
+  // Restore (deletedAt cleared) → future schedule rebuilt, processed history intact.
+  await materializeReminders(TASK, task({ reminders: [
+    { id: "d1", offset: 3, when: "before", channels: ["in-app"], recipients: ["owner"], enabled: true },
+    { id: "d2", offset: 1, when: "before", channels: ["in-app"], recipients: ["owner"], enabled: true },
+  ] }));
+  list = await instances();
+  assert.ok(list.filter((i) => i.status === "pending").length >= 1, "restore recreates future reminders");
+  assert.equal(list.filter((i) => i.status === "processed").length, 1, "processed history still intact after restore");
+});

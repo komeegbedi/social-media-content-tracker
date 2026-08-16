@@ -74,6 +74,7 @@ function GuardHarness() {
 function mount(Comp, entries = ["/"]) {
   const router = createMemoryRouter([{ path: "*", element: h(Comp) }], {
     initialEntries: entries, initialIndex: entries.length - 1,
+    future: { v7_startTransition: true, v7_relativeSplatPath: true },
   });
   const root = createRoot(document.getElementById("root"));
   act(() => { root.render(h(RouterProvider, { router })); });

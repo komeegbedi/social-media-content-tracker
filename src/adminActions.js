@@ -10,5 +10,5 @@ export const adminKebab = (t, h) => [
   { label: "Open", onClick: () => h.open(t.id) },
   { label: "Edit", onClick: () => h.edit(t) },
   { label: "Duplicate", onClick: () => h.duplicate(t) },
-  { label: "Delete", danger: true, onClick: () => h.del(t.id, t.title) },
+  { label: "Move to Trash", danger: true, onClick: () => h.del(t.id, t.title) },
 ];

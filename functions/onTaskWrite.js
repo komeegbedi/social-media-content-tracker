@@ -20,7 +20,10 @@ const { scheduleRevision, instanceId } = require("./reminderSchedule");
 // PENDING instances of a superseded revision are removed; processed/failed
 // history is preserved. Posted/no-postDate → all pending cancelled.
 async function materializeReminders(taskId, task) {
-  const rebuild = task.status !== "Posted" && !!task.postDate;
+  // A trashed task is inactive: rebuild=false cancels ALL its pending instances
+  // (processed/failed history is preserved below). Restoring the task clears
+  // deletedAt, so a later call rebuilds only the valid FUTURE schedule.
+  const rebuild = !task.deletedAt && task.status !== "Posted" && !!task.postDate;
   const settings = await loadSettings();
   const reminders = rebuild
     ? ((task.reminders && task.reminders.length) ? task.reminders : settings.defaultReminders)
@@ -94,6 +97,20 @@ exports.onTaskWrite = onDocumentWritten(
         .where("taskId", "==", taskId).where("status", "==", "pending").get();
       const batch = db.batch(); pend.docs.forEach((d) => batch.delete(d.ref));
       if (!pend.empty) await batch.commit();
+      return;
+    }
+
+    // Trash is inactive. A task that is trashed after this write must produce NO
+    // workflow/assignment notifications; we only reconcile its reminder queue
+    // (cancel pending when it enters Trash) and then return. Restore (trashed→
+    // active) falls through to normal handling, which rematerializes reminders.
+    const wasTrashed = !!before?.deletedAt;
+    const isTrashed = !!after?.deletedAt;
+    if (isTrashed) {
+      // active→trashed cancels pending reminders; trashed→trashed is a no-op
+      // (materializeReminders with rebuild=false only deletes what's still pending).
+      if (!wasTrashed) await materializeReminders(taskId, after);
+      logger.debug("onTaskWrite: task is trashed — notifications suppressed", { taskId });
       return;
     }
 
@@ -189,7 +206,10 @@ exports.onTaskWrite = onDocumentWritten(
     const dueChanged = before?.postDate !== after.postDate;
     const remindersChanged = JSON.stringify(before?.reminders || null) !== JSON.stringify(after.reminders || null);
     const statusChanged = before?.status !== after.status;
-    if (created || dueChanged || remindersChanged || statusChanged) {
+    // Restore (trashed→active) reaches here with wasTrashed true: rematerialize the
+    // valid future schedule even if nothing else changed on the restoring write.
+    const restored = wasTrashed && !isTrashed;
+    if (created || dueChanged || remindersChanged || statusChanged || restored) {
       await materializeReminders(taskId, after);
     }
     logger.debug("onTaskWrite handled", { taskId, status: after.status });

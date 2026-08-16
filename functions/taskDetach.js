@@ -67,6 +67,12 @@ async function detachTasks({ db, opRef, userName, mode, resolvedTargetName, page
     for (const doc of snap.docs) {
       const t = doc.data();
       if (t.status === "Posted") continue;              // history — never touched
+      // A trashed task is inactive and its data is preserved AS-IS while in Trash —
+      // detachment leaves its owner/crew untouched. Consequence (documented): if the
+      // content is later RESTORED after this user was removed, it re-enters active
+      // views still showing the removed (disabled) person; the admin then reassigns
+      // it through the normal owner/crew flow, exactly like any restored content.
+      if (t.deletedAt) continue;
       const patch = detachPatch(t, userName, mode, resolvedTargetName);
       if (patch) { patch.updatedAt = FieldValue.serverTimestamp(); batch.update(doc.ref, patch); }
     }

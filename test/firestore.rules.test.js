@@ -12,9 +12,11 @@ import { readFileSync } from "node:fs";
 import {
   initializeTestEnvironment, assertFails, assertSucceeds,
 } from "@firebase/rules-unit-testing";
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { doc, setDoc, getDoc, updateDoc, deleteDoc, serverTimestamp, deleteField } from "firebase/firestore";
 
-const PROJECT_ID = "rules-test-" + Date.now();
+// A fixed project id can be supplied (RULES_TEST_PROJECT) so the emulator's rule
+// coverage report can be fetched for THIS run; otherwise a unique per-run id is used.
+const PROJECT_ID = process.env.RULES_TEST_PROJECT || ("rules-test-" + Date.now());
 let env;
 
 // Seed helper: write a doc bypassing rules (admin context).
@@ -112,6 +114,199 @@ test("QA review authority only applies from In Review (Planned → Approved deni
   // the Admin axis — a separate power, verified elsewhere — but qa-only cannot.)
   await assertFails(approveFrom("qa"));
   await assertFails(approveFrom("member"));
+});
+
+/* ---- Trash (soft-delete) — admin-only, status-preserving, forgery-proof ---- */
+const ADMIN_NAME = USERS.admin.name;   // deletedByName must match the caller's profile
+
+test("Trash: ONLY an admin may soft-delete; the owner/member cannot", async () => {
+  await seed("tasks", "tt1", baseTask({ status: "In Progress" }));
+  const trash = (uid) => updateDoc(doc(as(uid), "tasks", "tt1"), {
+    deletedAt: serverTimestamp(), deletedBy: uid, deletedByName: ADMIN_NAME, updatedAt: serverTimestamp(),
+  });
+  await assertFails(trash("member"));   // not admin
+  await assertFails(trash("owner"));    // even the owner cannot trash
+  // admin must attribute to THEMSELVES (deletedBy == caller); "admin" ctx uid is "admin".
+  await assertSucceeds(updateDoc(doc(as("admin"), "tasks", "tt1"), {
+    deletedAt: serverTimestamp(), deletedBy: "admin", deletedByName: ADMIN_NAME, updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Trash: rejects a FORGED deletedBy (not the caller)", async () => {
+  await seed("tasks", "ttf", baseTask({ status: "In Progress" }));
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "ttf"), {
+    deletedAt: serverTimestamp(), deletedBy: "someone-else", deletedByName: ADMIN_NAME, updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Trash: rejects a CLIENT timestamp (deletedAt must equal request.time)", async () => {
+  await seed("tasks", "ttc", baseTask({ status: "In Progress" }));
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "ttc"), {
+    deletedAt: 1234567, deletedBy: "admin", deletedByName: ADMIN_NAME, updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Trash: rejects a MISSING deletedBy", async () => {
+  await seed("tasks", "ttm", baseTask({ status: "In Progress" }));
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "ttm"), {
+    deletedAt: serverTimestamp(), deletedByName: ADMIN_NAME, updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Trash: rejects a forged deletedByName (not the caller's profile name)", async () => {
+  await seed("tasks", "ttn", baseTask({ status: "In Progress" }));
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "ttn"), {
+    deletedAt: serverTimestamp(), deletedBy: "admin", deletedByName: "Someone Else", updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Trash: must NOT change status (trash + a legal status transition is denied)", async () => {
+  await seed("tasks", "tt2", baseTask({ status: "Approved" }));
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "tt2"), {
+    deletedAt: serverTimestamp(), deletedBy: "admin", deletedByName: ADMIN_NAME,
+    status: "Ready to Post", updatedAt: serverTimestamp(),   // Approved→Ready is legal, but not with trash
+  }));
+});
+
+test("Restore: ONLY an admin may clear deletedAt; a member cannot un-trash", async () => {
+  await seed("tasks", "tt3", baseTask({ status: "Ready to Post", deletedAt: 111, deletedBy: "admin", deletedByName: ADMIN_NAME }));
+  const restore = (uid) => updateDoc(doc(as(uid), "tasks", "tt3"), {
+    deletedAt: deleteField(), deletedBy: deleteField(), deletedByName: deleteField(), updatedAt: serverTimestamp(),
+  });
+  await assertFails(restore("member"));
+  await assertSucceeds(restore("admin"));
+});
+
+test("Restore: PARTIAL marker clearing is denied (all markers must clear together)", async () => {
+  await seed("tasks", "tt4", baseTask({ status: "Ready to Post", deletedAt: 111, deletedBy: "admin", deletedByName: ADMIN_NAME }));
+  // Clears deletedAt but leaves deletedBy/deletedByName → denied.
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "tt4"), {
+    deletedAt: deleteField(), updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Restore: must NOT ride a status change (restore + a legal transition is denied)", async () => {
+  await seed("tasks", "tt5", baseTask({ status: "Approved", deletedAt: 111, deletedBy: "admin", deletedByName: ADMIN_NAME }));
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "tt5"), {
+    deletedAt: deleteField(), deletedBy: deleteField(), deletedByName: deleteField(),
+    status: "Ready to Post", updatedAt: serverTimestamp(),
+  }));
+});
+
+test("While trashed: a member collaboration update is DENIED", async () => {
+  await seed("tasks", "tt6", baseTask({ status: "In Progress", owner: "Otis Owner", deletedAt: 111, deletedBy: "admin" }));
+  // A normal owner transition that would be legal on an ACTIVE task.
+  await assertFails(updateDoc(doc(as("owner"), "tasks", "tt6"), {
+    status: "In Review", updatedAt: serverTimestamp(),
+  }));
+});
+
+test("While trashed: an ADMIN normal field/status edit is DENIED (only Restore is allowed)", async () => {
+  await seed("tasks", "tt7", baseTask({ status: "In Progress", deletedAt: 111, deletedBy: "admin", deletedByName: ADMIN_NAME }));
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "tt7"), {
+    status: "In Review", updatedAt: serverTimestamp(),   // normal admin edit on trashed → denied
+  }));
+});
+
+test("A normal update cannot sneak in deletedAt via the member allowlist", async () => {
+  await seed("tasks", "tt8", baseTask({ status: "In Progress", owner: "Otis Owner" }));
+  await assertFails(updateDoc(doc(as("owner"), "tasks", "tt8"), {
+    deletedAt: serverTimestamp(), status: "In Review", updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Comment creation beneath a TRASHED task is denied; beneath an active task it succeeds", async () => {
+  await seed("tasks", "tt9", baseTask({ status: "In Progress", deletedAt: 111, deletedBy: "admin" }));
+  await seed("tasks", "tt9live", baseTask({ status: "In Progress" }));
+  const comment = (taskId) => setDoc(doc(as("member"), "tasks", taskId, "comments", "c1"), {
+    uid: "member", who: "Mel Member", txt: "hi", tm: serverTimestamp(), mentions: [],
+  });
+  await assertFails(comment("tt9"));      // trashed parent → no new collaboration
+  await assertSucceeds(comment("tt9live")); // active parent → normal comment
+});
+
+test("Create: a task cannot be BORN trashed (client Trash metadata rejected)", async () => {
+  await assertFails(setDoc(doc(as("admin"), "tasks", "ttborn"), baseTask({ deletedAt: serverTimestamp(), deletedBy: "admin" })));
+  await assertSucceeds(setDoc(doc(as("admin"), "tasks", "ttborn2"), baseTask()));  // clean create OK
+});
+
+test("Trash: a MISSING deletedByName is denied (no rule-supplied default)", async () => {
+  await seed("tasks", "ttnn", baseTask({ status: "In Progress" }));
+  // deletedAt + deletedBy correct, but deletedByName omitted → denied.
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "ttnn"), {
+    deletedAt: serverTimestamp(), deletedBy: "admin", updatedAt: serverTimestamp(),
+  }));
+  // Adding the required, matching name → allowed.
+  await assertSucceeds(updateDoc(doc(as("admin"), "tasks", "ttnn"), {
+    deletedAt: serverTimestamp(), deletedBy: "admin", deletedByName: ADMIN_NAME, updatedAt: serverTimestamp(),
+  }));
+});
+
+test("HARD DELETE of a task is denied for admins — active AND trashed", async () => {
+  await seed("tasks", "delA", baseTask({ status: "In Progress" }));                 // active
+  await seed("tasks", "delT", baseTask({ status: "In Progress", deletedAt: 111, deletedBy: "admin", deletedByName: ADMIN_NAME })); // trashed
+  await assertFails(deleteDoc(doc(as("admin"), "tasks", "delA")));   // admin cannot hard-delete active
+  await assertFails(deleteDoc(doc(as("admin"), "tasks", "delT")));   // admin cannot hard-delete trashed
+  await assertFails(deleteDoc(doc(as("member"), "tasks", "delA")));  // member certainly cannot
+});
+
+test("HARD DELETE of an event series is denied for the client (even an admin)", async () => {
+  await seed("eventSeries", "ev1", { name: "Praise Night", frequency: "monthly-weekday", anchorDate: "2026-09-04", archived: false });
+  await assertFails(deleteDoc(doc(as("admin"), "eventSeries", "ev1")));   // retire = archive, never delete
+  // Archiving (an update) is still allowed.
+  await assertSucceeds(updateDoc(doc(as("admin"), "eventSeries", "ev1"), { archived: true }));
+});
+
+test("Comment moderation (create/update/delete) is FROZEN while the parent task is trashed", async () => {
+  await seed("tasks", "cparent", baseTask({ status: "In Progress", deletedAt: 111, deletedBy: "admin", deletedByName: ADMIN_NAME }));
+  // Seed an existing comment under the trashed task (rules-disabled seed).
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "tasks", "cparent", "comments", "c1"),
+      { uid: "member", who: "Mel Member", txt: "old", tm: 1, mentions: [] });
+  });
+  // create → denied (parent trashed)
+  await assertFails(setDoc(doc(as("member"), "tasks", "cparent", "comments", "c2"),
+    { uid: "member", who: "Mel Member", txt: "hi", tm: serverTimestamp(), mentions: [] }));
+  // admin edit → denied (moderation frozen)
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "cparent", "comments", "c1"), { txt: "edited" }));
+  // admin delete → denied (moderation frozen)
+  await assertFails(deleteDoc(doc(as("admin"), "tasks", "cparent", "comments", "c1")));
+});
+
+// FULL comment lifecycle driven through the REAL authenticated Trash/Restore
+// transitions (not a seeded deletedAt): active → trash → frozen → restore → thawed.
+test("Comment lifecycle across a real admin Trash then Restore", async () => {
+  await seed("tasks", "clc", baseTask({ status: "In Progress" }));   // ACTIVE
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "tasks", "clc", "comments", "c1"),
+      { uid: "member", who: "Mel Member", txt: "old", tm: 1, mentions: [] });
+  });
+  const mkComment = (id) => setDoc(doc(as("member"), "tasks", "clc", "comments", id),
+    { uid: "member", who: "Mel Member", txt: "hi", tm: serverTimestamp(), mentions: [] });
+
+  // 1. Active parent → member can post, admin can moderate.
+  await assertSucceeds(mkComment("c2"));
+  await assertSucceeds(updateDoc(doc(as("admin"), "tasks", "clc", "comments", "c1"), { txt: "moderated" }));
+
+  // 2. Admin TRASHES the task through the real Trash transition.
+  await assertSucceeds(updateDoc(doc(as("admin"), "tasks", "clc"), {
+    deletedAt: serverTimestamp(), deletedBy: "admin", deletedByName: ADMIN_NAME, updatedAt: serverTimestamp(),
+  }));
+
+  // 3. While trashed: create/update/delete all denied (thread frozen).
+  await assertFails(mkComment("c3"));
+  await assertFails(updateDoc(doc(as("admin"), "tasks", "clc", "comments", "c1"), { txt: "nope" }));
+  await assertFails(deleteDoc(doc(as("admin"), "tasks", "clc", "comments", "c1")));
+
+  // 4. Admin RESTORES the task through the real Restore transition.
+  await assertSucceeds(updateDoc(doc(as("admin"), "tasks", "clc"), {
+    deletedAt: deleteField(), deletedBy: deleteField(), deletedByName: deleteField(), updatedAt: serverTimestamp(),
+  }));
+
+  // 5. After restore: member can post again, admin moderation works again.
+  await assertSucceeds(mkComment("c4"));
+  await assertSucceeds(updateDoc(doc(as("admin"), "tasks", "clc", "comments", "c1"), { txt: "moderated again" }));
+  await assertSucceeds(deleteDoc(doc(as("admin"), "tasks", "clc", "comments", "c1")));
 });
 
 test("a QA decision must be self-attributed — forging another actor's uid (or omitting it) is denied", async () => {

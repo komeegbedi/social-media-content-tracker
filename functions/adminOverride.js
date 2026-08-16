@@ -37,6 +37,15 @@ function requiresRequestedChanges(toStatus) {
   return toStatus === "Changes Requested";
 }
 
+// Precondition on the task read inside the transaction: an override may only act on
+// ACTIVE content. Returns an [httpsCode, message] pair to reject, or null to proceed.
+// A trashed task must be restored first — an override can't mutate content in Trash.
+function overridePrecondition(taskExists, taskData) {
+  if (!taskExists) return ["not-found", "That content no longer exists."];
+  if (taskData && taskData.deletedAt) return ["failed-precondition", "That content is in Trash. Restore it before changing its status."];
+  return null;
+}
+
 // Validate the request. Returns an error code (for the HttpsError map) or null.
 // The administrative `reason` (audit justification) is ALWAYS required; a separate
 // `requestedChanges` (revision instructions for the owner) is required — enforced
@@ -86,6 +95,7 @@ function buildOverride({ task, toStatus, reason, requestedChanges, actorUid, act
 
 module.exports.isOverrideAuthorized = isOverrideAuthorized;
 module.exports.validateOverrideInput = validateOverrideInput;
+module.exports.overridePrecondition = overridePrecondition;
 module.exports.buildOverride = buildOverride;
 module.exports.OVERRIDE_STATUSES = STATUSES;
 
@@ -127,7 +137,10 @@ exports.adminOverrideStatus = onCall(
     try {
       result = await db.runTransaction(async (tx) => {
         const snap = await tx.get(taskRef);
-        if (!snap.exists) throw new HttpsError("not-found", "That content no longer exists.");
+        // Must be ACTIVE content: missing → not-found; trashed → restore-first. A
+        // trashed task is inactive, so an override can never mutate content in Trash.
+        const pre = overridePrecondition(snap.exists, snap.exists ? snap.data() : null);
+        if (pre) throw new HttpsError(pre[0], pre[1]);
         const task = { id: taskId, ...snap.data() };
 
         // Server-authored records — attribution from the caller's profile, never client input.

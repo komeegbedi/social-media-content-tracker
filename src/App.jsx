@@ -8,12 +8,13 @@ import {
   signInWithPopup, updateProfile, sendPasswordResetEmail,
 } from "firebase/auth";
 import {
-  collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot, serverTimestamp, runTransaction,
+  collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot, serverTimestamp, runTransaction, deleteField,
 } from "firebase/firestore";
 import { auth, db, googleProvider, callFunction } from "./firebase";
 import {
   STAGES, statusClass, roleLabel, initials, emailFor, formatContentTitle,
   fmt, daysTo, autoAssign, computeCapacity,
+  isDeleted, visibleTasks, trashedTasks, canRestoreTask, taskDeletionSummary,
   parseCSV, rowToTask, sheetCsvUrl,
   PRIORITIES, priorityClass, attentionItems, matchUser, reconcileNames, matchTier,
   PHASES, statusPhase, nextStep, workflowAction,
@@ -43,32 +44,48 @@ import {
   HomeIcon, ClockIcon, ViewColumnsIcon, ClipboardDocumentListIcon, ClipboardDocumentCheckIcon, UserGroupIcon,
   Cog6ToothIcon, BellIcon, MagnifyingGlassIcon, XMarkIcon, ChevronRightIcon,
   EllipsisHorizontalIcon, ExclamationTriangleIcon, SunIcon, MoonIcon, FunnelIcon,
-  BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, SparklesIcon, EyeIcon, EyeSlashIcon,
+  BoltIcon, PlusIcon, ArrowUpTrayIcon, CalendarDaysIcon, LightBulbIcon, IdentificationIcon, SparklesIcon, EyeIcon, EyeSlashIcon,
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
   InformationCircleIcon, ClipboardIcon, ArrowTopRightOnSquareIcon, CheckIcon, ClipboardDocumentIcon,
-  ComputerDesktopIcon, DocumentTextIcon,
+  ComputerDesktopIcon, DocumentTextIcon, SignalSlashIcon, TrophyIcon, CheckBadgeIcon,
+  TrashIcon, ArrowUturnLeftIcon,
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
 import { useNav, useScrollRestoration, useDirtyNavGuard } from "./navHooks.js";
 import RevisionComposer from "./RevisionComposer.jsx";
 import AdminOverrideDialog from "./AdminOverrideDialog.jsx";
+import ScreenFallback from "./ScreenFallback.jsx";
+import { SaveBanner } from "./saveBanner.jsx";
+import { BusyButton } from "./loading.jsx";
+import { classifyExisting } from "./importPlan.js";
+import { formatEventDate, formatDueDate, formatRelativeTime, formatRelativeShort, formatDateTime, formatReminderDateTime, formatRelativeDays, enCount } from "./dateFormat.js";
+import { ProfileDrawer } from "./ProfileDrawer.jsx";
+import { Toggle, Switch, PasswordField } from "./controls.jsx";
+export { Toggle } from "./controls.jsx";   // re-export so AdminScreen keeps importing it from here
 import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM, notificationDestination } from "./nav.js";
 
 /* The admin dashboard is a lazy-loaded chunk (React.lazy). It's only rendered for
    an admin who opens the Admin tab, so non-admins never download it. */
 const Admin = lazy(() => import("./AdminScreen.jsx"));
 
+/* Sign out AND reset the URL to a canonical route first, so a transient overlay
+   in the query (?panel=profile|notifications|search, an open editor, a filter)
+   can never survive the session and reopen for whoever signs in next. Every
+   sign-out path routes through here. replaceState is enough: the authenticated
+   shell unmounts on sign-out and re-reads window.location when it remounts. */
+function signOutClean() {
+  resetUrlToCanonical();
+  // Internal, potentially shared-device workspace: don't leave one person's
+  // search history for whoever signs in next.
+  try { localStorage.removeItem("sb-search-recents"); } catch { /* ignore */ }
+  return signOut(auth);
+}
+
 /* Fallback shown while a lazy screen chunk streams in. Sized to the content area
    (no full-page flash, no layout shift). */
-function ScreenFallback({ label = "" }) {
-  return (
-    <div className="sb-screen-loading" role="status" aria-live="polite"
-      style={{ minHeight: "50vh", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)" }}>
-      <span className="sb-spin" aria-hidden="true" style={{ marginRight: 10 }} />Loading{label ? ` ${label}` : ""}…
-    </div>
-  );
-}
+// ScreenFallback (lazy-screen loading state) lives in its own module so its
+// centering is reusable CSS and unit-testable — imported at the top of this file.
 
 /* Catches a failed lazy chunk load (offline / stale deploy) and offers a safe
    retry (re-attempts the import) or a full reload — instead of a blank screen. */
@@ -82,7 +99,7 @@ class ChunkBoundary extends React.Component {
       <div className="sb-empty" style={{ padding: 24, textAlign: "center" }}>
         <p style={{ marginBottom: 12 }}>Couldn't load this section. Check your connection and try again.</p>
         <button className="sb-btn" onClick={() => this.setState({ err: false })}>Try again</button>
-        <button className="sb-btn ghost" style={{ marginLeft: 8 }} onClick={() => window.location.reload()}>Reload</button>
+        <button className="sb-btn ghost" style={{ marginInlineStart: 8 }} onClick={() => window.location.reload()}>Reload</button>
       </div>
     );
   }
@@ -97,8 +114,8 @@ export const loadPref = (key, fallback) => {
 export const savePref = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
 
 /* Full, friendly event date — "Jan 12th, 2026". */
-const ordinal = (n) => { const s = ["th","st","nd","rd"], v = n % 100; return n + (s[(v-20)%10] || s[v] || s[0]); };
-export const fmtEventDate = (d) => `${d.toLocaleDateString(undefined,{month:"short"})} ${ordinal(d.getDate())}, ${d.getFullYear()}`;
+// Locale-aware event date (was a hand-built English ordinal like "Aug 11th, 2026").
+export const fmtEventDate = (d) => formatEventDate(d);
 /* Sensible starting values when creating content for an event. */
 // Prefill a new task for a specific event occurrence. We stamp the structured
 // occurrence fields (not just the display name) so content links to THIS
@@ -136,47 +153,12 @@ const TaskAdminContext = createContext(null);
    over/under-count can't leave the app permanently `inert` (unclickable). The
    background is locked the moment the set becomes non-empty and released the
    moment it empties again. */
-let _savedScrollY = 0;
-const _activeOverlays = new Set();
-function applyBackgroundLock() {
-  _savedScrollY = window.scrollY || window.pageYOffset || 0;
-  const b = document.body;
-  b.style.position = "fixed";
-  b.style.top = `-${_savedScrollY}px`;
-  b.style.left = "0";
-  b.style.right = "0";
-  b.style.width = "100%";
-  document.getElementById("root")?.setAttribute("inert", "");
-}
-function releaseBackgroundLock() {
-  const b = document.body;
-  b.style.position = "";
-  b.style.top = "";
-  b.style.left = "";
-  b.style.right = "";
-  b.style.width = "";
-  document.getElementById("root")?.removeAttribute("inert");
-  window.scrollTo(0, _savedScrollY);
-}
-function acquireOverlay(token) {
-  const wasEmpty = _activeOverlays.size === 0;
-  _activeOverlays.add(token);
-  if (wasEmpty && _activeOverlays.size === 1) applyBackgroundLock();
-}
-function releaseOverlay(token) {
-  _activeOverlays.delete(token);
-  if (_activeOverlays.size === 0) releaseBackgroundLock();
-}
-export function Portal({ children }) {
-  const token = useRef();
-  if (!token.current) token.current = Symbol("overlay");
-  useLayoutEffect(() => {
-    const t = token.current;
-    acquireOverlay(t);
-    return () => releaseOverlay(t);
-  }, []);
-  return createPortal(children, document.body);
-}
+// Overlay primitives (Portal, background-lock, useMediaQuery, URL reset) live in
+// a firebase-free module so the a11y machinery is unit-testable; re-exported here
+// so existing `import { Portal } from "./App.jsx"` call-sites keep working.
+export { Portal, useMediaQuery, resetUrlToCanonical } from "./overlay.jsx";
+import { Portal, useMediaQuery, resetUrlToCanonical, useSheetDrag } from "./overlay.jsx";
+import { NotifPanelShell } from "./notifShell.jsx";
 
 function BetaBanner({ onReport }) {
   // "open" → visible, "closing" → playing the fade+collapse, then unmount.
@@ -215,9 +197,9 @@ function AppearanceSheet({ current, onChoose, onClose }) {
   return (
     <Portal>
     <div className="sb-scrim" onMouseDown={onClose}>
-      <div className="sb-sheet" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Appearance">
+      <div className="sb-sheet" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Appearance">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Appearance</b>
-          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           <div className="sb-optlist" role="radiogroup" aria-label="Appearance">
             {APPEARANCE_OPTIONS.map(o => {
@@ -244,75 +226,6 @@ function AppearanceSheet({ current, onChoose, onClose }) {
 
 /* Mobile account drawer — opened from the header avatar. Pulls the profile,
    theme, report and sign-out off every screen and into one slide-up sheet. */
-function ProfileDrawer({ me, isAdmin, unread = 0, pendingCount = 0, onClose, onNotifications, onNotifPrefs, onWhatsNew, onFeatureRequest, onReport, onGoTab }) {
-  const [pref, setPref] = useState(getThemePref());
-  const [appearanceOpen, setAppearanceOpen] = useState(false);
-  useEffect(() => subscribeTheme(() => setPref(getThemePref())), []);
-  const chooseAppearance = (p) => {
-    setThemePref(p); setPref(p); setAppearanceOpen(false);
-    if (me?.id) updateDoc(doc(db, "users", me.id), { appearance: p }).catch(() => {}); // follows across devices
-  };
-  const PrefIcon = appearanceOption(pref).Icon;
-  const drag = useSheetDrag(onClose);
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return (
-    <Portal>
-    <div className="sb-scrim" onMouseDown={onClose}>
-      <div className="sb-drawer" onMouseDown={e=>e.stopPropagation()} style={drag.sheetStyle}>
-        <div className="sb-grab" {...drag.handleProps}><span/></div>
-        <div className="sb-drawer-user">
-          <span className="sb-av" style={{width:46,height:46,fontSize:16}}>{initials(me.name)}</span>
-          <div style={{minWidth:0}}>
-            <div className="nm">{me.name}</div>
-            <div className="rl">{isAdmin?"Admin":"Member"} · {me.email}</div>
-          </div>
-        </div>
-        {/* Navigating to a screen already drops ?panel=profile (closes the
-            drawer). Calling onClose() too would run a second navigation from a
-            stale location and clobber the screen change — the mobile "Team/Admin
-            don't work" bug. So these navigate only. */}
-        {onGoTab && <button className="sb-drawer-item" onClick={()=>onGoTab("team")}>
-          <span className="i"><UserGroupIcon className="hi" aria-hidden="true"/></span>Team
-        </button>}
-        {onGoTab && isAdmin && <button className="sb-drawer-item" onClick={()=>onGoTab("admin")}>
-          <span className="i"><Cog6ToothIcon className="hi" aria-hidden="true"/></span>Admin
-          {pendingCount>0 && <span className="sb-drawer-state">{pendingCount}</span>}
-        </button>}
-        {onNotifPrefs && <button className="sb-drawer-item" onClick={()=>{ onNotifPrefs(); onClose(); }}>
-          <span className="i"><BellAlertIcon className="hi" aria-hidden="true"/></span>Notification preferences
-        </button>}
-        {onWhatsNew && <button className="sb-drawer-item" onClick={()=>{ onWhatsNew(); onClose(); }}>
-          <span className="i"><SparkIcon/></span>What's new
-          {seenRelease()!==LATEST_RELEASE && <span className="sb-newbadge">New</span>}
-        </button>}
-        {onFeatureRequest && <button className="sb-drawer-item" onClick={()=>{ onFeatureRequest(); onClose(); }}>
-          <span className="i"><LightBulbIcon className="hi" aria-hidden="true"/></span>Submit feature request
-        </button>}
-        <button className="sb-drawer-item" onClick={()=>setAppearanceOpen(true)}>
-          <span className="i"><PrefIcon className="hi" aria-hidden="true"/></span>Appearance
-          <span className="sb-drawer-state">{appearanceOption(pref).label}</span>
-        </button>
-        <button className="sb-drawer-item" onClick={onNotifications}>
-          <span className="i"><BellIcon className="hi" aria-hidden="true"/></span>Notifications
-          {unread>0 && <span className="sb-drawer-state">{unread>9?"9+":unread}</span>}
-        </button>
-        <button className="sb-drawer-item" onClick={onReport}>
-          <span className="i"><ExclamationTriangleIcon className="hi" aria-hidden="true"/></span>Report an issue
-        </button>
-        <button className="sb-drawer-item danger" onClick={()=>signOut(auth)}>
-          <span className="i"><ArrowRightStartOnRectangleIcon className="hi" aria-hidden="true"/></span>Sign out
-        </button>
-        <div className="sb-brandfoot"><b>IFC Creatives Board</b>Built for the IFC Creative Team.</div>
-      </div>
-    </div>
-    {appearanceOpen && <AppearanceSheet current={pref} onChoose={chooseAppearance} onClose={()=>setAppearanceOpen(false)} />}
-    </Portal>
-  );
-}
 
 /* Notification Center — a slide-over listing the signed-in user's
    notifications (newest first). Reads via useNotifications; docs are written
@@ -331,7 +244,7 @@ function WhatsNew({ onClose }) {
   return (
     <Portal>
     <div className="sb-scrim" onClick={onClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="What's new">
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="What's new">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>What's new</b>
           <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
         <div className="bd">
@@ -372,7 +285,7 @@ function FeatureRequestModal({ onClose }) {
   return (
     <Portal>
     <div className="sb-scrim" onClick={requestClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Submit feature request">
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Submit feature request">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Submit feature request</b>
           <button className="sb-x" onClick={requestClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
         <div className="bd">
@@ -383,17 +296,17 @@ function FeatureRequestModal({ onClose }) {
             </>
           ) : (
             <>
-              <div className="sb-field"><label>What would you like to see?<span className="sb-req" aria-hidden="true">*</span></label>
-                <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. A calendar view of all content" /></div>
-              <div className="sb-field"><label>What problem would this solve?</label>
-                <textarea rows={3} value={f.problem} onChange={e=>set("problem",e.target.value)} /></div>
-              <div className="sb-field"><label>Who would this help?</label>
-                <input value={f.beneficiary} onChange={e=>set("beneficiary",e.target.value)} placeholder="e.g. Editors, the QA team, everyone" /></div>
-              <div className="sb-field"><label>Additional details or example link (optional)</label>
-                <input value={f.link} onChange={e=>set("link",e.target.value)} /></div>
+              <div className="sb-field"><label htmlFor="fr-title">What would you like to see?<span className="sb-req" aria-hidden="true">*</span></label>
+                <input id="fr-title" value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. A calendar view of all content" /></div>
+              <div className="sb-field"><label htmlFor="fr-problem">What problem would this solve?</label>
+                <textarea id="fr-problem" rows={3} value={f.problem} onChange={e=>set("problem",e.target.value)} /></div>
+              <div className="sb-field"><label htmlFor="fr-beneficiary">Who would this help?</label>
+                <input id="fr-beneficiary" value={f.beneficiary} onChange={e=>set("beneficiary",e.target.value)} placeholder="e.g. Editors, the QA team, everyone" /></div>
+              <div className="sb-field"><label htmlFor="fr-link">Additional details or example link (optional)</label>
+                <input id="fr-link" type="url" inputMode="url" value={f.link} onChange={e=>set("link",e.target.value)} placeholder="https://…" /></div>
               {err && <div className="sb-lerr">Couldn't send right now — your text is kept. Try again.</div>}
-              <button className="sb-btn" style={{marginTop:8}} disabled={busy || !f.title.trim()} onClick={send}>
-                {busy ? "Sending…" : "Send request"}</button>
+              <BusyButton className="sb-btn" style={{marginTop:8}} busy={busy} disabled={!f.title.trim()}
+                busyLabel="Sending…" actionLabel="Send request" onClick={send}>Send request</BusyButton>
             </>
           )}
         </div>
@@ -432,117 +345,85 @@ function notifGroups(items) {
 
 function NotifCenter({ notif, isAdmin, onClose, onNavigate, onSettings }) {
   const { items, unread, hasMore, loadMore, markRead, markAllRead } = notif;
-  // Animate the drawer out before closing / navigating, so the hand-off to the
-  // destination isn't a hard cut. `finish(action)` fades, then runs the action.
-  const [closing, setClosing] = useState(false);
-  const closeT = useRef(null);
-  useEffect(() => () => clearTimeout(closeT.current), []);
-  const finish = (action) => {
-    if (closing) return;
-    setClosing(true);
-    clearTimeout(closeT.current);
-    closeT.current = setTimeout(() => (action || onClose)(), 180);
-  };
-  const drag = useSheetDrag(onClose);
   const [flt, setFlt] = useState("all");
   const [moreOpen, setMoreOpen] = useState(false);
   const active = NOTIF_FILTERS.find(f=>f.id===flt) || NOTIF_FILTERS[0];
   const moreActive = NOTIF_MORE.some(f=>f.id===flt);
-  // Background scroll-lock + inert are handled centrally by <Portal> (body fixed at
-  // the current offset), so no separate overflow lock here — a second, differently-
-  // managed body mutation is exactly what risks leaving the page in a stuck state.
   const filtered = flt==="all" ? items
     : flt==="unread" ? items.filter(n=>!n.read)
     : items.filter(n=>(active.types||[]).includes(n.type));
   const groups = notifGroups(filtered);
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") finish(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose, closing]);
-  // Every notification deep-links to the exact thing it refers to — the content,
-  // the right section of it, an event, or the filtered follow-up list — never a
-  // generic dashboard. The destination is derived from the notification's
-  // structured fields (notificationDestination), not its text. The drawer fades
-  // out first, then the destination opens (a smooth hand-off).
-  const open = (n) => {
-    if (!n.read) markRead(n.id);
-    const dest = notificationDestination(n);
-    finish(() => onNavigate(dest));
-  };
+  // The drawer chrome + exit-transition hand-off live in the firebase-free
+  // NotifPanelShell (see notifShell.jsx). It gives the body the shared `finish`
+  // so a notification tap fades out before navigating — and it is what unmounts
+  // (releasing the Portal lock) when onSettings drops the ?panel query.
   return (
-    <Portal>
-    <div className={"sb-scrim sb-scrim-right"+(closing?" closing":"")} onMouseDown={()=>finish()}>
-      <div className="sb-notifpanel" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Notifications" style={drag.sheetStyle}>
-        <div className="sb-grab" {...drag.handleProps}><span/></div>
-        <div className="sb-notifhd">
-          <div className="sb-notifttl">
-            <b className="sb-serif" style={{fontSize:17}}>Notifications</b>
-            {unread>0 && <span className="sb-unreadct">{unread} unread</span>}
-          </div>
-          <div className="sb-notifhd-actions">
-            {unread>0 && <button className="sb-markall" onClick={markAllRead}>
-              <CheckCircleIcon className="hi hi-sm" aria-hidden="true"/> Mark all read</button>}
-            <button className="sb-iconbtn" onClick={()=>finish(onSettings)} aria-label="Notification settings"><Cog6ToothIcon className="hi" aria-hidden="true"/></button>
-            <button className="sb-x" onClick={()=>finish()}><XMarkIcon className="hi" aria-hidden="true" /></button>
-          </div>
-        </div>
-        <div className="sb-nfilters" role="tablist" aria-label="Filter notifications">
-          <div className="sb-nfilters-scroll">
-            {NOTIF_PRIMARY.map(fo => (
-              <button key={fo.id} role="tab" aria-selected={flt===fo.id}
-                className={"sb-fchip"+(flt===fo.id?" on":"")}
-                onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
-            ))}
-          </div>
-          <div className="sb-nmore">
-            <button className={"sb-fchip"+(moreActive?" on":"")} aria-haspopup="menu" aria-expanded={moreOpen}
-              onClick={()=>setMoreOpen(o=>!o)}>
-              {moreActive ? active.label : "More"} <ChevronDownIcon className="hi" style={{width:14,height:14}} aria-hidden="true"/>
-            </button>
-            {moreOpen && (
-              <div className="sb-nmore-menu" role="menu">
-                {NOTIF_MORE.map(fo => (
-                  <button key={fo.id} role="menuitemradio" aria-checked={flt===fo.id}
-                    className={flt===fo.id?"on":""}
-                    onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        {filtered.length===0
-          ? <div className="sb-empty"><div className="big"><BellIcon className="hi hi-empty" aria-hidden="true"/></div>
-              {items.length===0
-                ? <>You're all caught up.<br/>New assignments, reviews, reminders, and approvals will appear here.</>
-                : "Nothing matches this filter."}</div>
-          : <div className="sb-notiflist">
-              {groups.map(([label, rows]) => (
-                <div key={label}>
-                  <div className="sb-ngroup">{label}</div>
-                  {rows.map(n => {
-                    const meta = NOTIF_META[n.type] || NOTIF_FALLBACK;
-                    const MetaIcon = meta.icon;
-                    return (
-                      <button key={n.id} className={"sb-notif"+(n.read?"":" unread")} onClick={()=>open(n)}>
-                        <span className={"ic "+(meta.tint||"tint-neutral")}><MetaIcon className="hi" aria-hidden="true"/></span>
-                        <span className="bd">
-                          <span className="ti">{n.title}</span>
-                          {n.body && <span className="bo">{n.body}</span>}
-                          <span className="mt">{meta.label} · {timeAgo(n.createdAt)}</span>
-                        </span>
-                        <span className={"ndot top"+(n.read?" read":"")} aria-label={n.read?undefined:"Unread"} />
-                      </button>
-                    );
-                  })}
-                </div>
+    <NotifPanelShell onClose={onClose} onSettings={onSettings} unread={unread} onMarkAllRead={markAllRead}>
+      {({ finish }) => {
+        // Every notification deep-links to the exact thing it refers to — derived
+        // from its structured fields (notificationDestination), not its text. The
+        // drawer fades out first, then the destination opens (a smooth hand-off).
+        const open = (n) => {
+          if (!n.read) markRead(n.id);
+          finish(() => onNavigate(notificationDestination(n)));
+        };
+        return (<>
+          <div className="sb-nfilters" role="tablist" aria-label="Filter notifications">
+            <div className="sb-nfilters-scroll">
+              {NOTIF_PRIMARY.map(fo => (
+                <button key={fo.id} role="tab" aria-selected={flt===fo.id}
+                  className={"sb-fchip"+(flt===fo.id?" on":"")}
+                  onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
               ))}
-              {hasMore && <div style={{textAlign:"center",padding:"6px 0 12px"}}>
-                <button className="sb-btn ghost compact" onClick={loadMore}>Load more</button></div>}
-            </div>}
-      </div>
-    </div>
-    </Portal>
+            </div>
+            <div className="sb-nmore">
+              <button className={"sb-fchip"+(moreActive?" on":"")} aria-haspopup="menu" aria-expanded={moreOpen}
+                onClick={()=>setMoreOpen(o=>!o)}>
+                {moreActive ? active.label : "More"} <ChevronDownIcon className="hi hi-xs" aria-hidden="true"/>
+              </button>
+              {moreOpen && (
+                <div className="sb-nmore-menu" role="menu">
+                  {NOTIF_MORE.map(fo => (
+                    <button key={fo.id} role="menuitemradio" aria-checked={flt===fo.id}
+                      className={flt===fo.id?"on":""}
+                      onClick={()=>{ setFlt(fo.id); setMoreOpen(false); }}>{fo.label}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          {filtered.length===0
+            ? <div className="sb-empty"><div className="big"><BellIcon className="hi hi-empty" aria-hidden="true"/></div>
+                {items.length===0
+                  ? <>You're all caught up.<br/>New assignments, reviews, reminders, and approvals will appear here.</>
+                  : "Nothing matches this filter."}</div>
+            : <div className="sb-notiflist">
+                {groups.map(([label, rows]) => (
+                  <div key={label}>
+                    <div className="sb-ngroup">{label}</div>
+                    {rows.map(n => {
+                      const meta = NOTIF_META[n.type] || NOTIF_FALLBACK;
+                      const MetaIcon = meta.icon;
+                      return (
+                        <button key={n.id} className={"sb-notif"+(n.read?"":" unread")} onClick={()=>open(n)}>
+                          <span className={"ic "+(meta.tint||"tint-neutral")}><MetaIcon className="hi" aria-hidden="true"/></span>
+                          <span className="bd">
+                            <span className="ti">{n.title}</span>
+                            {n.body && <span className="bo">{n.body}</span>}
+                            <span className="mt">{meta.label} · {timeAgo(n.createdAt)}</span>
+                          </span>
+                          <span className={"ndot top"+(n.read?" read":"")} aria-label={n.read?undefined:"Unread"} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+                {hasMore && <div style={{textAlign:"center",padding:"6px 0 12px"}}>
+                  <button className="sb-btn ghost compact" onClick={loadMore}>Load more</button></div>}
+              </div>}
+        </>);
+      }}
+    </NotifPanelShell>
   );
 }
 
@@ -574,11 +455,11 @@ function PushControls({ me }) {
     if (tokenOk === false) return (
       <div className="sb-push">
         Notifications are allowed, but this device isn't registered for delivery yet.
-        <button className="sb-btn ghost" style={{marginTop:8}} disabled={busy} onClick={enable}>
-          {busy ? "Registering…" : "Re-register this device"}</button>
+        <BusyButton className="sb-btn ghost" style={{marginTop:8}} busy={busy}
+          busyLabel="Registering…" actionLabel="Re-register this device" onClick={enable}>Re-register this device</BusyButton>
       </div>
     );
-    return <div className="sb-push ok">✓ Push is on for this device.</div>;
+    return <div className="sb-push ok"><CheckCircleIcon className="hi hi-sm" aria-hidden="true"/> Push is on for this device.</div>;
   }
   if (state === "ios-needs-install") return (
     <div className="sb-push">
@@ -593,7 +474,7 @@ function PushControls({ me }) {
   if (state === "denied") return <div className="sb-push">Notifications are blocked. Allow them for this site in your browser settings, then reload.</div>;
   if (state === "unsupported") return <div className="sb-push">This browser doesn't support push notifications.</div>;
   if (state === "not-configured") return <div className="sb-push">Push isn't set up yet — an admin needs to finish messaging configuration.</div>;
-  return <button className="sb-btn ghost" disabled={busy} onClick={enable}>{busy ? "Enabling…" : <><BellAlertIcon className="hi hi-sm" aria-hidden="true"/> Enable push on this device</>}</button>;
+  return <BusyButton className="sb-btn ghost" busy={busy} busyLabel="Enabling…" actionLabel="Enable push on this device" onClick={enable}><BellAlertIcon className="hi hi-sm" aria-hidden="true"/> Enable push on this device</BusyButton>;
 }
 
 /* Admin-only: the default reminder schedule applied to new content. */
@@ -618,11 +499,11 @@ function AdminReminderDefaults() {
       <div className="sb-mlabel">Admin · default reminder schedule</div>
       <div className="sb-sub" style={{marginTop:0}}>Applied to newly created content. Reminders fire at this hour, Winnipeg time.</div>
       <div className="sb-field" style={{maxWidth:160}}>
-        <label>Send hour (0–23)</label>
-        <input type="number" min="0" max="23" value={hour} onChange={(e)=>setHour(Math.max(0,Math.min(23,Number(e.target.value)||0)))} />
+        <label htmlFor="ns-hour">Send hour (0–23)</label>
+        <input id="ns-hour" type="number" min="0" max="23" inputMode="numeric" value={hour} onChange={(e)=>setHour(Math.max(0,Math.min(23,Number(e.target.value)||0)))} />
       </div>
       <ReminderEditor reminders={reminders} onChange={setReminders} />
-      <button className="sb-btn ghost" style={{marginTop:8}} onClick={save}>{saved ? "Saved ✓" : "Save default schedule"}</button>
+      <button className="sb-btn ghost" style={{marginTop:8}} onClick={save}>{saved ? <><CheckIcon className="hi hi-sm" aria-hidden="true"/> Saved</> : "Save default schedule"}</button>
     </>
   );
 }
@@ -706,7 +587,7 @@ function AdminEmailTest() {
           onKeyDown={(e)=>{ if(e.key==="Enter") send(); }} placeholder="recipient@example.com" />
         {err && <div className="sb-fielderr" role="alert">{err}</div>}
       </div>
-      <button className="sb-btn ghost" disabled={busy || !to.trim()} onClick={send}>{busy ? "Sending…" : "Send test email"}</button>
+      <BusyButton className="sb-btn ghost" busy={busy} disabled={!to.trim()} busyLabel="Sending…" actionLabel="Send test email" onClick={send}>Send test email</BusyButton>
       {result && <div className="sb-sub" role="status" style={{marginTop:8, color: result.ok ? "var(--success)" : "var(--danger)"}}>{result.msg}</div>}
     </>
   );
@@ -717,6 +598,11 @@ function AdminEmailTest() {
    a scoped security rule). */
 function NotifSettings({ me, isAdmin, onSave, onClose }) {
   const [p, setP] = useState(effectivePrefs(me));
+  // Three distinct concerns with different ownership, so they are separated into
+  // their own panels rather than stacked in one continuous scroll: MY prefs, the
+  // ORG-WIDE reminder defaults, and workspace EMAIL diagnostics. Non-admins only
+  // have the first, so they see no switcher at all.
+  const [sec, setSec] = useState("personal");
   const setChannel = (k) => setP(s => ({ ...s, [k]: !s[k] }));
   const setType = (k) => setP(s => ({ ...s, perType: { ...s.perType, [k]: !s.perType[k] } }));
   useEffect(() => {
@@ -724,27 +610,47 @@ function NotifSettings({ me, isAdmin, onSave, onClose }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+  const tabs = [["personal","Personal"],["defaults","Reminder defaults"],["email","Email"]];
   return (
     <Portal>
     <div className="sb-scrim" onClick={onClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Notification settings">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Notification settings</b>
-          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
-          <div className="sb-sub" style={{marginTop:0}}>Choose how and what you're notified about. In-app notifications are always on.</div>
-          <div className="sb-mlabel">How you're notified</div>
-          <Toggle label="Push notifications" v={p.push} on={()=>setChannel("push")} />
-          {p.push && <PushControls me={me} />}
-          <Toggle label="Email notifications" v={p.email} on={()=>setChannel("email")} />
-          <div className="sb-mlabel">What you're notified about</div>
-          {PREF_TYPES.map(t => (
-            <Toggle key={t.key} label={t.label} v={p.perType[t.key]!==false} on={()=>setType(t.key)} />
-          ))}
-          <div className="sb-sub" style={{fontSize:12}}>Account and security messages are always sent.</div>
-          <button className="sb-btn" style={{marginTop:14}} onClick={()=>{ onSave(p); onClose(); }}>Save preferences</button>
-          {isAdmin && <AdminReminderDefaults />}
-          {isAdmin && <EmailUsage />}
-          {isAdmin && <AdminEmailTest />}
+          {isAdmin && (
+            <nav className="sb-seg sb-notifsecnav" aria-label="Notification settings sections">
+              {tabs.map(([id,label]) => (
+                <button key={id} aria-current={sec===id?"page":undefined}
+                  className={"sb-segbtn"+(sec===id?" on":"")} onClick={()=>setSec(id)}>{label}</button>
+              ))}
+            </nav>
+          )}
+
+          {sec==="personal" && <>
+            <div className="sb-sub" style={{marginTop:0}}>How and what <b>you</b> are notified about. In-app notifications are always on.</div>
+            <div className="sb-mlabel">How you're notified</div>
+            <Toggle label="Push notifications" v={p.push} on={()=>setChannel("push")} />
+            {p.push && <PushControls me={me} />}
+            <Toggle label="Email notifications" v={p.email} on={()=>setChannel("email")} />
+            <div className="sb-mlabel">What you're notified about</div>
+            {PREF_TYPES.map(t => (
+              <Toggle key={t.key} label={t.label} v={p.perType[t.key]!==false} on={()=>setType(t.key)} />
+            ))}
+            <div className="sb-sub" style={{fontSize:12}}>Account and security messages are always sent.</div>
+            <button className="sb-btn" style={{marginTop:14}} onClick={()=>{ onSave(p); onClose(); }}>Save preferences</button>
+          </>}
+
+          {isAdmin && sec==="defaults" && <>
+            <div className="sb-sub" style={{marginTop:0}}>Organization-wide defaults applied to <b>new</b> content. Individual tasks can still override their own reminders.</div>
+            <AdminReminderDefaults />
+          </>}
+
+          {isAdmin && sec==="email" && <>
+            <div className="sb-sub" style={{marginTop:0}}>Workspace email delivery — usage against the monthly quota, plus a test send. Admin diagnostics only.</div>
+            <EmailUsage />
+            <AdminEmailTest />
+          </>}
         </div>
       </div>
     </div>
@@ -965,7 +871,6 @@ function useDoc(path, canRead) {
 // CSV import is hidden from navigation but fully implemented.
 // Flip to true to restore Admin -> Import (see README).
 export const ENABLE_CSV_IMPORT = false;
-const SparkIcon = () => <SparklesIcon className="hi" aria-hidden="true"/>;
 
 const Ic = {
   chat: <ChatBubbleLeftRightIcon className="hi hi-sm" aria-hidden="true" style={{verticalAlign:"-4px"}} />,
@@ -1030,7 +935,7 @@ export default function App() {
   // Firestore connection always yields a retry screen, never an endless spinner.
   let screen;
   if (profileError || setupError || slow)
-    screen = <ConnError online={online} onRetry={retry} onSignOut={() => signOut(auth)} />;
+    screen = <ConnError online={online} onRetry={retry} onSignOut={signOutClean} />;
   else if (user === undefined) screen = <Loading />;
   else if (!user) screen = <Login online={online} />;
   else if (profile === undefined) screen = <Loading label="Loading your account…" />;
@@ -1061,7 +966,7 @@ function OfflineBanner({ online }) {
   }, [online]);
   if (!show) return null;
   return <div className={"sb-netbar" + (online ? " ok" : "")}>
-    {online ? "✓ Back online." : "⚠ You appear to be offline."}</div>;
+    {online ? <><CheckCircleIcon className="hi hi-sm" aria-hidden="true"/> Back online.</> : <><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/> You appear to be offline.</>}</div>;
 }
 
 // Friendly, recoverable screen for a login-time network failure.
@@ -1071,7 +976,7 @@ function ConnError({ online, onRetry, onSignOut }) {
       <div className="box">
         <div className="sb-lwordmark"><span className="ifc">IFC</span>Creatives Board</div>
         <div className="sb-statuscard">
-          <div className="ic" aria-hidden="true">📡</div>
+          <div className="ic" aria-hidden="true"><SignalSlashIcon className="hi" /></div>
           <h1>Can't connect</h1>
           <p>Unable to connect right now. Please check your internet connection and try again.</p>
           {!online && <p>Your device is currently offline.</p>}
@@ -1086,7 +991,10 @@ function ConnError({ online, onRetry, onSignOut }) {
 }
 
 function Loading({ label = "Loading IFC Creatives Board…" }) {
-  return <div className="sb-loading"><div><div className="sb-spin" />{label}</div></div>;
+  // role=status + polite live region announces the boot state; the ring is
+  // decorative (aria-hidden) and goes static under reduced motion (see .sb-spin).
+  return <div className="sb-loading" role="status" aria-live="polite">
+    <div><div className="sb-spin" aria-hidden="true" />{label}</div></div>;
 }
 
 /* ===================================================================
@@ -1103,6 +1011,7 @@ function Login({ online = true }) {
   const [busy, setBusy] = useState(false);
   const [emailErr, setEmailErr] = useState("");
   const [showPw, setShowPw] = useState(false);
+  const emailRef = useRef(null);
 
   const friendly = (e) => {
     const c = (e && e.code) || "";
@@ -1154,8 +1063,14 @@ function Login({ online = true }) {
   const toggleMode = () => { setMode(m=>m==="register"?"signin":"register"); setErr(""); setOk(""); setEmailErr(""); };
   const doReset = async () => {
     setErr(""); setOk("");
-    if (!isValidEmail(email)) { setEmailErr("Enter your email above first, then tap reset."); return; }
-    try { await sendPasswordResetEmail(auth, email.trim()); setOk("Password reset email sent. Check your inbox."); }
+    // Guide, don't scold: if there's no valid email yet, move focus to the email
+    // field so it's obvious what to do next (not just a warning appearing).
+    if (!isValidEmail(email)) {
+      setEmailErr("Enter your email above and we'll send a reset link.");
+      emailRef.current?.focus();
+      return;
+    }
+    try { await sendPasswordResetEmail(auth, email.trim()); setOk(`Password reset link sent to ${email.trim()}. Check your inbox.`); }
     catch (e) { setErr(friendly(e)); }
   };
   return (
@@ -1178,23 +1093,18 @@ function Login({ online = true }) {
           <div className="sb-ldiv">or with email</div>
 
           {mode === "register" && (
-            <div className="sb-field"><label>Your name</label>
-              <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="e.g. John Smith" /></div>
+            <div className="sb-field"><label htmlFor="login-name">Your name</label>
+              <input id="login-name" name="name" autoComplete="name" value={name} onChange={(e)=>setName(e.target.value)} placeholder="e.g. John Smith" /></div>
           )}
-          <div className="sb-field"><label>Email<span className="sb-req" aria-hidden="true">*</span></label>
-            <input type="email" inputMode="email" autoComplete="username" value={email}
-              aria-invalid={!!emailErr} aria-describedby={emailErr?"login-email-err":undefined}
+          <div className="sb-field"><label htmlFor="login-email">Email<span className="sb-req" aria-hidden="true">*</span></label>
+            <input id="login-email" name="email" ref={emailRef} type="email" required inputMode="email" autoComplete="username" value={email}
+              aria-invalid={emailErr?true:undefined} aria-describedby={emailErr?"login-email-err":undefined}
               onChange={(e)=>{ setEmail(e.target.value); if(emailErr) setEmailErr(""); }} placeholder="you@email.com" />
             {emailErr && <div className="sb-fielderr" id="login-email-err" role="alert">{emailErr}</div>}</div>
-          <div className="sb-field">
-            <label>Password<span className="sb-req" aria-hidden="true">*</span>{mode!=="register" && <button type="button" className="sb-fieldlink" onClick={doReset}>Forgot?</button>}</label>
-            <div className="sb-pwwrap">
-              <input type={showPw?"text":"password"} autoComplete={mode==="register"?"new-password":"current-password"}
-                value={pw} onChange={(e)=>setPw(e.target.value)} placeholder="••••••••"
-                onKeyDown={(e)=>{ if(e.key==="Enter") doEmail(); }} />
-              <button type="button" className="sb-pwtoggle" onClick={()=>setShowPw(v=>!v)} aria-label={showPw?"Hide password":"Show password"}>
-                {showPw ? <EyeSlashIcon className="hi hi-sm" aria-hidden="true"/> : <EyeIcon className="hi hi-sm" aria-hidden="true"/>}</button>
-            </div></div>
+          <PasswordField id="login-password" label="Password" required value={pw}
+            autoComplete={mode==="register"?"new-password":"current-password"}
+            onChange={(e)=>setPw(e.target.value)} onEnter={doEmail}
+            labelAction={mode!=="register" && <button type="button" className="sb-fieldlink" onClick={doReset}>Forgot?</button>} />
 
           <button className="sb-btn sb-lprimary" onClick={doEmail} disabled={busy}>
             {busy ? "Please wait…" : mode === "register" ? "Create account" : "Sign in"}
@@ -1233,12 +1143,12 @@ function Pending({ profile }) {
       <div className="box">
         <div className="sb-lwordmark"><span className="ifc">IFC</span>Creatives Board</div>
         <div className="sb-statuscard">
-          <div className="ic" aria-hidden="true">🪪</div>
+          <div className="ic" aria-hidden="true"><IdentificationIcon className="hi" /></div>
           <h1>You're on the list, {profile.name.split(" ")[0]}</h1>
           <p>Your account is waiting for an admin to approve it. Once you're in, you'll see
              every reel and poster the team is working on. Hang tight — this usually doesn't take long.</p>
           <div className="sb-btnrow">
-            <button className="sb-btn ghost" onClick={()=>signOut(auth)}>Sign out</button>
+            <button className="sb-btn ghost" onClick={signOutClean}>Sign out</button>
           </div>
         </div>
       </div>
@@ -1248,51 +1158,34 @@ function Pending({ profile }) {
 
 /* A light page skeleton shown briefly during tab transitions — shimmer rows
    instead of a blank flash. */
-function PageSkeleton() {
-  return (
-    <div className="sb-page sb-pageskel" aria-hidden="true">
-      <span className="sb-skel" style={{width:"38%",height:26,display:"block"}}/>
-      <span className="sb-skel" style={{width:"58%",height:14,display:"block",marginTop:12}}/>
-      <div className="sb-skelgrid">
-        {[0,1,2,3].map(i=><span className="sb-skel" key={i} style={{height:74}}/>)}
-      </div>
-      {[0,1,2].map(i=><span className="sb-skel" key={i} style={{height:56,display:"block",marginTop:10}}/>)}
-    </div>
-  );
-}
-
 /* Drag-to-dismiss for bottom sheets: the sheet follows the finger downward from
    a grab handle, then either flings closed (enough distance or downward
    velocity) or springs back. Pointer/touch based; scrolling is unaffected
    because only the handle starts a drag. */
-function useSheetDrag(onClose) {
-  const [y, setY] = useState(0);
-  const [dragging, setDragging] = useState(false);
-  const st = useRef(null);
-  const start = (e) => {
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    st.current = { y0:cy, last:cy, t:Date.now(), lt:Date.now() };
-    setDragging(true);
-  };
-  const move = (e) => {
-    if (!st.current) return;
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    st.current.last = cy; st.current.lt = Date.now();
-    setY(Math.max(0, cy - st.current.y0));
-  };
-  const end = () => {
-    if (!st.current) return;
-    const dy = Math.max(0, st.current.last - st.current.y0);
-    const v = dy / Math.max(1, st.current.lt - st.current.t);     // px per ms
-    st.current = null; setDragging(false);
-    if (dy > 110 || v > 0.55) onClose(); else setY(0);
-  };
-  return {
-    handleProps: { onTouchStart:start, onTouchMove:move, onTouchEnd:end,
-      onPointerDown:start, onPointerMove:(e)=>{ if(st.current) move(e); }, onPointerUp:end },
-    sheetStyle: { transform:`translateY(${y}px)`,
-      transition: dragging ? "none" : "transform .28s cubic-bezier(.32,1.32,.5,1)" },
-  };
+/* useSheetDrag moved to overlay.jsx (firebase-free) — imported above and shared
+   with the extracted NotifPanelShell. */
+
+/* Bounded-concurrency runner: process `items` with at most `size` workers in
+   flight at once (a small pool, not one burst of N parallel writes). Preserves
+   ordering of side effects per worker; each item's worker is awaited. Used by the
+   bulk import so a large CSV doesn't fire hundreds of simultaneous Firestore
+   writes (which is a real cause of write backpressure/stalls). */
+async function runWritePool(items, worker, size = 4) {
+  let next = 0;
+  const lanes = Array.from({ length: Math.min(size, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      await worker(items[i], i);
+    }
+  });
+  await Promise.all(lanes);
+}
+
+// A short, safe-to-surface label for a failed import write — the Firestore error
+// CODE (e.g. "permission-denied", "unavailable"), never raw internals/PII.
+function importErrLabel(e) {
+  const code = e && (e.code || e.name);
+  return code ? String(code) : "write failed";
 }
 
 /* ===================================================================
@@ -1314,6 +1207,11 @@ function Board({ profile, isAdmin }) {
   // is never mutated by presentation formatting (spec #3).
   const tasks = useMemo(() => tasksRaw.map(t =>
     t.title ? { ...t, title: formatContentTitle(t.title), _rawTitle: t.title } : t), [tasksRaw]);
+  // THE shared exclusion boundary: every ACTIVE surface (Home, My Day, Workflow,
+  // My Work, Team capacity/workload, Search, QA, dashboards, auto-assign) consumes
+  // `activeTasks`, so a trashed task can never affect counts, load, or reminders.
+  // Only Admin receives the full `tasks` (to render Trash + Restore).
+  const activeTasks = useMemo(() => visibleTasks(tasks), [tasks]);
   const [issues] = useCollection("issues", isAdmin); // admin-only (rules)
   const notifSettings = useDoc("settings/notifications", true); // reminder defaults
   const [eventSeries] = useCollection("eventSeries", true); // admin-managed recurring events
@@ -1349,17 +1247,11 @@ function Board({ profile, isAdmin }) {
     else if (isReviewer && (nav.screen === "home" || nav.screen === "myday")) R.replace("/my-work");
   }, [nav.redirect, nav.screen, isAdmin, isReviewer, R.location.pathname]);
 
-  // Inter-page transition: a brief skeleton on top-level screen change so
-  // switching feels intentional. Overlays/content don't retrigger it.
-  const [navLoading, setNavLoading] = useState(false);
-  const firstNav = useRef(true);
-  useEffect(() => {
-    if (firstNav.current) { firstNav.current = false; return; }
-    if (nav.screen === "content" || hasOverlay(nav.overlay)) return;  // overlay, not a page swap
-    setNavLoading(true);
-    const t = setTimeout(() => setNavLoading(false), 280);
-    return () => clearTimeout(t);
-  }, [tab]);
+  // Navigation responds immediately: switching tabs renders already-loaded
+  // Firestore data, so there is no genuine wait to mask. Real loading is
+  // handled where it actually occurs — per-screen skeletons keyed off
+  // `tasksLoaded`, and Suspense/ScreenFallback for the lazy Admin chunk. (A
+  // former 280ms artificial skeleton delay was removed — it only added latency.)
 
   // Derived overlay/detail state (read the URL; never stored in parallel).
   const openId = nav.screen === "content" ? nav.contentId : null;
@@ -1406,10 +1298,17 @@ function Board({ profile, isAdmin }) {
   useEffect(() => setView(tab), [tab]);
 
   // Keep the document title in sync with the route (a11y + browser history).
+  // A trashed task's title must NOT leak into the browser tab for a non-admin
+  // (who only ever sees the safe "unavailable" state). Admins may see it — their
+  // recovery notice intentionally names the content they can restore.
   useEffect(() => {
-    const ct = openId ? (tasks.find(t => t.id === openId)?.title) : null;
+    let ct = null;
+    if (openId) {
+      const t = tasks.find(t => t.id === openId);
+      if (t) ct = !isDeleted(t) ? t.title : (isAdmin ? t.title : null);
+    }
     document.title = titleFor(nav, ct);
-  }, [nav, openId, tasks]);
+  }, [nav, openId, tasks, isAdmin]);
 
   // Route-aware scroll restoration for the single scroll region (.sb-content):
   // new top-level pages start at the top; returning restores the prior offset.
@@ -1452,6 +1351,21 @@ function Board({ profile, isAdmin }) {
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   const [featureReqOpen, setFeatureReqOpen] = useState(false);
+  // Appearance is a LOCAL modal launched from the Profile menu. Its state lives
+  // here (App level), NOT inside ProfileDrawer — so dropping ?panel=profile (which
+  // unmounts the drawer) can never destroy an open Appearance sheet.
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [appearancePref, setAppearancePref] = useState(getThemePref());
+  useEffect(() => subscribeTheme(() => setAppearancePref(getThemePref())), []);
+  const chooseAppearance = (p) => {
+    setThemePref(p); setAppearancePref(p); setAppearanceOpen(false);
+    if (me?.id) updateDoc(doc(db, "users", me.id), { appearance: p }).catch(() => {});
+  };
+  // Launch a LOCAL (App-state) modal from a URL-backed panel (Profile OR
+  // Notifications): open the destination, then drop the ?panel query with REPLACE
+  // (never a Back navigation) — this UNMOUNTS the source panel, so its Portal
+  // releases the inert + scroll-lock naturally. Same pathname, other params kept.
+  const openLocalFromPanel = (openFn) => { openFn(); R.dismissPanel(); };
   const saveNotifPrefs = async (prefs) => {
     try { await updateDoc(doc(db, "users", me.id), { notifPrefs: prefs }); }
     catch (e) { logIssue({ kind: "error", action: "save notif prefs", message: e.message, code: e.code }); }
@@ -1473,22 +1387,12 @@ function Board({ profile, isAdmin }) {
   //   kind "pending" → persistent "Creating…/Saving…/Deleting…" (no auto-dismiss)
   //   kind "ok"/"err" → result, auto-dismisses; may carry an action (e.g. "View").
   // Fades in on show and out before unmounting, so re-triggers don't snap.
-  const [banner, setBanner] = useState(null); // { msg, kind, leaving, action }
-  const bannerT = useRef(null);
-  const bannerLeaveT = useRef(null);
-  const showPending = (msg) => {
-    clearTimeout(bannerT.current); clearTimeout(bannerLeaveT.current);
-    setBanner({ msg, kind: "pending", leaving: false, action: null });
-  };
-  const flashBanner = (msg, kind = "ok", action = null) => {
-    clearTimeout(bannerT.current);
-    clearTimeout(bannerLeaveT.current);
-    setBanner({ msg, kind, leaving: false, action });
-    bannerT.current = setTimeout(() => {
-      setBanner(b => (b ? { ...b, leaving: true } : null));
-      bannerLeaveT.current = setTimeout(() => setBanner(null), 220);
-    }, action ? 6000 : 4300);   // linger longer when there's something to click
-  };
+  // The toast is a value now: the parent just SETS it; <SaveBanner> owns the
+  // auto-dismiss timers + pause-on-hover/focus, so those behaviors are wired to the
+  // rendered element (no orphaned helpers). { msg, kind, action } | null.
+  const [banner, setBanner] = useState(null);
+  const showPending = (msg) => setBanner({ msg, kind: "pending", action: null });
+  const flashBanner = (msg, kind = "ok", action = null) => setBanner({ msg, kind, action });
 
   // Keep this device's FCM token alive. Tokens rotate/expire and stale ones get
   // pruned server-side; re-registering silently on each load (only when the user
@@ -1565,8 +1469,8 @@ function Board({ profile, isAdmin }) {
         newId = ref.id;
       }
       setEditTask(null);
-      if (creating) flashBanner("✓ Content created", "ok", { label: "View", onClick: () => setOpenId(newId) });
-      else flashBanner("✓ Changes saved", "ok");
+      if (creating) flashBanner("Content created", "ok", { label: "View", onClick: () => setOpenId(newId) });
+      else flashBanner("Changes saved", "ok");
     } catch (e) {
       flashBanner("Couldn't save — please try again.", "err");
       throw e;   // let the editor keep the form open and reset its saving state
@@ -1580,7 +1484,61 @@ function Board({ profile, isAdmin }) {
     catch (e) { flashBanner("Something went wrong — please try again.", "err"); throw e; }
   };
 
-  const deleteTask = (id) => withFeedback(deleteDoc(doc(db, "tasks", id)), "✓ Content deleted", "Deleting content…");
+  // SOFT-DELETE (Trash): routine content deletion moves the task to Trash instead
+  // of destroying it — a server-persisted, concurrency-safe change that PRESERVES
+  // the task's real status/fields so Restore returns the exact prior state.
+  // Transactional so it's idempotent (re-trashing a trashed task is a no-op) and a
+  // stale client can't clobber newer data. Returns a summary; NO optimistic claim.
+  const trashTask = (id) => runTransaction(db, async (tx) => {
+    const ref = doc(db, "tasks", id);
+    const snap = await tx.get(ref);
+    if (!snap.exists()) return { ok: false, reason: "gone" };
+    if (snap.data().deletedAt) return { ok: true, already: true };   // idempotent
+    tx.update(ref, {
+      deletedAt: serverTimestamp(), deletedBy: me.id, deletedByName: me.name,
+      updatedAt: serverTimestamp(),
+    });
+    return { ok: true };
+  });
+  // RESTORE from Trash: remove the deletion markers with real field-deletion (not
+  // ambiguous empty strings). Transactional + idempotent (restoring an active task
+  // is a no-op). Only admins reach this (UI-gated + rules: deletedAt isn't in the
+  // member update allowlist).
+  const restoreTask = (id) => runTransaction(db, async (tx) => {
+    const ref = doc(db, "tasks", id);
+    const snap = await tx.get(ref);
+    if (!snap.exists()) return { ok: false, reason: "gone" };
+    if (!snap.data().deletedAt) return { ok: true, already: true };  // already active
+    tx.update(ref, {
+      deletedAt: deleteField(), deletedBy: deleteField(), deletedByName: deleteField(),
+      updatedAt: serverTimestamp(),
+    });
+    return { ok: true };
+  });
+
+  // Move content to Trash + a REAL-restore Undo. Feedback is only shown AFTER the
+  // server transaction resolves (never optimistic). The toast's Undo runs a real
+  // restore; Trash (Admin) is the durable recovery path if the toast is missed.
+  const undoTrash = async (id) => {
+    showPending("Restoring…");
+    try {
+      const res = await restoreTask(id);
+      if (!res || !res.ok) { flashBanner("Couldn't restore — it's still in Trash.", "err"); return; }
+      flashBanner("Content restored", "ok");
+    } catch { flashBanner("Couldn't restore — it's still in Trash.", "err"); }
+  };
+  const moveToTrash = async (task) => {
+    const id = typeof task === "string" ? task : task && task.id;
+    if (!id) return;
+    if (openId === id) setOpenId(null);            // close the detail if it's open
+    showPending("Moving to Trash…");
+    try {
+      const res = await trashTask(id);
+      if (!res || !res.ok) { flashBanner("Couldn't move to Trash — please try again.", "err"); return res; }
+      flashBanner("Content moved to Trash", "ok", { label: "Undo", onClick: () => undoTrash(id) });
+      return res;
+    } catch { flashBanner("Couldn't move to Trash — please try again.", "err"); }
+  };
 
   // (No admin "Mark posted" shortcut: forcing Posted out of the normal
   // Ready-to-Post→Posted step is an exceptional jump and must go through the
@@ -1596,12 +1554,59 @@ function Board({ profile, isAdmin }) {
       caption: "", postLink: "", links: {}, blockedOn: "",
       comments: [], reactions: {}, activity: [activityEntry("created", me.name)],
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-    }), "✓ Content duplicated", "Duplicating content…");
+    }), "Content duplicated", "Duplicating content…");
   };
-  const importTasks = (newTasks) => withFeedback(
-    Promise.all(newTasks.map((t) => addDoc(collection(db, "tasks"), {
-      ...t, comments: [], reactions: {}, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-    }))), `✓ Imported ${newTasks.length} item${newTasks.length!==1?"s":""}`, `Importing ${newTasks.length} item${newTasks.length!==1?"s":""}…`);
+  // Bulk import — data-safe + idempotent.
+  //   rows: [{ key, id, task, fingerprint, source }] — `id` is a DETERMINISTIC
+  //   document id (SHA-256 of row content, see buildRowKeys), so a row always
+  //   targets the same doc. Before writing we
+  //   getDoc(id): if it already exists (a prior attempt whose ack was lost, or a
+  //   re-uploaded identical CSV) we count it succeeded WITHOUT writing again — so
+  //   a retry can never create a duplicate, and we never hit the strict `update`
+  //   rule. Writes run with BOUNDED CONCURRENCY (see runWritePool) instead of all
+  //   at once, and report DETERMINATE progress + per-row results as each settles.
+  //   A slow write is left `pending` (never marked failed); only a definitive
+  //   error marks a row `failed`, and only failed rows are retryable.
+  const importTasks = (rows, onProgress) => {
+    const total = rows.length;
+    const results = rows.map((r) => ({ key: r.key, status: "pending", id: r.id, error: null }));
+    let done = 0, failed = 0;
+    const emit = () => onProgress?.({ done, failed, total, results: results.map((x) => ({ ...x })) });
+    emit();
+    const writeOne = async (r, i) => {
+      const ref = doc(db, "tasks", r.id);
+      try {
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          // A doc already lives at this deterministic id. Only skip it as an
+          // idempotent success if its stored fingerprint MATCHES this row; a
+          // mismatch means a different row collided onto the id — never mark that
+          // succeeded (it would silently drop a distinct task).
+          const cls = classifyExisting(snap.data(), r);
+          results[i] = cls === "match"
+            ? { key: r.key, status: "succeeded", id: r.id, error: null }
+            : { key: r.key, status: "failed", id: r.id, error: "import identity conflict" };
+          cls === "match" ? done++ : failed++;
+          emit();
+          return;
+        }
+        await setDoc(ref, {
+          ...r.task, comments: [], reactions: {},
+          importKey: r.key, importFp: r.fingerprint, importSource: r.source ?? null,
+          createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+        });
+        results[i] = { key: r.key, status: "succeeded", id: r.id, error: null };
+        done++;
+      } catch (e) {
+        results[i] = { key: r.key, status: "failed", id: r.id, error: importErrLabel(e) };
+        failed++;
+      }
+      emit();
+    };
+    return runWritePool(rows, writeOne, 4).then(() => ({
+      total, ok: done, failed, results: results.map((x) => ({ ...x })),
+    }));
+  };
 
   // Map a destination status → the activity-timeline event type.
   const eventType = (status) => ({
@@ -1618,7 +1623,7 @@ function Board({ profile, isAdmin }) {
       status, ...(status === "Posted" ? { archivedAt: serverTimestamp() } : {}),
       activity: [...(task.activity||[]), activityEntry(eventType(status), me.name, status, actorMeta())],
       updatedAt: serverTimestamp(),
-    }), `✓ Moved to ${status}`);
+    }), `Moved to ${status}`);
   // The guided workflow action (Start work / Submit for QA / Mark ready / Posted).
   // `extra` carries caption / postLink when the step requires them.
   const runWorkflow = (task, action, extra = {}) => withFeedback(
@@ -1627,14 +1632,14 @@ function Board({ profile, isAdmin }) {
       ...(action.to === "Posted" ? { archivedAt: serverTimestamp() } : {}),
       activity: [...(task.activity||[]), activityEntry(action.kind, me.name, action.to, actorMeta())],
       updatedAt: serverTimestamp(),
-    }), `✓ Moved to ${action.to}`);
+    }), `Moved to ${action.to}`);
   // QA "request changes": the QA decision (qa === true only — the rules enforce it).
   const qaRequestChanges = (task, note) => withFeedback(
     updateDoc(doc(db, "tasks", task.id), {
       status: "Changes Requested",
       activity: [...(task.activity||[]), activityEntry("changes_requested", me.name, note, actorMeta())],
       updatedAt: serverTimestamp(),
-    }), "✓ Changes requested");
+    }), "Changes requested");
   // Administrative override — a server-controlled callable, NOT a client status
   // write. The normal client path denies an admin the In Review→Approved /
   // Changes Requested transition, so this is the ONLY admin route to it; the server
@@ -1642,7 +1647,7 @@ function Board({ profile, isAdmin }) {
   // attribution and timestamp. Never presented as a QA decision.
   const adminOverride = (task, { toStatus, reason, requestedChanges }) => withFeedback(
     callFunction("adminOverrideStatus", { taskId: task.id, toStatus, reason, requestedChanges }).then((r) => r && r.data),
-    `✓ Administratively moved to ${toStatus}`);
+    `Administratively moved to ${toStatus}`);
   // Collaborative fields any approved member can set from a task's detail view.
   const setBlocked = async (id, blockedOn) =>
     updateDoc(doc(db, "tasks", id), { blockedOn, updatedAt: serverTimestamp() });
@@ -1655,7 +1660,7 @@ function Board({ profile, isAdmin }) {
     addDoc(collection(db, "tasks", task.id, "comments"), {
       uid: me.id, who: me.name, txt, tm: serverTimestamp(),
       mentions: [...new Set(mentions)].slice(0, 20), // uids; server re-validates + the trigger notifies
-    }), "✓ Note posted");
+    }), "Note posted");
   // Reactions are a read-modify-write on one shared map, so concurrent taps from
   // different people would clobber each other. Run it in a transaction: Firestore
   // retries on a conflicting write, so every toggle survives.
@@ -1673,70 +1678,83 @@ function Board({ profile, isAdmin }) {
   // (heuristic only), the server validates every assignment and applies them in
   // bounded resumable chunks, returning explicit applied/skipped counts.
   const autoAll = async () => {
-    const targets = tasks.filter(t => !(t.support && t.support.length) && t.status !== "Posted");
+    const targets = activeTasks.filter(t => !(t.support && t.support.length) && t.status !== "Posted");
     if (!targets.length) { flashBanner("Nothing to auto-assign right now."); return; }
-    const assignments = targets.map(t => ({ taskId: t.id, support: autoAssign(t, users, tasks) }));
+    const assignments = targets.map(t => ({ taskId: t.id, support: autoAssign(t, users, activeTasks) }));
     showPending("Auto-assigning crew…");
     try {
       const { data } = await callFunction("bulkAssign", { opId: `auto_${Date.now()}`, assignments });
       flashBanner(data.failed
-        ? `✓ Assigned ${data.applied} · ${data.failed} skipped`
-        : `✓ Auto-assigned crew to ${data.applied} task${data.applied !== 1 ? "s" : ""}`);
+        ? `Assigned ${data.applied} · ${data.failed} skipped`
+        : `Auto-assigned crew to ${data.applied} task${data.applied !== 1 ? "s" : ""}`);
     } catch (e) { flashBanner("Couldn't auto-assign crew — please try again.", "err"); }
   };
   const autoOne = (task) => withFeedback(
-    updateDoc(doc(db, "tasks", task.id), { support: autoAssign(task, users, tasks), updatedAt: serverTimestamp() }),
-    "✓ Crew auto-assigned", "Assigning crew…");
+    updateDoc(doc(db, "tasks", task.id), { support: autoAssign(task, users, activeTasks), updatedAt: serverTimestamp() }),
+    "Crew auto-assigned", "Assigning crew…");
 
   /* ---- user writes ---- */
   const saveUser = async (u) => {
     const { id, ...rest } = u;
-    await withFeedback(updateDoc(doc(db, "users", id), rest), "✓ Team member updated", "Saving…");
+    await withFeedback(updateDoc(doc(db, "users", id), rest), "Team member updated", "Saving…");
     setEditUser(null);
   };
   const approveUser = async (u) => {
-    await withFeedback(updateDoc(doc(db, "users", u.id), { ...u, status: "approved" }), "✓ Member approved", "Approving…");
+    await withFeedback(updateDoc(doc(db, "users", u.id), { ...u, status: "approved" }), "Member approved", "Approving…");
     setEditUser(null);
   };
-  const removeUser = (id) => withFeedback(deleteDoc(doc(db, "users", id)), "✓ Removed from team", "Removing…");
-  // Safer team removal: runs the server-side removal saga (reversible tombstone +
-  // Auth disable + chunked task detachment + audit). The client never mutates
-  // tasks or deletes the profile directly — that's all trusted backend work.
+  const removeUser = (id) => withFeedback(deleteDoc(doc(db, "users", id)), "Removed from team", "Removing…");
+  // Team removal: runs the server-side removal saga (tombstone + Auth DISABLE +
+  // chunked task detachment + audit). The client never mutates tasks or deletes the
+  // profile directly — that's all trusted backend work. NOTE: this is recoverable in
+  // theory (the Auth account is disabled, not deleted) but NOT operationally
+  // reversible — there is no restore callable and email/prefs are stripped.
   const removeUserWithTasks = async (user, { mode, target } = {}) => {
     const call = (p) => callFunction("removeUser", p);
     await withFeedback(
       call({ targetUid: user.id, policy: { mode: mode || "unassign", reassignToUid: mode === "reassign" ? target : undefined } }),
-      "✓ Removed from team", "Removing from team…");
+      "Removed from team", "Removing from team…");
   };
 
   /* ---- bulk-assign imported "Pending" tasks to a newly-matched user ---- */
   const assignSuggested = async (user) => {
-    const matches = pendingMatches(user, tasks);
+    // Suggested assignment is active business logic — a trashed pending-import
+    // task must never be matched or reassigned.
+    const matches = pendingMatches(user, activeTasks);
     if (!matches.length) return;
     await withFeedback(Promise.all(matches.map((t) => {
       const u = applyAssignment(t, user);
       return updateDoc(doc(db, "tasks", t.id),
         { owner: u.owner, ownerSuggested: u.ownerSuggested || "", support: u.support, updatedAt: serverTimestamp() });
-    })), `✓ Assigned ${matches.length} task${matches.length!==1?"s":""}`, "Assigning tasks…");
+    })), `Assigned ${matches.length} task${matches.length!==1?"s":""}`, "Assigning tasks…");
   };
 
   /* ---- issue log (admin triage) ---- */
   const resolveIssue = (id, status) =>
-    withFeedback(updateDoc(doc(db, "issues", id), { status }), status==="resolved"?"✓ Issue resolved":"✓ Issue reopened");
+    withFeedback(updateDoc(doc(db, "issues", id), { status }), status==="resolved"?"Issue resolved":"Issue reopened");
 
   const openTask = tasks.find(t => t.id === openId);
+  // A deep link (or a live update) can land on trashed content. Never render the
+  // normal editable detail for it: admins get a recovery notice with Restore;
+  // everyone else gets the same "unavailable" dead-end as truly missing content.
+  const openTrashed = !!(openTask && isDeleted(openTask));
+  const openVisible = openTask && !openTrashed;   // the only case that opens TaskDetail
+  // Editor target resolves from ACTIVE tasks only — a trashed id yields undefined,
+  // so the editor overlay simply never opens on Trash (see the render guard below).
+  const editTaskObj = editTask && editTask !== "new" ? activeTasks.find(t => t.id === editTask) : null;
 
   // Admin quick-actions available on every task card + the detail sheet.
   const taskAdmin = useMemo(() => isAdmin ? {
     onEdit: (t) => { setOpenId(null); setEditTask(t); },
     onDuplicate: (t) => duplicateTask(t),
-    onDelete: async (t) => { if (openId === t.id) setOpenId(null); await deleteTask(t.id); },
+    onDelete: (t) => moveToTrash(t),
   } : null, [isAdmin, openId, me]);
 
   return (
     <TaskAdminContext.Provider value={taskAdmin}>
     <div className="sb-root">
       <div className="sb-shell">
+        <a href="#sb-main" className="sb-skip">Skip to main content</a>
         <aside className="sb-side">
           <div className="sb-sbrand">
             <span className="sb-brandtext"><span className="ifc">IFC</span>Creatives Board</span></div>
@@ -1772,7 +1790,7 @@ function Board({ profile, isAdmin }) {
             <button className="sb-suser sb-suserbtn" onClick={()=>setShowDrawer(true)} aria-label="Open profile menu" title="Profile & settings">
               <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(me.name)}</span>
               <span className="lbl"><div className="nm">{me.name}</div><div className="rl">{isAdmin?"Admin":"Member"}</div></span>
-              <ChevronRightIcon className="chev lbl" style={{width:16,height:16}} aria-hidden="true"/>
+              <ChevronRightIcon className="chev lbl hi hi-sm" aria-hidden="true"/>
             </button>
             <button className="sb-quietlink lbl" onClick={()=>setShowReport(true)}>Report an issue</button>
           </div>
@@ -1791,22 +1809,21 @@ function Board({ profile, isAdmin }) {
             </div>
           </header>
 
-          <div className="sb-content" ref={contentRef} tabIndex={-1}>
+          <main id="sb-main" role="main" className={"sb-content"+(["home","board","team","admin"].includes(tab)?" wide":"")} ref={contentRef} tabIndex={-1}>
             <BetaBanner onReport={()=>setShowReport(true)} />
-            {navLoading && <PageSkeleton />}
-            <div className={navLoading ? "sb-pagehide" : "sb-pageshow"}>
-            {tab==="home"  && <Home tasks={tasks} tasksLoaded={tasksLoaded} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
-            {tab==="myday" && <MyDay tasks={tasks} me={me} openTask={setOpenId} goTab={setTab} />}
-            {tab==="board" && <BoardList tasks={tasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} urlFilter={nav.filter} />}
-            {tab==="mine"  && <Mine tasks={tasks} me={me} openTask={setOpenId} />}
-            {tab==="team"  && <Team tasks={tasks} users={users} />}
+            <div className="sb-pageshow">
+            {tab==="home"  && <Home tasks={activeTasks} tasksLoaded={tasksLoaded} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
+            {tab==="myday" && <MyDay tasks={activeTasks} me={me} openTask={setOpenId} goTab={setTab} />}
+            {tab==="board" && <BoardList tasks={activeTasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} urlFilter={nav.filter} />}
+            {tab==="mine"  && <Mine tasks={activeTasks} me={me} openTask={setOpenId} />}
+            {tab==="team"  && <Team tasks={activeTasks} users={users} />}
             {tab==="admin" && isAdmin && (
               <ChunkBoundary label="Admin">
                 <Suspense fallback={<ScreenFallback label="Admin" />}>
-                  <Admin users={allUsers} tasks={tasks} teamUsers={users} issues={issues} eventSeries={eventSeries}
+                  <Admin users={allUsers} tasks={activeTasks} trashed={trashedTasks(tasks)} teamUsers={users} issues={issues} eventSeries={eventSeries}
                     secReq={adminSecReq} focusUser={nav.user}
                     onEditUser={setEditUser} onEditTask={setEditTask}
-                    onDeleteUser={removeUser} onRemoveUser={removeUserWithTasks} onDeleteTask={deleteTask}
+                    onDeleteUser={removeUser} onRemoveUser={removeUserWithTasks} onDeleteTask={moveToTrash} onRestoreTask={restoreTask}
                     onDuplicateTask={duplicateTask} onOpenTask={setOpenId}
                     onAutoAll={autoAll} onAutoOne={autoOne} onImport={importTasks} onResolveIssue={resolveIssue}
                     onAssignSuggested={assignSuggested} onNewForEvent={newForEvent} />
@@ -1814,30 +1831,35 @@ function Board({ profile, isAdmin }) {
               </ChunkBoundary>
             )}
             </div>
-          </div>
+          </main>
 
-          <nav className="sb-nav" aria-label="Main" style={{ "--nav-i": mainNav.findIndex(n=>n.id===tab) >= 0 ? mainNav.findIndex(n=>n.id===tab) : mainNav.length, "--nav-cols": mainNav.length + 1 }}>
-            <span className="sb-nav-ind" aria-hidden="true" />
-            {mainNav.map(n => (
-              <button key={n.id} className={"sb-navbtn"+(tab===n.id?" on":"")} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
-                <span className="ico">{n.ico(tab===n.id)}</span><span className="lblx">{n.label}</span>
-                {n.badge>0 && <span className="pill">{n.badge}</span>}
+          {/* Reserved bottom dock (mobile only, hidden >=900px): the nav and the
+              New action live in real layout space at the end of the flex column,
+              so .sb-content ends ABOVE them and neither ever floats over content.
+              Admin has its own in-page "New content" button; QA reviewers never
+              create content — so the FAB row only renders when it's genuinely used. */}
+          <div className="sb-dock">
+            {isAdmin && !isReviewer && tab!=="admin" && (
+              <div className="sb-fabrow">
+                <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content"><PlusIcon className="hi hi-nav" aria-hidden="true"/></button>
+              </div>
+            )}
+            <nav className="sb-nav" aria-label="Main" style={{ "--nav-i": mainNav.findIndex(n=>n.id===tab) >= 0 ? mainNav.findIndex(n=>n.id===tab) : mainNav.length, "--nav-cols": mainNav.length + 1 }}>
+              <span className="sb-nav-ind" aria-hidden="true" />
+              {mainNav.map(n => (
+                <button key={n.id} className={"sb-navbtn"+(tab===n.id?" on":"")} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
+                  <span className="ico">{n.ico(tab===n.id)}</span><span className="lblx">{n.label}</span>
+                  {n.badge>0 && <span className="pill">{n.badge}</span>}
+                </button>
+              ))}
+              <button className={"sb-navbtn"+(["team","admin"].includes(tab)?" on":"")} onClick={()=>setShowDrawer(true)} aria-current={["team","admin"].includes(tab)?"page":undefined} aria-label="Profile and more">
+                <span className="ico"><span className="sb-av sb-navav">{initials(me.name)}</span></span><span className="lblx">Profile</span>
+                {isAdmin && pendingCount>0 && <span className="pill">{pendingCount}</span>}
               </button>
-            ))}
-            <button className={"sb-navbtn"+(["team","admin"].includes(tab)?" on":"")} onClick={()=>setShowDrawer(true)} aria-current={["team","admin"].includes(tab)?"page":undefined} aria-label="Profile and more">
-              <span className="ico"><span className="sb-av sb-navav">{initials(me.name)}</span></span><span className="lblx">Profile</span>
-              {isAdmin && pendingCount>0 && <span className="pill">{pendingCount}</span>}
-            </button>
-          </nav>
+            </nav>
+          </div>
         </div>
       </div>
-
-      {/* Admin has its own "New content" button; every other tab — Home
-          included — needs the FAB, since the sidebar one is desktop-only.
-          QA reviewers never create content, so no FAB for them (even if admin). */}
-      {isAdmin && !isReviewer && tab!=="admin" && (
-        <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content"><PlusIcon className="hi hi-nav" aria-hidden="true"/></button>
-      )}
 
       {showDrawer && (
         // Path/panel-changing actions navigate directly — the new URL replaces
@@ -1846,12 +1868,15 @@ function Board({ profile, isAdmin }) {
         // replaces the ?panel=profile entry, so Back from there returns to the
         // underlying page, not the drawer.
         <ProfileDrawer me={me} isAdmin={isAdmin} unread={notif.unread} pendingCount={pendingCount}
+          appearanceLabel={appearanceOption(appearancePref).label} PrefIcon={appearanceOption(appearancePref).Icon}
+          whatsNewIsNew={seenRelease()!==LATEST_RELEASE} onSignOut={signOutClean}
           onClose={()=>setShowDrawer(false)} onGoTab={R.launchScreen}
-          onNotifications={()=>setNotifOpen(true)}
-          onNotifPrefs={()=>setNotifSettingsOpen(true)}
-          onWhatsNew={()=>setWhatsNewOpen(true)}
-          onFeatureRequest={()=>setFeatureReqOpen(true)}
-          onReport={()=>setShowReport(true)} />
+          onNotifications={()=>R.replacePanel("notifications")}
+          onNotifPrefs={()=>openLocalFromPanel(()=>setNotifSettingsOpen(true))}
+          onWhatsNew={()=>openLocalFromPanel(()=>setWhatsNewOpen(true))}
+          onFeatureRequest={()=>openLocalFromPanel(()=>setFeatureReqOpen(true))}
+          onAppearance={()=>openLocalFromPanel(()=>setAppearanceOpen(true))}
+          onReport={()=>openLocalFromPanel(()=>setShowReport(true))} />
       )}
 
       {notifOpen && (
@@ -1862,7 +1887,7 @@ function Board({ profile, isAdmin }) {
         <NotifCenter notif={notif} isAdmin={isAdmin}
           onClose={()=>setNotifOpen(false)}
           onNavigate={R.launch}
-          onSettings={()=>setNotifSettingsOpen(true)} />
+          onSettings={()=>openLocalFromPanel(()=>setNotifSettingsOpen(true))} />
       )}
 
       {notifSettingsOpen && (
@@ -1871,35 +1896,25 @@ function Board({ profile, isAdmin }) {
 
       {whatsNewOpen && <WhatsNew onClose={()=>setWhatsNewOpen(false)} />}
       {featureReqOpen && <FeatureRequestModal onClose={()=>setFeatureReqOpen(false)} />}
+      {/* Appearance owned at App level so it survives the Profile drawer closing. */}
+      {appearanceOpen && <AppearanceSheet current={appearancePref} onChoose={chooseAppearance} onClose={()=>setAppearanceOpen(false)} />}
 
       {toast && (
         <button className="sb-toast" onClick={()=>{ setToast(null); setNotifOpen(true); }}><BellIcon className="hi hi-sm" aria-hidden="true"/> {toast}</button>
       )}
 
-      {banner && (
-        <div className={"sb-savebanner "+banner.kind+(banner.leaving?" leaving":"")} role="status" aria-live="polite">
-          {banner.kind==="pending"
-            ? <span className="sb-banner-spin" aria-hidden="true"/>
-            : banner.kind==="err"
-            ? <ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/>
-            : <CheckCircleIcon className="hi hi-sm" aria-hidden="true"/>}
-          <span className="sb-banner-msg">{banner.msg}</span>
-          {banner.action && <button className="sb-banner-action"
-            onClick={()=>{ const a = banner.action; setBanner(null); a.onClick(); }}>{banner.action.label}</button>}
-          {banner.kind!=="pending" && <button className="sb-x" onClick={()=>setBanner(null)} aria-label="Dismiss"><XMarkIcon className="hi" aria-hidden="true"/></button>}
-        </div>
-      )}
+      <SaveBanner banner={banner} onClose={()=>setBanner(null)} />
 
       {searchOpen && (
         // Search is a LAUNCHER: opening a result replaces the ?panel=search
         // entry, so Back returns to the page you searched from, not the overlay.
-        <GlobalSearch tasks={tasks} users={isAdmin ? allUsers : users}
+        <GlobalSearch tasks={activeTasks} users={isAdmin ? allUsers : users}
           onClose={()=>setSearchOpen(false)}
           onOpenTask={R.launchContent}
           goTab={R.launchScreen} />
       )}
 
-      {openTask && (
+      {openVisible && (
         <TaskDetail key={openTask.id} task={openTask} me={me} isAdmin={isAdmin}
           isQA={!!me.qa}
           users={users}
@@ -1914,26 +1929,45 @@ function Board({ profile, isAdmin }) {
           onBlocked={(b)=>setBlocked(openTask.id, b)}
           onComment={(txt, mentions)=>addComment(openTask, txt, mentions)}
           onReact={(emo)=>toggleReact(openTask, emo)}
-          onSaved={()=>flashBanner("✓ Saved just now")}
+          onSaved={()=>flashBanner("Saved just now")}
           onDuplicate={isAdmin ? async ()=>{ await duplicateTask(openTask); setOpenId(null); } : undefined}
-          onDelete={isAdmin ? async ()=>{ await deleteTask(openTask.id); setOpenId(null); } : undefined}
+          onDelete={isAdmin ? ()=>moveToTrash(openTask) : undefined}
           onEdit={()=>setEditTask(openTask)} />
       )}
-      {/* Deep-linked to content that no longer exists (deleted, or not visible
-          to this user). Show a friendly dead-end with a way back — never a blank
-          sheet. Only once tasks have loaded, so we don't flash it mid-fetch. */}
-      {nav.screen==="content" && !openTask && tasksLoaded && (
+      {/* Admin deep-linked (or live-updated) into trashed content: a recovery
+          notice with a real Restore, replacing — never overlaying — the detail. */}
+      {openTrashed && isAdmin && (
+        <TrashedContentNotice task={openTask}
+          onRestore={()=>restoreTask(openTask.id)}
+          onClose={()=>setOpenId(null)} />
+      )}
+      {/* Non-admin who lands on KNOWN trashed content (Option A: they can read it,
+          so we know it's in Trash — never pretend it's an access problem). Accurate,
+          Trash-specific copy; no Restore (that's admin-only). */}
+      {openTrashed && !isAdmin && (
+        <TrashedContentUnavailable onBack={()=>R.goBack()} />
+      )}
+      {/* Genuinely missing / not-yet-loaded content (no task found). Only once tasks
+          have loaded, so we don't flash it mid-fetch. */}
+      {nav.screen==="content" && !openVisible && !openTrashed && tasksLoaded && (
         <MissingContent onBack={()=>R.goBack()} />
       )}
-      {editTask && (
-        // editTask is "new" or a task id (from ?compose/?edit) — resolve the id
-        // to the live task object here. The editor may render OVER the detail
-        // (/content/:id?edit=id) as an intentional nested flow.
-        <TaskEditor task={editTask==="new"?null:tasks.find(t=>t.id===editTask)} prefill={editPrefill} users={users} allTasks={tasks}
+      {/* editTask is "new" or a task id (from ?compose/?edit). Resolve the id from
+          ACTIVE tasks only: a trashed task must never open in Edit mode, and the
+          editor's workload/capacity/recommendations must exclude trashed content.
+          A non-"new" id with no active match (trashed or missing) renders nothing —
+          the route can't reach an editable Trash editor. */}
+      {editTask==="new" ? (
+        <TaskEditor task={null} prefill={editPrefill} users={users} allTasks={activeTasks}
           defaultReminders={notifSettings?.defaultReminders}
           onClose={()=>setEditTask(null)}
-          onSave={(t)=>saveTask(t)} onAuto={(t)=>autoAssign(t, users, tasks)} />
-      )}
+          onSave={(t)=>saveTask(t)} onAuto={(t)=>autoAssign(t, users, activeTasks)} />
+      ) : (editTask && editTaskObj && (
+        <TaskEditor task={editTaskObj} prefill={editPrefill} users={users} allTasks={activeTasks}
+          defaultReminders={notifSettings?.defaultReminders}
+          onClose={()=>setEditTask(null)}
+          onSave={(t)=>saveTask(t)} onAuto={(t)=>autoAssign(t, users, activeTasks)} />
+      ))}
       {editUser && (
         <UserEditor user={editUser} onClose={()=>setEditUser(null)}
           onSave={saveUser} onApprove={approveUser} />
@@ -1960,9 +1994,9 @@ function ReportIssue({ onClose }) {
   return (
     <Portal>
     <div className="sb-scrim" onClick={requestClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Report an issue">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Report an issue</b>
-          <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={requestClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           {state==="sent" ? (
             <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>
@@ -1971,8 +2005,8 @@ function ReportIssue({ onClose }) {
             <div className="sb-sub" style={{marginTop:0}}>
               Tell us what went wrong or felt off. We'll automatically include your
               account, the screen you're on, and your device details.</div>
-            <div className="sb-field"><label>What happened?<span className="sb-req" aria-hidden="true">*</span></label>
-              <textarea rows={5} value={note} onChange={e=>setNote(e.target.value)}
+            <div className="sb-field"><label htmlFor="ri-note">What happened?<span className="sb-req" aria-hidden="true">*</span></label>
+              <textarea id="ri-note" rows={5} value={note} onChange={e=>setNote(e.target.value)}
                 placeholder="e.g. I tried to mark a reel Approved and nothing happened." /></div>
             {state==="error" && <div className="sb-lerr">Couldn't send that. Please try again.</div>}
             <button className="sb-btn compact" disabled={!note.trim() || state==="sending"} onClick={send}>
@@ -2022,12 +2056,15 @@ function MyDay({ tasks, me, openTask, goTab }) {
   // dashboard instead of (well, ahead of) the contributor attention list.
   const qq = qaQueue(tasks);
   const pq = postQueue(tasks);
+  const qaCount = qq.awaiting.length + qq.returned.length;
+  // captions + ready are disjoint by status; overdue is a subset (don't re-add it).
+  const postCount = pq.captions.length + pq.ready.length;
   const focusMsg = me.qa
-    ? (qq.awaiting.length + qq.returned.length
-        ? `${qq.awaiting.length + qq.returned.length} item(s) need your review.` : "Nothing needs your review right now.")
+    ? (qaCount
+        ? `${qaCount} ${qaCount===1?"item needs":"items need"} your review.` : "Nothing needs your review right now.")
     : me.captions
-    ? (pq.captions.length + pq.ready.length + pq.overdue.length
-        ? `${pq.captions.length + pq.ready.length + pq.overdue.length} item(s) to caption or post.` : "Nothing approved is waiting to post.")
+    ? (postCount
+        ? `${postCount} ${postCount===1?"item":"items"} to caption or post.` : "Nothing approved is waiting to post.")
     : (attention.length
         ? `${attention.length} thing${attention.length!==1?"s":""} need${attention.length===1?"s":""} your attention.`
         : "You're all clear. Nothing needs you right now.");
@@ -2044,7 +2081,7 @@ function MyDay({ tasks, me, openTask, goTab }) {
 
   return (
     <div className="sb-page">
-      <div className="sb-h">My Day</div>
+      <h1 className="sb-h">My Day</h1>
       <div className="sb-sub">{focusMsg}</div>
 
       {/* QA reviewer dashboard — "what needs my approval today?" */}
@@ -2057,15 +2094,26 @@ function MyDay({ tasks, me, openTask, goTab }) {
           <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>No content is waiting on your review.</div>}
       </>}
 
-      {/* Caption / upload dashboard — "what's approved and needs posting?" */}
-      {me.captions && <>
-        <div className="sb-div"><span>Captions &amp; posting</span></div>
-        <QueueSection title="Approved: needs captions" items={pq.captions} me={me} openTask={openTask} />
-        <QueueSection title="Ready to post" items={pq.ready} me={me} openTask={openTask} />
-        <QueueSection title="Overdue posts" items={pq.overdue} me={me} openTask={openTask} />
-        {pq.captions.length===0 && pq.ready.length===0 && pq.overdue.length===0 &&
-          <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>Nothing approved is waiting to be posted.</div>}
-      </>}
+      {/* Caption / upload dashboard — ONE prioritised queue. "captions" (Approved)
+          and "ready" (Ready to Post) are disjoint by status, so merging them can't
+          duplicate; overdue is a *treatment* (it sorts to the top and the card
+          shows a red due date), never a separate list that re-lists the same item. */}
+      {me.captions && (() => {
+        const overdueIds = new Set(pq.overdue.map(t => t.id));
+        const queue = [...pq.captions, ...pq.ready].sort((a, b) => {
+          const ao = overdueIds.has(a.id), bo = overdueIds.has(b.id);
+          if (ao !== bo) return ao ? -1 : 1;                 // overdue first
+          const da = daysTo(a.postDate), db = daysTo(b.postDate);
+          if (da === null) return 1; if (db === null) return -1;
+          return da - db;                                     // then soonest due
+        });
+        return <>
+          <div className="sb-div"><span>Captions &amp; posting</span></div>
+          {queue.length === 0
+            ? <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>Nothing approved is waiting to be posted.</div>
+            : <QueueSection title="To caption or post" items={queue} me={me} openTask={openTask} />}
+        </>;
+      })()}
 
       {(me.qa || me.captions) && <div className="sb-div"><span>Your own tasks</span></div>}
 
@@ -2077,7 +2125,7 @@ function MyDay({ tasks, me, openTask, goTab }) {
       </div>
 
       <div className="sb-shead sb-shead-strong"><h2>Needs your attention</h2>
-        <button className="link subtle" onClick={()=>goTab("mine")}>All my work →</button></div>
+        <button className="link subtle" onClick={()=>goTab("mine")}>All my work <span className="sb-fwd" aria-hidden="true">→</span></button></div>
       {attention.length===0
         ? <div className="sb-empty"><div className="big"><CheckCircleIcon className="hi hi-empty" aria-hidden="true"/></div>Nothing urgent. Enjoy the breather.</div>
         : <div className="sb-attnlist">{attention.map(t =>
@@ -2139,7 +2187,41 @@ function AttentionItem({ t, onClick }) {
    =================================================================== */
 function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
   const [q, setQ] = useState("");
+  const [recents, setRecents] = useState(() => loadPref("sb-search-recents", []));
   const inputRef = useRef(null);
+  // Remember a term only when it actually led somewhere (a result was opened),
+  // newest first, deduped, capped — so "Recent searches" stays useful, not noisy.
+  const act = (fn) => {
+    const t = q.trim();
+    if (t) { const next = [t, ...recents.filter(x => x !== t)].slice(0, 5); setRecents(next); savePref("sb-search-recents", next); }
+    fn();
+  };
+  const [announce, setAnnounce] = useState("");
+  // Undo snapshot for recent-search edits. It lives ONLY in component state, so it
+  // dies when the modal unmounts and — critically — when the app unmounts on sign-out.
+  // Combined with signOutClean() wiping the localStorage key, the next person who
+  // signs in on a shared device can never undo the previous person's edits.
+  const [undo, setUndo] = useState(null); // { label, prev: string[] } | null
+  const commitRecents = (next) => { setRecents(next); savePref("sb-search-recents", next); };
+  const removeRecent = (t) => {
+    const prev = recents;                                   // ordered snapshot
+    commitRecents(recents.filter((x) => x !== t));
+    setUndo({ label: `Removed “${t}”`, prev });
+    setAnnounce(`Removed “${t}” from recent searches.`);
+  };
+  const clearRecents = () => {
+    if (recents.length === 0) return;
+    const prev = recents;                                   // whole ordered list
+    commitRecents([]);
+    setUndo({ label: "Recent searches cleared", prev });
+    setAnnounce("Recent searches cleared.");
+  };
+  const undoRecents = () => {
+    if (!undo) return;
+    commitRecents(undo.prev);                               // restores exact prior order
+    setAnnounce("Recent searches restored.");
+    setUndo(null);
+  };
 
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => {
@@ -2153,22 +2235,57 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
   const peopleHits = query ? searchPeople(users, query).slice(0, 6) : [];
   const eventHits = query ? searchEvents(query).slice(0, 5) : [];
   const nothing = query && !taskHits.length && !peopleHits.length && !eventHits.length;
+  const totalHits = taskHits.length + peopleHits.length + eventHits.length;
+  // Announce result counts to assistive tech as the query changes.
+  useEffect(() => {
+    if (!query) return;
+    setAnnounce(totalHits ? `${totalHits} result${totalHits !== 1 ? "s" : ""} for “${query}”.` : `No matches for “${query}”.`);
+  }, [query, totalHits]);
 
   return (
     <Portal>
     <div className="sb-modal" onMouseDown={onClose}>
-      <div className="sb-search" onMouseDown={e=>e.stopPropagation()}>
+      <div className="sb-search" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Search">
         <div className="sb-searchbar">
           <span className="ico"><MagnifyingGlassIcon className="hi" aria-hidden="true"/></span>
-          <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)}
-            placeholder="Search tasks, people, events…" />
+          <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} dir="auto"
+            aria-label="Search tasks, people, events" placeholder="Search tasks, people, events…" />
           <kbd className="sb-kbd sb-deskonly">ESC</kbd>
           <button className="sb-searchclose" onClick={onClose} aria-label="Close search"><XMarkIcon className="hi" aria-hidden="true" /></button>
         </div>
+        <div className="sb-vh" role="status" aria-live="polite">{announce}</div>
 
-        {!query && <div className="sb-searchhint">
-          Find anything across the whole app: titles, owners &amp; crew, statuses,
-          types, locations, notes, links, people and upcoming events.
+        {!query && <div className="sb-searchempty">
+          {undo && <div className="sb-recent-undo" role="status">
+            <span>{undo.label}</span>
+            <button type="button" className="sb-banner-action" onClick={undoRecents}>Undo</button>
+          </div>}
+          {recents.length>0 && <div className="sb-searchgroup">
+            <div className="sb-searchsec sb-searchsec-row">
+              <span>Recent searches</span>
+              <button type="button" className="sb-searchclear" onClick={clearRecents}>Clear</button>
+            </div>
+            {recents.map(r => (
+              <div key={r} className="sb-srecent-row">
+                <button className="sb-sresult sb-srecent" onClick={()=>setQ(r)}>
+                  <span className="r-icon"><ClockIcon className="hi hi-sm" aria-hidden="true"/></span>
+                  <span className="r-main">{r}</span>
+                </button>
+                <button type="button" className="sb-srecent-x" onClick={()=>removeRecent(r)} aria-label={`Remove “${r}” from recent searches`}>
+                  <XMarkIcon className="hi hi-sm" aria-hidden="true"/></button>
+              </div>
+            ))}
+          </div>}
+          <div className="sb-searchgroup">
+            <div className="sb-searchsec">Jump to</div>
+            {[["home","Home",HomeIcon],["myday","My Day",ClockIcon],["board","Workflow",ViewColumnsIcon],["mine","My Work",ClipboardDocumentListIcon],["team","Team",UserGroupIcon]].map(([tab,label,Icon]) => (
+              <button key={tab} className="sb-sresult" onClick={()=>{ goTab(tab); onClose(); }}>
+                <span className="r-icon"><Icon className="hi hi-sm" aria-hidden="true"/></span>
+                <span className="r-main">{label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="sb-searchtip sb-deskonly">Searches titles, owners &amp; crew, statuses, types, notes, people and events. Press <kbd className="sb-kbd">/</kbd> to open · <kbd className="sb-kbd">Esc</kbd> to close.</div>
         </div>}
 
         {nothing && <div className="sb-searchhint">No matches for “{query}”.</div>}
@@ -2177,8 +2294,8 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
           {taskHits.length>0 && <>
             <div className="sb-searchsec">Content · {taskHits.length}</div>
             {taskHits.map(t => (
-              <button key={t.id} className="sb-sresult" onClick={()=>onOpenTask(t.id)}>
-                <span className="r-main">{t.title}</span>
+              <button key={t.id} className="sb-sresult" onClick={()=>act(()=>onOpenTask(t.id))}>
+                <span className="r-main" dir="auto">{t.title}</span>
                 <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
                 <span className="r-sub">{t.type} · {t.owner==="Pending"&&t.ownerSuggested?`Pending: ${t.ownerSuggested}`:t.owner}</span>
               </button>
@@ -2188,9 +2305,9 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
           {peopleHits.length>0 && <>
             <div className="sb-searchsec">People · {peopleHits.length}</div>
             {peopleHits.map(u => (
-              <button key={u.id} className="sb-sresult" onClick={()=>goTab("team")}>
+              <button key={u.id} className="sb-sresult" onClick={()=>act(()=>goTab("team"))}>
                 <span className="sb-av" style={{width:26,height:26,fontSize:10}}>{initials(u.name)}</span>
-                <span className="r-main">{u.name}</span>
+                <span className="r-main" dir="auto"><bdi>{u.name}</bdi></span>
                 <span className="r-sub">{u.role==="admin"?"Admin":"Member"}{u.qa?" · QA":""}{u.captions?" · Captions":""} · {u.status}</span>
               </button>
             ))}
@@ -2199,10 +2316,10 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
           {eventHits.length>0 && <>
             <div className="sb-searchsec">Events · {eventHits.length}</div>
             {eventHits.map((e,i) => (
-              <button key={i} className="sb-sresult" onClick={()=>goTab("home")}>
+              <button key={i} className="sb-sresult" onClick={()=>act(()=>goTab("home"))}>
                 <span className="r-icon">{e.emoji?<span className="sb-emoji" aria-hidden="true">{e.emoji}</span>:e.kind==="birthday"?<span className="sb-emoji" aria-hidden="true">🎂</span>:<CalendarDaysIcon className="hi" aria-hidden="true"/>}</span>
-                <span className="r-main">{e.name}</span>
-                <span className="r-sub">{e.daysAway===0?"Today":`in ${e.daysAway} day${e.daysAway!==1?"s":""}`}</span>
+                <span className="r-main" dir="auto">{e.name}</span>
+                <span className="r-sub">{formatRelativeDays(e.daysAway)}</span>
               </button>
             ))}
           </>}
@@ -2253,31 +2370,27 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
 
   return (
     <div className="sb-page">
-      <div className="sb-h">Workflow</div>
+      <h1 className="sb-h">Workflow</h1>
       <div className="sb-sub">
         {total} piece{total!==1?"s":""} of content{filter!=="all"?` · ${activeFilter?.label}`:""},
         grouped by where each one is in the workflow.
       </div>
 
-      {eventFilter && (
-        <div className="sb-chiprow" style={{marginTop:10}}>
-          <button className="sb-fchip on" onClick={onClearEventFilter}>
-            <CalendarDaysIcon className="hi hi-sm" aria-hidden="true"/> {eventFilter.label} · Clear <XMarkIcon className="hi hi-sm" aria-hidden="true"/>
-          </button>
-        </div>
-      )}
-
-      {/* Filters — collapsed by default so content shows first */}
-      <div className="sb-filterbar">
+      {/* One coherent toolbar: Filters · active filters (removable) · Board/List
+          · Sort · Collapse — instead of controls scattered across three rows. */}
+      <div className="sb-filterbar sb-wftoolbar">
         <button className="sb-filtertoggle" onClick={()=>setFiltersOpen(o=>!o)} aria-expanded={filtersOpen}>
           <span className="ico"><FunnelIcon className="hi hi-sm" aria-hidden="true"/></span>Filters
-          {filter!=="all" && <span className="sb-filteractive">{activeFilter?.label}</span>}
           <span className={"sb-chev"+(filtersOpen?" open":"")}><ChevronRightIcon className="hi hi-sm" aria-hidden="true" /></span>
         </button>
+        {filter!=="all" && <button className="sb-appliedchip" onClick={()=>setFilter("all")} aria-label={`Remove filter: ${activeFilter?.label}`}>
+          {activeFilter?.label}<XMarkIcon className="hi hi-sm" aria-hidden="true"/></button>}
+        {eventFilter && <button className="sb-appliedchip" onClick={onClearEventFilter} aria-label={`Remove event filter: ${eventFilter.label}`}>
+          <CalendarDaysIcon className="hi hi-sm" aria-hidden="true"/>{eventFilter.label}<XMarkIcon className="hi hi-sm" aria-hidden="true"/></button>}
         <div className="sb-viewtoggle" role="group" aria-label="View">
-          <button className={view==="board"?"on":""} onClick={()=>pickView("board")} aria-pressed={view==="board"}>
+          <button className={view==="board"?"on":""} onClick={()=>pickView("board")} aria-pressed={view==="board"} aria-label="Board view">
             <ViewColumnsIcon className="hi hi-sm" aria-hidden="true"/><span>Board</span></button>
-          <button className={view==="list"?"on":""} onClick={()=>pickView("list")} aria-pressed={view==="list"}>
+          <button className={view==="list"?"on":""} onClick={()=>pickView("list")} aria-pressed={view==="list"} aria-label="List view">
             <ClipboardDocumentListIcon className="hi hi-sm" aria-hidden="true"/><span>List</span></button>
         </div>
         <label className="sb-sortlbl">
@@ -2285,19 +2398,15 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
             {BOARD_SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
         </label>
+        {groups.length>1 && <button className="sb-collapselink sb-wf-collapse" onClick={()=>setAllCollapsed(!groups.every(g=>collapsed[g.status]))}>
+          {groups.every(g=>collapsed[g.status]) ? "Expand all" : "Collapse all"}
+        </button>}
       </div>
       {filtersOpen && <div className="sb-chiprow">
         {availableFilters.map(f => (
           <button key={f.id} className={"sb-fchip"+(filter===f.id?" on":"")}
             onClick={()=>{ setFilter(f.id); setFiltersOpen(false); }}>{f.label}</button>
         ))}
-      </div>}
-
-      {/* Status groups */}
-      {groups.length>1 && <div className="sb-collapserow">
-        <button className="sb-collapselink" onClick={()=>setAllCollapsed(!groups.every(g=>collapsed[g.status]))}>
-          {groups.every(g=>collapsed[g.status]) ? "Expand all" : "Collapse all"}
-        </button>
       </div>}
       {groups.length===0
         ? <div className="sb-empty"><div className="big"><ViewColumnsIcon className="hi hi-empty" aria-hidden="true"/></div>No content matches these filters.</div>
@@ -2355,9 +2464,12 @@ function BoardList({ tasks, openTask, me, isAdmin, eventFilter, onClearEventFilt
 function ReviewCard({ t, primary, done, onOpen }) {
   const timing = reviewTiming(t);
   const cls = "sb-rvcard" + (primary ? " primary" : "") + (done ? " done" : "");
+  // A blocked item is waiting on someone else and cannot be reviewed yet, so the
+  // action opens it read-only: label it "View", never "Review" (visible + a11y).
+  const verb = done ? "Open" : t.blockedOn ? "View" : "Review";
   return (
     <button type="button" className={cls} onClick={onOpen}
-      aria-label={`${done ? "Open" : "Review"} ${t.title}`}>
+      aria-label={`${verb} ${t.title}`}>
       <span className="sb-rvcard-main">
         <span className="sb-rvcard-head">
           <span className="sb-rvcard-title">{t.title}</span>
@@ -2371,7 +2483,7 @@ function ReviewCard({ t, primary, done, onOpen }) {
           </span>
         )}
       </span>
-      {!done && <span className="sb-rvcard-go" aria-hidden="true">{primary ? "Review" : <ChevronRightIcon className="hi hi-sm"/>}</span>}
+      {!done && <span className="sb-rvcard-go" aria-hidden="true">{primary ? verb : <ChevronRightIcon className="hi hi-sm"/>}</span>}
     </button>
   );
 }
@@ -2468,7 +2580,7 @@ function Mine({ tasks, me, openTask }) {
   const accent = { overdue: " urgent", soon: " soon" };
   return (
     <div className="sb-page">
-      <div className="sb-h">My work</div>
+      <h1 className="sb-h">My work</h1>
       <div className="sb-sub">
         {total===0 ? "You're all clear. Nothing assigned to you right now."
           : `${total} thing${total!==1?"s":""} with your name on ${total!==1?"them":"it"}, most urgent first.`}
@@ -2508,16 +2620,6 @@ const LOAD_BUCKETS = [
 
 // The one status worth showing — and only when it changes the decision.
 // Light/Balanced show no chip (the meter + counts already say enough).
-function capacityStatus(u, load) {
-  if (!isAvailable(u)) return { label: "Unavailable", tone: "neutral" };
-  if (load.activePoints <= 0) return { label: "Available", tone: "green" };
-  if (load.band.key === "high") return { label: "Near capacity", tone: "red" };
-  if (load.band.key === "busy") return { label: "Busy", tone: "amber" };
-  return null;
-}
-// Coarse 0–4 level for the segmented "Current load" meter (communicates an
-// estimate/level, not a false-precise percentage).
-const BAND_LEVEL = { unavail: 0, available: 0, light: 1, balanced: 2, busy: 3, high: 4 };
 const STALE_REASON = {
   "shoot-passed-still-planned": "Shoot date passed — still Planned",
   "post-passed-not-posted": "Post date passed — not Posted",
@@ -2527,10 +2629,7 @@ function respDue(dateStr) {
   const dd = dateStr ? daysTo(dateStr) : null;
   if (dd == null) return "No date";
   if (dd < 0) return "Overdue";
-  if (dd === 0) return "Due today";
-  if (dd === 1) return "Due tomorrow";
-  if (dd <= 6) return "Due " + new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, { weekday: "short" });
-  return "Due " + fmt(dateStr);
+  return formatDueDate(dateStr);   // "Due today/tomorrow/<weekday>/<date>" — locale-aware
 }
 
 /* One person's capacity card, built to answer "can I safely assign more to this
@@ -2539,8 +2638,9 @@ function respDue(dateStr) {
    Stateless re: expansion — `open`/`onToggle` come from the parent. */
 function CapCard({ u, load, tasks, open, onToggle }) {
   const dept = userDepartments(u).join(" · ") || (roleChips(u)[0] || "");
-  const status = capacityStatus(u, load);
-  const level = BAND_LEVEL[load.band.key] ?? 0;
+  // Single source of truth: the band model owns key/label/tone/level.
+  const status = load.band;
+  const level = load.band.level;
   const tone = load.band.tone;
   const dueThisWeek = load.buckets.thisWeek.length;
   const inProgress = load.activeCount;
@@ -2578,7 +2678,7 @@ function CapCard({ u, load, tasks, open, onToggle }) {
 
       <div className="sb-cap-caplabel">Current load</div>
       <div className="sb-capmeter" role="img" aria-label={`Current load: ${status ? status.label : load.band.label}`}>
-        {[1,2,3,4].map(n => <i key={n} className={"sb-capseg"+(isAvailable(u) && n <= level ? " on tone-"+tone : "")}/>)}
+        <i className={"sb-capfill tone-"+tone} style={{width:`${(isAvailable(u)?level:0)/4*100}%`}}/>
       </div>
 
       {staleCount > 0 && (
@@ -2645,11 +2745,15 @@ function Team({ tasks, users }) {
   const [openId, setOpenId] = useState(null);
   return (
     <div className="sb-page">
-      <div className="sb-h">Team load</div>
+      <h1 className="sb-h">Team load</h1>
       <div className="sb-sub">See who has work concentrated around upcoming deadlines. Load reflects assigned
-        production responsibilities, not task count.{" "}
-        <span className="sb-infotip" tabIndex={0} role="note"
-          title="Reviewers (QA) aren't production personnel, so they carry no production capacity. Shared posting work isn't assigned to individuals yet.">ⓘ</span></div>
+        production responsibilities, not task count.</div>
+      {/* Accessible help, not a native title tooltip (which keyboard/touch/screen
+          readers can't reach): a real disclosure, concise and task-specific. */}
+      <details className="sb-inlinehelp">
+        <summary><InformationCircleIcon className="hi hi-sm" aria-hidden="true"/> Why don't reviewers show capacity?</summary>
+        <p>Reviewers (QA) aren't production personnel, so they carry no production capacity. Shared posting work isn't assigned to individuals yet.</p>
+      </details>
       <div className="sb-caplist">
         {rows.map(({u,load}) => (
           <CapCard key={u.id} u={u} load={load} tasks={tasks}
@@ -2763,9 +2867,8 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
   // it never dominates the lower dashboard; the rest lives behind "View all".
   const activityAll = recentActivity(tasks, 30);
   const activity = activityAll.slice(0, 5);
-  const agoShort = (ms) => { if(!ms) return ""; const mn=Math.round((Date.now()-ms)/60000);
-    if(mn<1) return "now"; if(mn<60) return mn+"m"; const h=Math.round(mn/60);
-    if(h<24) return h+"h"; return Math.round(h/24)+"d"; };
+  // Compact relative time ("3d ago") from the central Intl layer.
+  const agoShort = (ms) => formatRelativeShort(ms);
 
   const hi = new Date().getHours();
   const greet = hi<12?"Good morning":hi<17?"Good afternoon":"Good evening";
@@ -2786,7 +2889,7 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
   return (
     <div className="sb-page home">
       <div className="sb-eyebrow">{greet}</div>
-      <div className="sb-h">Welcome back, {me.name.split(" ")[0]} <span className="sb-wave" aria-hidden="true">👋</span></div>
+      <h1 className="sb-h">Welcome back, {me.name.split(" ")[0]} <span className="sb-wave" aria-hidden="true">👋</span></h1>
       <div className="sb-sub sb-greet">
         <span>{s1}</span>
         <span>{s2}</span>
@@ -2824,14 +2927,14 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
               {tasksLoaded && focus.length>0 &&
                 <span className="sb-headcount" aria-label={`${focus.length} focus item${focus.length!==1?"s":""}`}>{focus.length}</span>}
             </div>
-            <button className="link subtle" onClick={()=>goTab("myday")}>My Day →</button>
+            <button className="link subtle" onClick={()=>goTab("myday")}>My Day <span className="sb-fwd" aria-hidden="true">→</span></button>
           </div>
           {!tasksLoaded
             ? <div className="sb-attnlist sb-focus-loading" aria-busy="true" aria-label="Loading your focus">
                 {[0,1,2].map(i => <div className="sb-focus-skel" key={i}><span className="sb-skel"/><span className="sb-skel sm"/></div>)}
               </div>
             : focus.length===0
-            ? <div className="sb-empty compact sb-empty-glad"><span className="sb-empty-emoji" aria-hidden="true">🎉</span>
+            ? <div className="sb-empty compact sb-empty-glad"><CheckCircleIcon className="hi sb-empty-glad-ic" aria-hidden="true"/>
                 <b>You're all caught up.</b><span>Nothing needs you right now — enjoy your {hi<12?"morning":hi<17?"afternoon":"evening"}.</span></div>
             : <div className="sb-attnlist">{focus.map(t =>
                 <AttentionItem key={t.id} t={t} onClick={()=>openTask ? openTask(t.id) : goTab("myday")} />)}</div>}
@@ -2841,11 +2944,11 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
         <section className="sb-wd wd-events">
           {events.length>0 && <>
             <div className="sb-shead"><h2>Coming up</h2>
-              <button className="link subtle" onClick={()=>goTab("board")}>See all →</button></div>
+              <button className="link subtle" onClick={()=>goTab("board")}>See all <span className="sb-fwd" aria-hidden="true">→</span></button></div>
             <div className="sb-evlist">
               {events.slice(0,3).map((e,i) => {
                 const n = occurrenceContentCount(e, tasks);
-                const rel = e.daysAway===0 ? "Today" : e.daysAway===1 ? "Tomorrow" : `In ${e.daysAway} days`;
+                const rel = formatRelativeDays(e.daysAway);   // locale "today/tomorrow/in N days"
                 const act = n===0
                   ? (isAdmin && onNewForEvent && { label:"Create", onClick:()=>onNewForEvent(eventPrefill(e)) })
                   : (onViewEvent && { label:"View", onClick:()=>onViewEvent(e) });
@@ -2857,7 +2960,7 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
                     <div className="sb-ev-sub"><b>{rel}</b> · {fmtEventDate(e.date)}</div>
                     <div className="sb-ev-foot">
                       <span className={"sb-ev-status"+(n>0?" ok":"")}>{n>0 ? `${n} planned` : "Nothing planned"}</span>
-                      {act && <button className="sb-ev-link" onClick={act.onClick}>{act.label} →</button>}
+                      {act && <button className="sb-ev-link" onClick={act.onClick}>{act.label} <span className="sb-fwd" aria-hidden="true">→</span></button>}
                     </div>
                   </div>
                 </div>
@@ -2894,7 +2997,7 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
             then content, then who + when. Short by design. */}
         <section className="sb-wd wd-activity wd-desktop">
           <div className="sb-shead"><h2>Recent activity</h2>
-            {isAdmin && activityAll.length>5 && <button className="link subtle" onClick={()=>goTab("admin")}>View all →</button>}</div>
+            {isAdmin && activityAll.length>5 && <button className="link subtle" onClick={()=>goTab("admin")}>View all <span className="sb-fwd" aria-hidden="true">→</span></button>}</div>
           {activity.length===0
             ? <div className="sb-empty compact">Nothing yet — the team's activity will show up here.</div>
             : <div className="sb-actfeed2">
@@ -2905,7 +3008,7 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
                     <span className="sb-actrow2-body">
                       <span className="sb-actrow2-name">{a.who}</span>
                       <span className="sb-actrow2-act">{a.verb} <span className="ct">{a.title}</span></span>
-                      <span className="sb-actrow2-meta">{agoShort(a.at)} ago</span>
+                      <span className="sb-actrow2-meta">{agoShort(a.at)}</span>
                     </span>
                   </button>
                 ))}
@@ -2933,14 +3036,14 @@ function Home({ tasks, tasksLoaded = true, users, me, goTab, isAdmin, onNewForEv
             </div>
             {/* …then the wins as a right-aligned stat list under a divider. */}
             <div className="sb-statlist sb-statlist-wins">
-              <div className="sb-winrow"><span className="e" aria-hidden="true">🏆</span>
+              <div className="sb-winrow"><TrophyIcon className="e sb-winrow-ic" aria-hidden="true"/>
                 <span className="k">Posted this month</span><span className="v"><AnimatedNumber value={thisM.posted}/></span></div>
-              <div className="sb-winrow"><span className="e" aria-hidden="true">🙌</span>
+              <div className="sb-winrow"><CheckBadgeIcon className="e sb-winrow-ic" aria-hidden="true"/>
                 <span className="k">Completed by you</span><span className="v"><AnimatedNumber value={pw.completed}/></span></div>
-              <div className="sb-winrow"><span className="e" aria-hidden="true">✨</span>
+              <div className="sb-winrow"><SparklesIcon className="e sb-winrow-ic" aria-hidden="true"/>
                 <span className="k">Contributions</span><span className="v"><AnimatedNumber value={pw.contributions}/></span></div>
             </div>
-            <button className="sb-proglink" onClick={()=>goTab("board")}>View workflow →</button>
+            <button className="sb-proglink" onClick={()=>goTab("board")}>View workflow <span className="sb-fwd" aria-hidden="true">→</span></button>
           </div>
         </section>
 
@@ -3065,12 +3168,17 @@ function TaskAdminMenu({ t, admin, className }) {
       <KebabMenu items={[
         { label:"Edit content", onClick:()=>admin.onEdit(t) },
         { label:"Duplicate", onClick:()=>admin.onDuplicate(t) },
-        { label:"Delete content", danger:true, onClick:()=>setConfirmDel(true) },
+        { label:"Move to Trash", danger:true, onClick:()=>setConfirmDel(true) },
       ]} />
       {confirmDel && <ConfirmDialog
-        title={`Delete “${t.title}”?`}
-        body="This permanently removes the content — its links, reminders and history. This can't be undone."
-        confirmLabel="Delete content" cancelLabel="Cancel"
+        title={`Move “${t.title}” to Trash?`}
+        body={`“${t.title}” will move to Trash.`}
+        consequences={[
+          "It stops counting toward dashboards, capacity, reminders and QA.",
+          "You can restore it from Admin → Content → Trash.",
+          "Its comments, links and activity are kept.",
+        ]}
+        confirmLabel="Move to Trash" busyLabel="Moving…" cancelLabel="Cancel"
         onConfirm={async ()=>{ await admin.onDelete(t); }} onClose={()=>setConfirmDel(false)} />}
     </span>
   );
@@ -3094,7 +3202,7 @@ function TaskCard({ t, me, onClick }) {
     <div className="sb-task sb-task-act" role="button" tabIndex={0} onClick={onClick}
       onKeyDown={(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onClick(); } }}>
       <div className="row1">
-        <span className="title">{t.title}</span>
+        <span className="title" dir="auto">{t.title}</span>
         <span className="sb-rowtags">
           {t.priority==="High" && <span className={"sb-pri "+priorityClass(t.priority)}>▲</span>}
           <span className={"sb-chip "+typeClass(t.type)}>{t.type}</span>
@@ -3105,7 +3213,7 @@ function TaskCard({ t, me, onClick }) {
       {/* Status is dominant; due date pops; "Next" + blocker are supporting text. */}
       <div className="sb-cardstatus">
         <span className={"sb-status "+statusClass(t.status)}><span className="pip"/>{t.status}</span>
-        {!isPosted && <span className={"sb-due "+dueCls}>🕒 {dueTxt}</span>}
+        {!isPosted && <span className={"sb-due "+dueCls}><ClockIcon className="hi hi-xs" aria-hidden="true"/>{dueTxt}</span>}
       </div>
       {/* Fixed order: blocking issue → up next → supporting/owner → avatars. */}
       {t.blockedOn && <div className="sb-next blocked"><span className="sb-next-lbl">Blocked</span>Waiting on {t.blockedOn}</div>}
@@ -3121,7 +3229,7 @@ function TaskCard({ t, me, onClick }) {
             subcollection and aren't counted here — reading it per card would be one
             extra query per row. A backend-maintained `commentCount` (Phase 3) makes
             this exact; the full thread is always correct on open. */}
-        {(t.comments?.length>0) && <span style={{fontSize:11,color:"var(--muted)",marginLeft:"auto"}}>{Ic.chat} {t.comments.length}</span>}
+        {(t.comments?.length>0) && <span style={{fontSize:11,color:"var(--muted)",marginInlineStart:"auto"}}>{Ic.chat} {t.comments.length}</span>}
       </div>
     </div>
   );
@@ -3178,13 +3286,40 @@ function UrlInput({ value, onChange, onBlur, placeholder = "https://…", disabl
       {showError
         ? <div className="sb-fielderr" role="alert">Please enter a valid URL.</div>
         : copied
-        ? <div className="sb-urlhint copied" role="status">✓ Link copied</div>
+        ? <div className="sb-urlhint copied" role="status"><CheckIcon className="hi hi-sm" aria-hidden="true"/> Link copied</div>
         : valid
-        ? <div className="sb-urlhint ok">✓ Valid link</div>
+        ? <div className="sb-urlhint ok"><CheckIcon className="hi hi-sm" aria-hidden="true"/> Valid link</div>
         : null}
     </div>
   );
 }
+/* Non-admin deep-link into content we KNOW is in Trash (Option A: members can read
+   it, so this is never an access problem). Accurate, Trash-specific copy — no false
+   "you may not have access" and no Restore (admin-only). */
+function TrashedContentUnavailable({ onBack }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onBack(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onBack]);
+  return (
+    <Portal>
+      <div className="sb-scrim" onMouseDown={onBack}>
+        <div className="sb-sheet sb-sheet-sm" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Content in Trash">
+          <div className="bd" style={{textAlign:"center",padding:"32px 22px"}}>
+            <div className="sb-empty"><div className="big"><TrashIcon className="hi hi-empty" aria-hidden="true"/></div></div>
+            <h2 className="sb-serif" style={{fontSize:18,marginBottom:6}}>This content is in Trash</h2>
+            <p className="sb-sub" style={{maxWidth:"36ch",margin:"0 auto 18px"}}>
+              An admin moved it to Trash, so it's off the board for now. An admin can restore it.
+            </p>
+            <button className="sb-btn" style={{maxWidth:220,margin:"0 auto"}} onClick={onBack}>Go back</button>
+          </div>
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
 /* Friendly dead-end for a notification/deep-link whose content is gone
    (deleted, archived out of view, or not permitted). Never a blank page. */
 function MissingContent({ onBack }) {
@@ -3196,7 +3331,7 @@ function MissingContent({ onBack }) {
   return (
     <Portal>
       <div className="sb-scrim" onMouseDown={onBack}>
-        <div className="sb-sheet sb-sheet-sm" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-label="Content unavailable">
+        <div className="sb-sheet sb-sheet-sm" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Content unavailable">
           <div className="bd" style={{textAlign:"center",padding:"32px 22px"}}>
             <div className="sb-empty"><div className="big"><ExclamationTriangleIcon className="hi hi-empty" aria-hidden="true"/></div></div>
             <h2 className="sb-serif" style={{fontSize:18,marginBottom:6}}>This content is no longer available</h2>
@@ -3211,9 +3346,65 @@ function MissingContent({ onBack }) {
   );
 }
 
+/* Admin deep-linked (or live-updated) into content that now sits in Trash. Rather
+   than flash the normal editable detail, show a calm recovery state: what it is,
+   that it's in Trash, and a real Restore. Restore returns to the normal detail in
+   place (openTask flips back to visible); Close/Escape leaves and cleans the URL.
+   Its own focus + Escape handling means when this REPLACES an open TaskDetail
+   (the task was trashed while open), focus lands here, not nowhere. */
+function TrashedContentNotice({ task, onRestore, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const btnRef = useRef(null);
+  useEffect(() => { btnRef.current?.focus(); }, []);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !busy) onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, busy]);
+  const restore = async () => {
+    if (busy) return;
+    setErr(null); setBusy(true);
+    try {
+      const res = await onRestore();
+      if (!res || !res.ok) { setBusy(false); setErr("Couldn't restore — it's still in Trash."); }
+      // On success the task flips to visible; this notice unmounts on its own.
+    } catch { setBusy(false); setErr("Couldn't restore — it's still in Trash."); }
+  };
+  return (
+    <Portal>
+      <div className="sb-scrim" onMouseDown={() => !busy && onClose()}>
+        <div className="sb-sheet sb-sheet-sm" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Content in Trash">
+          <div className="bd" style={{textAlign:"center",padding:"32px 22px"}}>
+            <div className="sb-empty"><div className="big"><TrashIcon className="hi hi-empty" aria-hidden="true"/></div></div>
+            <h2 className="sb-serif" style={{fontSize:18,marginBottom:6}}>This content is in Trash</h2>
+            <p className="sb-sub" style={{maxWidth:"36ch",margin:"0 auto 6px"}}>
+              “<bdi>{task._rawTitle || task.title || "Untitled"}</bdi>” was moved to Trash. It's excluded from
+              dashboards, capacity and reminders until you restore it.
+            </p>
+            {err && <div className="sb-lerr" role="alert" style={{margin:"12px auto 0",maxWidth:"36ch"}}>{err}</div>}
+            <div className="sb-btnrow" style={{marginTop:18,maxWidth:320,marginInline:"auto"}}>
+              <button ref={btnRef} className="sb-btn" disabled={busy} aria-busy={busy} onClick={restore}>
+                <ArrowUturnLeftIcon className="hi hi-sm" aria-hidden="true"/> {busy ? "Restoring…" : "Restore content"}</button>
+              <button className="sb-btn ghost" disabled={busy} onClick={onClose}>Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
 function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, onClose, onStatus, onAction, onApprove, onAdminOverride, onLinks, onRequestChanges, onBlocked, onComment, onReact, onEdit, onDuplicate, onDelete, onSaved }) {
   const [confirmDel, setConfirmDel] = useState(false);   // admin delete confirmation
   const [draft, setDraft] = useState("");
+  // Escape closes the detail overlay — but not while the delete confirmation is
+  // up (that alertdialog handles its own Escape first).
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !confirmDel) onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, confirmDel]);
   // @mentions: uids selected from the team (the identity that gets stored); the
   // "@Name" inserted into the note is just context. Server re-validates.
   const [mentions, setMentions] = useState([]);
@@ -3340,7 +3531,7 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
     if (key && v === prev) return;                    // nothing actually changed
     onLinks(next); flashSaved();
   };
-  const tm = (t) => typeof t === "number" ? new Date(t).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : t;
+  const tm = (t) => typeof t === "number" ? formatDateTime(t) : t;
 
   // Run the guided action, enforcing its preconditions (same gates as the rules).
   const doAction = () => {
@@ -3360,10 +3551,10 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   return (
     <Portal>
     <div className="sb-scrim" onClick={onClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Content details: ${task.title}`}>
         <div className="hd">
           <span className={"sb-chip "+typeClass(task.type)}>{task.type}</span>
-          <button className="sb-x" onClick={onClose}><XMarkIcon className="hi" aria-hidden="true" /></button>
+          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true" /></button>
         </div>
         <div className="bd">
           <h2 style={{fontSize:22,fontWeight:600,lineHeight:1.15,marginBottom:8}}>{task.title}</h2>
@@ -3383,7 +3574,10 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
             const FLOW = ["Planned","In Progress","In Review","Approved","Ready to Post","Posted"];
             const returned = task.status==="Changes Requested";
             const flowIdx = returned ? 2 : FLOW.indexOf(task.status);
+            const stepNum = flowIdx + 1;
+            const curLabel = returned ? "Changes Requested" : FLOW[flowIdx];
             return (<>
+              {/* Desktop: the full six-step horizontal stepper. */}
               <div className="sb-stepper" aria-label="Workflow progress">
                 {FLOW.map((st,i)=>(
                   <div key={st} className={"sb-step"+(i<flowIdx?" done":i===flowIdx?" now":"")+(returned&&i===2?" branch":"")}>
@@ -3392,6 +3586,28 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
                   </div>
                 ))}
               </div>
+              {/* Mobile: a compact "Step N of 6 · Stage" summary that expands to a
+                  vertical timeline — no clipping, no blind horizontal scroll. Native
+                  <details> gives an accessible, keyboard-operable disclosure. */}
+              <details className="sb-stepper-m">
+                <summary className="sb-stepsum" aria-label={`Workflow progress: step ${stepNum} of 6, ${curLabel}. Expand for the full timeline`}>
+                  <span className="sb-stepsum-main">
+                    <span className="sb-stepsum-count">Step {stepNum} of 6</span>
+                    <span className={"sb-stepsum-stage"+(returned?" branch":"")}>{curLabel}</span>
+                  </span>
+                  <span className="sb-stepsum-next">Next: {nextStep(task.status)}</span>
+                  <ChevronRightIcon className="hi hi-sm sb-stepsum-chev" aria-hidden="true"/>
+                </summary>
+                <ol className="sb-timeline">
+                  {FLOW.map((st,i)=>(
+                    <li key={st} className={"sb-tl-step"+(i<flowIdx?" done":i===flowIdx?" now":" upcoming")+(returned&&i===2?" branch":"")}>
+                      <span className="sb-tl-dot" aria-hidden="true">{i<flowIdx && <CheckCircleIcon className="hi hi-sm"/>}</span>
+                      <span className="sb-tl-lbl">{st}</span>
+                      {i===flowIdx && <span className="sb-tl-here">{returned?"Changes requested":"You are here"}</span>}
+                    </li>
+                  ))}
+                </ol>
+              </details>
               {returned && <div className="sb-step-note" role="status">
                 <ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true"/> Returned — changes requested. Resubmit for review when ready.</div>}
             </>);
@@ -3466,8 +3682,8 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
               const val = links[k] || "";
               return (
                 <div className="sb-field" key={k}>
-                  <label>{LINK_FIELDS[k]}{required.includes(k) && <span style={{color:"var(--red)"}}> *</span>}</label>
-                  <UrlInput value={val} ariaLabel={LINK_FIELDS[k]} placeholder="https://drive.google.com/…"
+                  <label htmlFor={"lk-"+k}>{LINK_FIELDS[k]}{required.includes(k) && <span style={{color:"var(--red)"}}> *</span>}</label>
+                  <UrlInput id={"lk-"+k} value={val} ariaLabel={LINK_FIELDS[k]} placeholder="https://drive.google.com/…"
                     onChange={nv=>setLinksDraft({...links, [k]: nv})}
                     onBlur={()=>saveLinks({ ...links, [k]: (links[k]||"").trim() }, k)} />
                 </div>
@@ -3477,16 +3693,16 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
 
           {/* Final post link — captured when marking as posted. */}
           {postStage && (
-            <div className="sb-field"><label>Final post link</label>
-              <UrlInput value={postLink} ariaLabel="Final post link" placeholder="https://instagram.com/…"
+            <div className="sb-field"><label htmlFor="td-postlink">Final post link</label>
+              <UrlInput id="td-postlink" value={postLink} ariaLabel="Final post link" placeholder="https://instagram.com/…"
                 disabled={task.status==="Posted"} onChange={setPostLink} />
             </div>
           )}
 
           {/* Waiting on (blocker) — editable while the task is live. */}
           {task.status!=="Posted" && (
-            <div className="sb-field"><label>Waiting on (leave blank if not blocked)</label>
-              <input value={blocked} onChange={e=>setBlocked(e.target.value)}
+            <div className="sb-field"><label htmlFor="td-blocked">Waiting on (leave blank if not blocked)</label>
+              <input id="td-blocked" value={blocked} onChange={e=>setBlocked(e.target.value)}
                 onBlur={()=>commit(task.blockedOn, blocked, v=>onBlocked(v))}
                 placeholder="e.g. Pastor's approval, David's graphics" />
             </div>
@@ -3578,7 +3794,8 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
             </div>
           ))}
           <div className="sb-field" style={{marginTop:10}}>
-            <textarea rows={2} placeholder="Add a note for the crew…" value={draft} onChange={e=>setDraft(e.target.value)} />
+            <label htmlFor="td-comment" className="sb-vh">Add a note for the crew</label>
+            <textarea id="td-comment" rows={2} placeholder="Add a note for the crew…" value={draft} onChange={e=>setDraft(e.target.value)} />
           </div>
           {mentionedUsers.length>0 && (
             <div className="sb-mention-chips" style={{display:"flex",flexWrap:"wrap",gap:6,margin:"8px 0 2px"}}>
@@ -3597,12 +3814,11 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
                 onClick={()=>setMentionOpen((o)=>!o)}>@ Mention</button>
             )}
             {mentionOpen && (
-              <div className="sb-mention-menu" role="listbox" style={{position:"absolute",bottom:"100%",left:0,marginBottom:6,zIndex:20,maxHeight:220,overflowY:"auto",minWidth:200,background:"var(--card,#fff)",border:"1px solid var(--line,#e6e2ec)",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,.12)"}}>
+              <div className="sb-mention-menu" role="listbox">
                 {mentionCandidates.map((u)=>(
                   <button key={u.id} type="button" role="option" aria-selected={mentions.includes(u.id)}
                     className="sb-mention-item" disabled={mentions.includes(u.id)}
-                    style={{display:"block",width:"100%",textAlign:"left",padding:"8px 12px",background:"none",border:"none",cursor:mentions.includes(u.id)?"default":"pointer",opacity:mentions.includes(u.id)?.5:1}}
-                    onClick={()=>addMention(u)}>{u.name}{mentions.includes(u.id)?" ✓":""}</button>
+                    onClick={()=>addMention(u)}><bdi>{u.name}</bdi>{mentions.includes(u.id) && <CheckIcon className="hi hi-sm sb-mention-check" aria-hidden="true"/>}</button>
                 ))}
               </div>
             )}
@@ -3635,11 +3851,12 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
               </button>
             )}
 
-            {/* 3 · Danger zone — visually set apart and placed LAST. */}
+            {/* 3 · Remove — visually set apart and placed LAST. Moves the content
+                to Trash (recoverable from Admin → Content), never a hard delete. */}
             {onDelete && (
               <div className="sb-danger">
-                <div className="sb-danger-hd"><span className="sb-danger-lbl">Danger zone</span></div>
-                <button className="sb-btn danger" onClick={()=>setConfirmDel(true)}>Delete content</button>
+                <div className="sb-danger-hd"><span className="sb-danger-lbl">Remove content</span></div>
+                <button className="sb-btn danger" onClick={()=>setConfirmDel(true)}>Move to Trash</button>
               </div>
             )}
           </>}
@@ -3647,9 +3864,14 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
       </div>
     </div>
     {confirmDel && onDelete && <ConfirmDialog
-      title={`Delete “${task.title}”?`}
-      body="This permanently removes the content — its links, reminders and history. This can't be undone."
-      confirmLabel="Delete content" cancelLabel="Cancel"
+      title={`Move “${task.title}” to Trash?`}
+      body={`“${task.title}” will move to Trash.`}
+      consequences={[
+        "It stops counting toward dashboards, capacity, reminders and QA.",
+        "You can restore it from Admin → Content → Trash.",
+        "Its comments, links and activity are kept.",
+      ]}
+      confirmLabel="Move to Trash" busyLabel="Moving…" cancelLabel="Cancel"
       onConfirm={async ()=>{ await onDelete(); }} onClose={()=>setConfirmDel(false)} />}
     {/* Workflow-correction flow: a FOCUSED dialog collects the destination + reason,
         then a confirmation step submits through the audited callable. One modal at a
@@ -3703,7 +3925,7 @@ function Detail({ k, v }) {
   return (
     <div style={{display:"flex",justifyContent:"space-between",gap:14,padding:"7px 0",borderBottom:"1px solid var(--line)"}}>
       <span style={{fontSize:12.5,color:"var(--muted)",fontWeight:600,flex:"none"}}>{k}</span>
-      <span style={{fontSize:13.5,textAlign:"right",minWidth:0,overflow:"hidden"}}>{v}</span>
+      <span className="sb-detail-val" dir="auto">{v}</span>
     </div>
   );
 }
@@ -3733,9 +3955,8 @@ function ReminderEditor({ reminders, onChange }) {
             <select value={r.when} onChange={e => upd(i, { when: e.target.value })}>
               <option value="before">before due</option><option value="after">after due</option>
             </select>
-            <button type="button" className={"sb-sw"+(r.enabled!==false?" on":"")} role="switch"
-              aria-checked={r.enabled!==false} aria-label="Reminder enabled"
-              onClick={() => upd(i, { enabled: r.enabled === false })}><span/></button>
+            <Switch on={r.enabled!==false} ariaLabel="Reminder enabled"
+              onClick={() => upd(i, { enabled: r.enabled === false })} />
             <button type="button" className="sb-rem-x" onClick={() => onChange(rem.filter((_, j) => j !== i))} aria-label="Remove reminder"><XMarkIcon className="hi" aria-hidden="true" /></button>
           </div>
           <div className="chips">
@@ -3759,13 +3980,16 @@ function ReminderEditor({ reminders, onChange }) {
    The task form shows only a concise SUMMARY; the full schedule opens in
    a bottom sheet rendered as an ordered timeline in Winnipeg time. */
 const remPhrase = (r) => r.offset===0 ? "On the due date"
-  : `${r.offset} day${r.offset!==1?"s":""} ${r.when==="after"?"overdue":"before"}`;
+  : `${enCount(r.offset,"day")} ${r.when==="after"?"overdue":"before"}`;   // English product copy
 const remDate = (postDate, r) => {
   if (!postDate) return null;
   const [y,m,d] = postDate.split("-").map(Number);
-  const dt = new Date(y, m-1, d);
-  dt.setDate(dt.getDate() + (r.when==="after" ? r.offset : -r.offset));
-  return dt.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}) + " at 9:00 AM";
+  // The reminder fires at 09:00 (Winnipeg) on the offset calendar day. Represent
+  // that as a UTC-wall-clock 09:00 instant; formatReminderDateTime renders date +
+  // time via Intl (no hard-coded " at 9:00 AM").
+  const dt = new Date(Date.UTC(y, m-1, d, 9, 0));
+  dt.setUTCDate(dt.getUTCDate() + (r.when==="after" ? r.offset : -r.offset));
+  return formatReminderDateTime(dt);
 };
 const remChrono = (r) => (r.when==="after" ? 1 : -1) * (Number(r.offset)||0);
 const sameSchedule = (a, b) => JSON.stringify(a||[]) === JSON.stringify(b||[]);
@@ -3811,7 +4035,7 @@ function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
   return (
     <Portal>
     <div className="sb-scrim" onClick={onClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-label="Reminder schedule">
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Reminder schedule">
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Reminders</b>
           <button className="sb-x" onClick={onClose} aria-label="Close reminders"><XMarkIcon className="hi" aria-hidden="true"/></button></div>
         <div className="bd">
@@ -3877,9 +4101,8 @@ function ReminderSheet({ reminders, defaults, postDate, onChange, onClose }) {
                       </div>
                     </div>
                   </div>
-                  <button type="button" className={"sb-sw"+(!off?" on":"")} role="switch" aria-checked={!off}
-                    aria-label={`Reminder ${remPhrase(r)} enabled`}
-                    onClick={()=>upd(r.id,{enabled:off})}><span/></button>
+                  <Switch on={!off} ariaLabel={`Reminder ${remPhrase(r)} enabled`}
+                    onClick={()=>upd(r.id,{enabled:off})} />
                 </div>
               );
             })}
@@ -4040,6 +4263,13 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
   const { leaveGuard } = useUnsavedRouteGuard(isDirty);
   const requestClose = onClose;
   const drag = useSheetDrag(requestClose);
+  // Escape closes the editor (an unsaved-changes guard intercepts the resulting
+  // navigation). Skipped while a nested overlay is up so Escape closes that first.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !remOpen && !crewWarn) requestClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [requestClose, remOpen, crewWarn]);
   const doSave = async (withSoloOwner) => {
     // #2 — with no crew, the owner becomes the sole lead (Lead Designer / Content Lead).
     const payload = withSoloOwner && hasOwner ? { ...f, support: [soloCrewFor(f.type, f.owner)] } : f;
@@ -4058,7 +4288,7 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
   return (
     <Portal>
     <div className="sb-scrim" onClick={requestClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()} style={drag.sheetStyle}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} style={drag.sheetStyle} role="dialog" aria-modal="true" aria-label={task?"Edit content":"Plan content"}>
         <div className="sb-grab" {...drag.handleProps}><span/></div>
         <div className="hd"><b className="sb-serif sb-sheettitle">{task?"Edit content":"Plan content"}</b>
           <button className="sb-x" onClick={requestClose} aria-label={task?"Close editor":"Close planner"}>
@@ -4067,19 +4297,21 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
           <div className="sb-sub" style={{marginTop:0}}>Plan a piece of content. The team adds the deliverable links later, when it's ready for QA.</div>
           <section className="sb-sec">
           <div className="sb-shead sb-sechead"><h2><DocumentTextIcon className="hi" aria-hidden="true"/>Content</h2></div>
-          <div className="sb-field"><label>Content title<span className="sb-req" aria-hidden="true">*</span></label>
-            <input value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Sunday welcome reel" /></div>
+          <div className="sb-field"><label htmlFor="pc-title">Content title<span className="sb-req" aria-hidden="true">*</span></label>
+            <input id="pc-title" name="title" required value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Sunday welcome reel" /></div>
           <div className="sb-formrow">
-            <div className="sb-field"><label>Type<span className="sb-req" aria-hidden="true">*</span></label>
-              <select value={f.type} onChange={e=>setType(e.target.value)}>
+            <div className="sb-field"><label htmlFor="pc-type">Type<span className="sb-req" aria-hidden="true">*</span></label>
+              <select id="pc-type" name="type" value={f.type} onChange={e=>setType(e.target.value)}>
                 <option value="" disabled>Select content type</option>
                 {TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
-            <div className="sb-field"><label>Location{isShoot && <span className="sb-req" aria-hidden="true">*</span>}</label>
-              <select value={f.location} disabled={!isShoot} onChange={e=>set("location",e.target.value)} title={!isShoot?"Location applies to shoot-based content only":undefined}>
-                <option value="">Select location</option><option>479</option><option>828</option><option>Both</option></select></div>
+            {/* Location applies to shoot-based content only — revealed when relevant,
+                not shown as a permanently-disabled field cluttering the form. */}
+            {isShoot && <div className="sb-field"><label htmlFor="pc-location">Location<span className="sb-req" aria-hidden="true">*</span></label>
+              <select id="pc-location" name="location" value={f.location} onChange={e=>set("location",e.target.value)}>
+                <option value="">Select location</option><option>479</option><option>828</option><option>Both</option></select></div>}
           </div>
-          <div className="sb-field"><label>Owner: who brings the idea / leads<span className="sb-req" aria-hidden="true">*</span></label>
-            <select value={f.owner||""} onChange={e=>set("owner",e.target.value)}>
+          <div className="sb-field"><label htmlFor="pc-owner">Owner: who brings the idea / leads<span className="sb-req" aria-hidden="true">*</span></label>
+            <select id="pc-owner" name="owner" value={f.owner||""} onChange={e=>set("owner",e.target.value)}>
               <option value="" disabled>Select owner</option>
               <option value="Pending">Pending: unassigned</option>
               {ownerOptions.map(u=><option key={u.id}>{u.name}</option>)}</select>
@@ -4088,23 +4320,23 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
               return m
                 ? <button type="button" className="link" style={{marginTop:6}}
                     onClick={()=>{ set("owner", m.name); set("ownerSuggested",""); }}>
-                    💡 From the sheet this was “{f.ownerSuggested}”. Assign {m.name}?</button>
+                    <LightBulbIcon className="hi hi-sm" aria-hidden="true"/> From the sheet this was “{f.ownerSuggested}”. Assign {m.name}?</button>
                 : <div className="sb-sub" style={{marginTop:6}}>From the sheet: “{f.ownerSuggested}” (no matching account yet)</div>;
             })()}
           </div>
-          <div className="sb-field"><label>Brief &amp; Notes</label>
-            <textarea rows={4} value={f.brief||""} onChange={e=>set("brief",e.target.value)}
+          <div className="sb-field"><label htmlFor="pc-brief">Brief &amp; Notes</label>
+            <textarea id="pc-brief" name="brief" rows={4} value={f.brief||""} onChange={e=>set("brief",e.target.value)}
               placeholder="Objectives, key message, references, notes, links, or anything the team should know." /></div>
           <div className="sb-formrow">
             {/* `min` steers the native picker; dateIssues() is the real gate,
-                and it never blocks a past date that was already saved. */}
-            <div className="sb-field"><label>Shoot date{isShoot && <span className="sb-req" aria-hidden="true">*</span>}</label>
-              <input type="date" value={f.shootDate||""} disabled={!isShoot} min={minShoot}
+                and it never blocks a past date that was already saved. Shoot date
+                is shoot-only, so it appears next to Post date only when relevant. */}
+            {isShoot && <div className="sb-field"><label htmlFor="pc-shoot">Shoot date<span className="sb-req" aria-hidden="true">*</span></label>
+              <input id="pc-shoot" name="shootDate" type="date" value={f.shootDate||""} min={minShoot}
                 aria-invalid={!!dateMsg || undefined}
-                onChange={e=>set("shootDate",e.target.value)}
-                title={!isShoot?"Shoot date applies to shoot-based content only":undefined} /></div>
-            <div className="sb-field"><label>Post date<span className="sb-req" aria-hidden="true">*</span></label>
-              <input type="date" value={f.postDate} min={minPost}
+                onChange={e=>set("shootDate",e.target.value)} /></div>}
+            <div className="sb-field"><label htmlFor="pc-post">Post date<span className="sb-req" aria-hidden="true">*</span></label>
+              <input id="pc-post" name="postDate" type="date" value={f.postDate} min={minPost}
                 aria-invalid={!!dateMsg || undefined}
                 aria-describedby={dateMsg ? "sb-dateerr" : undefined}
                 onChange={e=>set("postDate",e.target.value)} /></div>
@@ -4113,14 +4345,27 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
               so the conflict is reported the moment it exists, not at save. */}
           {dateMsg && <div className="sb-fielderr" id="sb-dateerr" role="alert"
             style={{marginTop:-4,marginBottom:13}}>{dateMsg}</div>}
-          <div className="sb-field" style={{maxWidth:200}}><label>Priority</label>
-            <select value={f.priority||"Medium"} onChange={e=>set("priority",e.target.value)}>{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></div>
-          <div className="sb-field"><label>Related event (optional)</label>
-            <input value={f.relatedEvent} onChange={e=>set("relatedEvent",e.target.value)} placeholder="e.g. Easter Service" /></div>
-          <div className="sb-field" style={{marginBottom:0}}><label>Reference link (optional)</label>
-            <UrlInput value={f.link} ariaLabel="Reference link"
-              placeholder="https://…  (idea / inspiration / reference)"
-              onChange={v=>set("link",v)} /></div>
+          {/* Advanced/optional inputs are tucked behind a disclosure so the initial
+              form is just the essentials. Collapsing never discards entries — the
+              values live in form state (`f`), not in the DOM. Priority defaults to
+              Medium; the summary reflects a non-default choice so it's not hidden. */}
+          <details className="sb-moreblock">
+            <summary className="sb-more-summary">
+              <span>More details</span>
+              <span className="sb-more-hint">Priority, related event, reference link</span>
+              <ChevronDownIcon className="hi hi-sm sb-more-chev" aria-hidden="true"/>
+            </summary>
+            <div className="sb-more-body">
+              <div className="sb-field" style={{maxWidth:200}}><label htmlFor="pc-priority">Priority</label>
+                <select id="pc-priority" name="priority" value={f.priority||"Medium"} onChange={e=>set("priority",e.target.value)}>{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></div>
+              <div className="sb-field"><label htmlFor="pc-event">Related event (optional)</label>
+                <input id="pc-event" name="relatedEvent" value={f.relatedEvent} onChange={e=>set("relatedEvent",e.target.value)} placeholder="e.g. Easter Service" /></div>
+              <div className="sb-field" style={{marginBottom:0}}><label htmlFor="pc-link">Reference link (optional)</label>
+                <UrlInput id="pc-link" value={f.link} ariaLabel="Reference link"
+                  placeholder="https://…  (idea / inspiration / reference)"
+                  onChange={v=>set("link",v)} /></div>
+            </div>
+          </details>
           </section>
 
           <section className="sb-sec">
@@ -4252,8 +4497,8 @@ function AddCrew({ users, allTasks, onAdd }) {
   );
   return (
     <div className="sb-addcrew-panel">
-      <div className="sb-field"><label>Who's joining?</label>
-        <select value={n} autoFocus onChange={e=>setN(e.target.value)}>
+      <div className="sb-field"><label htmlFor="crew-who">Who's joining?</label>
+        <select id="crew-who" value={n} autoFocus onChange={e=>setN(e.target.value)}>
           <option value="" disabled>Select team member</option>
           {assignable.map(u=><option key={u.id}>{u.name}</option>)}</select></div>
       {/* Consequence of this choice, stated before it is made — a nudge, not a
@@ -4263,8 +4508,8 @@ function AddCrew({ users, allTasks, onAdd }) {
           <span className={"sb-wlbadge tone-"+pickedLoad.band.tone}><i className="sb-wl-dot" aria-hidden="true"/>{pickedLoad.band.label}</span>}
         <span>{picked.name.split(" ")[0]} · {pickedLoad.detail}</span>
       </div>}
-      {n && <div className="sb-field" style={{marginTop:10}}><label>What's their responsibility?</label>
-        <select value={r} onChange={e=>setR(e.target.value)}>
+      {n && <div className="sb-field" style={{marginTop:10}}><label htmlFor="crew-resp">What's their responsibility?</label>
+        <select id="crew-resp" value={r} onChange={e=>setR(e.target.value)}>
           <option value="" disabled>Select responsibility</option>
           {CREW_ROLES.map(x=><option key={x} value={x}>{roleLabel(x)}</option>)}</select></div>}
       {isOther && <input value={label} onChange={e=>setLabel(e.target.value)} className="sb-addcrew-label"
@@ -4324,19 +4569,19 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
   return (
     <Portal>
     <div className="sb-scrim" onClick={requestClose}>
-      <div className="sb-sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sb-sheet" onClick={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label={isPending?`Approve ${user.name}`:`Edit ${user.name}`}>
         <div className="hd"><b className="sb-serif" style={{fontSize:18}}>{isPending?"Approve "+user.name:"Edit "+user.name}</b>
-          <button className="sb-x" onClick={requestClose}><XMarkIcon className="hi" aria-hidden="true" /></button></div>
+          <button className="sb-x" onClick={requestClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true" /></button></div>
         <div className="bd">
           {isPending && <div className="sb-banner">Set their skills and location, then approve to let them in.</div>}
 
-          <div className="sb-field"><label>Name<span className="sb-req" aria-hidden="true">*</span></label>
-            <input value={f.name} onChange={e=>set("name",e.target.value)} /></div>
-          <div className="sb-field"><label>Email (login)</label>
-            <input value={user.email} disabled style={{opacity:.7}} /></div>
+          <div className="sb-field"><label htmlFor="ue-name">Name<span className="sb-req" aria-hidden="true">*</span></label>
+            <input id="ue-name" autoComplete="name" value={f.name} onChange={e=>set("name",e.target.value)} /></div>
+          <div className="sb-field"><label htmlFor="ue-email">Email (login)</label>
+            <input id="ue-email" value={user.email} disabled style={{opacity:.7}} /></div>
 
-          <div className="sb-field"><label>Access level</label>
-            <select value={f.role} onChange={e=>set("role",e.target.value)}>
+          <div className="sb-field"><label htmlFor="ue-role">Access level</label>
+            <select id="ue-role" value={f.role} onChange={e=>set("role",e.target.value)}>
               <option value="member">Member: can view all tasks</option>
               <option value="admin">Admin: manages the application</option></select>
             {f.role==="admin" && !f.qa && (
@@ -4350,7 +4595,7 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
           {/* Admin and QA are SEPARATE capability axes. Admin manages the app; QA
               reviewer grants content-review (Approve / Request changes) authority.
               Selecting Admin alone never implies approval authority. */}
-          <div className="sb-field"><label>Roles &amp; permissions</label>
+          <div className="sb-field" role="group" aria-labelledby="ue-roles-lbl"><span className="sb-fieldlabel" id="ue-roles-lbl">Roles &amp; permissions</span>
             <Toggle label="QA reviewer: grants content-review authority (Approve / Request changes) — not production crew" v={f.qa} on={()=>setQa(!f.qa)} />
             {!qaMode && <>
               <Toggle label="Department lead: leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
@@ -4371,27 +4616,29 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
               </div>
             </div>
           ) : (<>
-          <div className="sb-field"><label>Departments <span className="sb-optional">(one or more)</span></label>
-            <div className="sb-seg" style={{flexWrap:"wrap"}}>
+          <div className="sb-field"><span className="sb-fieldlabel" id="ue-dept-lbl">Departments <span className="sb-optional">(one or more)</span></span>
+            <div className="sb-seg" style={{flexWrap:"wrap"}} role="group" aria-labelledby="ue-dept-lbl">
               {DEPARTMENTS.map(d => <button key={d} type="button"
                 className={"sb-segbtn"+(f.departments.includes(d)?" on":"")}
                 aria-pressed={f.departments.includes(d)} onClick={()=>toggleDept(d)}>{d}</button>)}</div></div>
 
-          <div className="sb-field"><label>Skills (what they can do)<span className="sb-req" aria-hidden="true">*</span></label>
-            <div className="sb-seg" style={{flexWrap:"wrap"}}>
-              {SK.map(s=>(<button key={s} className={"sb-segbtn"+(f.skills.includes(s)?" on":"")}
+          <div className="sb-field"><span className="sb-fieldlabel" id="ue-skills-lbl">Skills (what they can do)<span className="sb-req" aria-hidden="true">*</span></span>
+            <div className="sb-seg" style={{flexWrap:"wrap"}} role="group" aria-labelledby="ue-skills-lbl">
+              {SK.map(s=>(<button key={s} type="button" aria-pressed={f.skills.includes(s)}
+                className={"sb-segbtn"+(f.skills.includes(s)?" on":"")}
                 onClick={()=>toggleSkill(s)}>{roleLabel(s)}</button>))}</div></div>
 
-          <div className="sb-field"><label>Service location<span className="sb-req" aria-hidden="true">*</span></label>
-            <div className="sb-seg">{["479","828"].map(l=>(
-              <button key={l} className={"sb-segbtn"+(f.location.includes(l)?" on":"")} onClick={()=>toggleLoc(l)}>{l}</button>))}</div></div>
+          <div className="sb-field"><span className="sb-fieldlabel" id="ue-loc-lbl">Service location<span className="sb-req" aria-hidden="true">*</span></span>
+            <div className="sb-seg" role="group" aria-labelledby="ue-loc-lbl">{["479","828"].map(l=>(
+              <button key={l} type="button" aria-pressed={f.location.includes(l)}
+                className={"sb-segbtn"+(f.location.includes(l)?" on":"")} onClick={()=>toggleLoc(l)}>{l}</button>))}</div></div>
 
-          <div className="sb-field"><label>Availability</label>
+          <div className="sb-field"><span className="sb-fieldlabel">Availability</span>
             <Toggle label="Available for assignment" v={f.available} on={()=>set("available",!f.available)} />
             {!f.available && <div className="sb-sub" style={{marginTop:4}}>Excluded from auto-assignment and can't be manually assigned until turned back on.</div>}
           </div>
 
-          <div className="sb-field"><label>Special handling</label>
+          <div className="sb-field"><span className="sb-fieldlabel">Special handling</span>
             <Toggle label="Deprioritize: only assign if no one else free" v={f.deprioritize} on={()=>set("deprioritize",!f.deprioritize)} />
             <Toggle label="Coordinate only: can't shoot/edit after church" v={f.limited} on={()=>set("limited",!f.limited)} />
             <Toggle label="Manual schedule: confirm availability each time" v={f.manualSchedule} on={()=>set("manualSchedule",!f.manualSchedule)} />
@@ -4413,13 +4660,5 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
     </Portal>
   );
 }
-export function Toggle({ label, v, on }) {
-  return (
-    <button onClick={on} style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"none",border:"none",padding:"8px 0",textAlign:"left"}}>
-      <span style={{width:38,height:23,borderRadius:999,background:v?"var(--violet)":"var(--line)",position:"relative",flex:"none",transition:".15s"}}>
-        <span style={{position:"absolute",top:2,left:v?17:2,width:19,height:19,borderRadius:"50%",background:"#fff",transition:".15s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
-      </span>
-      <span style={{fontSize:13,color:"var(--ink)"}}>{label}</span>
-    </button>
-  );
-}
+/* Toggle / Switch / PasswordField now live in src/controls.jsx (firebase-free,
+   named CSS classes, real 44px targets) and are imported + re-exported above. */

@@ -80,3 +80,16 @@ test("re-invoking a completed op is an idempotent success", async () => {
   const again = await bulkAssignCore({ database: db, callerUid: "admin1", opId: "op4", assignments: [A("t1")] });
   assert.equal(again.alreadyDone, true);
 });
+
+test("a task trashed AFTER validation is skipped (reason: trashed), others still apply", async () => {
+  // Both pass validation (crew is valid). One is then trashed before apply.
+  await tasksCol().doc("live").set({ status: "Planned", support: [] });
+  await tasksCol().doc("gone").set({ status: "Planned", support: [], deletedAt: new Date() });
+  const r = await bulkAssignCore({ database: db, callerUid: "admin1", opId: "op5", assignments: [A("live"), A("gone")] });
+  assert.equal(r.applied, 1, "only the live task is assigned");
+  assert.equal(r.failed, 1);
+  assert.ok(r.failures.some((f) => f.taskId === "gone" && f.reason === "trashed"), "trashed task recorded as a skip");
+  // The trashed task's crew is untouched; the live one got the assignment.
+  assert.deepEqual((await getTask("gone")).support, []);
+  assert.deepEqual((await getTask("live")).support, [{ name: "Bo Crew", role: "shoot" }]);
+});

@@ -1,4 +1,5 @@
 /* Pure logic — no React, no Firebase. Easy to unit-test or reuse. */
+import { formatShortDate, enCount } from "./dateFormat.js";
 
 // The full 7-stage content workflow. A task's `status` is always one of these.
 // "Changes Requested" and "Ready to Post" are first-class statuses — they mark
@@ -282,10 +283,37 @@ export const emailFor = (name="") =>
 export const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
 export const addDays = (n) => { const d=today(); d.setDate(d.getDate()+n); return d; };
 export const iso = (d) => d.toISOString().slice(0,10);
-export const fmt = (s) => { if(!s) return "-"; const d=new Date(s+"T00:00:00");
-  return d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); };
+// Locale-aware month+day for a calendar-only date (delegates to the central Intl
+// layer; still local-midnight/calendar-safe). Keeps the "-" empty fallback.
+export const fmt = (s) => formatShortDate(s, { fallback: "-" });
 export const daysTo = (s) => { if(!s) return null; const d=new Date(s+"T00:00:00");
   return Math.round((d-today())/86400000); };
+
+/* ---- Trash (soft-delete) — the single source of truth for "is this content
+   deleted?" and the shared boundary that every normal surface filters through.
+   A trashed task keeps its real workflow status untouched, so restoring returns
+   the EXACT prior state; only `deletedAt` (+ who) mark it. Firebase-free + pure. */
+export const isDeleted = (t) => !!(t && t.deletedAt);
+// The ONE boundary all active surfaces use — Home, My Day, Workflow, My Work,
+// Team capacity/workload, Admin counts, Search, events, QA, auto-assign, reminders.
+export const visibleTasks = (tasks) => (tasks || []).filter((t) => !isDeleted(t));
+export const trashedTasks = (tasks) => (tasks || []).filter(isDeleted);
+// Only an admin may restore, and only a trashed task can be restored.
+export const canRestoreTask = (user, task) =>
+  !!(user && user.role === "admin" && isDeleted(task));
+// A compact, presentation-ready description of a trashed task for the Trash view.
+export function taskDeletionSummary(task) {
+  if (!isDeleted(task)) return null;
+  return {
+    id: task.id,
+    title: task._rawTitle || task.title || "(untitled)",
+    previousStatus: task.status || null,   // preserved — restore returns this exact state
+    owner: task.owner || null,
+    deletedAt: task.deletedAt || null,
+    deletedBy: task.deletedBy || null,
+    deletedByName: task.deletedByName || null,
+  };
+}
 
 /* ---- date validation ------------------------------------------------------
    Rules the planner enforces before a piece of content can be saved. Pure and
@@ -867,10 +895,10 @@ export function reviewMetrics(tasks) {
 export function reviewTiming(task) {
   const d = daysTo(task && task.postDate);
   if (d === null || d === undefined) return null;
-  if (d < 0) return { text: `${Math.abs(d)}d overdue`, tone: "overdue" };
+  if (d < 0) return { text: `${enCount(Math.abs(d), "day")} overdue`, tone: "overdue" };
   if (d === 0) return { text: "Due today", tone: "soon" };
   if (d === 1) return { text: "Due tomorrow", tone: "soon" };
-  if (d <= 3) return { text: `Due in ${d} days`, tone: "soon" };
+  if (d <= 3) return { text: `Due in ${enCount(d, "day")}`, tone: "soon" };
   return null;
 }
 
@@ -1226,13 +1254,18 @@ export function personLoad(user, tasks) {
 // Coarse capacity band (never a false-precise %). Driven by ACTIVE load only;
 // upcoming work is shown separately. Unavailable always wins.
 export function workloadBand(user, activePoints, capacity) {
-  if (!isAvailable(user)) return { key: "unavail", label: "Unavailable", tone: "neutral" };
-  if (!activePoints || activePoints <= 0) return { key: "available", label: "Available", tone: "green" };
+  // One capacity colour grammar (badge, meter, crew-load, summary all agree):
+  // Available/Unavailable = neutral · Light = cool blue · Balanced = green ·
+  // Busy = amber · Near capacity = red.
+  // `level` is the coarse 0-4 meter step; every consumer (badge, meter, crew-load,
+  // summary, a11y label) reads THIS object — the single capacity presentation model.
+  if (!isAvailable(user)) return { key: "unavail",  label: "Unavailable",   tone: "neutral", level: 0 };
+  if (!activePoints || activePoints <= 0) return { key: "available", label: "Available", tone: "neutral", level: 0 };
   const ratio = capacity > 0 ? activePoints / capacity : 1;
-  if (ratio <= 0.4) return { key: "light",    label: "Light",         tone: "green" };
-  if (ratio <= 0.7) return { key: "balanced", label: "Balanced",      tone: "blue" };
-  if (ratio <= 0.9) return { key: "busy",     label: "Busy",          tone: "amber" };
-  return { key: "high", label: "High workload", tone: "red" };
+  if (ratio <= 0.4) return { key: "light",    label: "Light",         tone: "blue",  level: 1 };
+  if (ratio <= 0.7) return { key: "balanced", label: "Balanced",      tone: "green", level: 2 };
+  if (ratio <= 0.9) return { key: "busy",     label: "Busy",          tone: "amber", level: 3 };
+  return { key: "high", label: "Near capacity", tone: "red", level: 4 };
 }
 
 // Human label for a responsibility, weight-tiered (heavy/standard/light).

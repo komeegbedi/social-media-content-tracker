@@ -60,6 +60,19 @@ test("posted tasks are preserved; active owner/crew are detached", async () => {
   assert.deepEqual((await get("crew")).support, []);
 });
 
+test("trashed tasks are preserved (skipped) during detachment, exactly like Posted history", async () => {
+  await tasksCol().doc("active").set({ owner: GONE, status: "In Progress", support: [] });
+  await tasksCol().doc("trashed").set({ owner: GONE, status: "In Progress", support: [{ name: GONE, role: "edit" }], deletedAt: new Date() });
+  const opRef = await newOp("optrash");
+
+  await detachTasks({ db, opRef, userName: GONE, mode: "unassign", resolvedTargetName: null });
+
+  assert.equal((await get("active")).owner, "Pending", "active task detached");
+  // The trashed task keeps the removed user as owner AND crew — its data is untouched.
+  assert.equal((await get("trashed")).owner, GONE);
+  assert.deepEqual((await get("trashed")).support, [{ name: GONE, role: "edit" }]);
+});
+
 test("more than 500 affected tasks are handled in bounded chunks", async () => {
   await seedOwned(900);
   const opRef = await newOp("op2");

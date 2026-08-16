@@ -154,7 +154,7 @@ test("reviewQueue: changes + recently-reviewed are separate secondary buckets", 
 
 test("reviewTiming: shown only when it helps (overdue / due soon), else null", () => {
   assert.equal(reviewTiming({ postDate: iso(-3) }).tone, "overdue");
-  assert.match(reviewTiming({ postDate: iso(-3) }).text, /3d overdue/);
+  assert.match(reviewTiming({ postDate: iso(-3) }).text, /3 days overdue/);   // enCount English plural
   assert.equal(reviewTiming({ postDate: iso(0) }).text, "Due today");
   assert.equal(reviewTiming({ postDate: iso(1) }).text, "Due tomorrow");
   assert.equal(reviewTiming({ postDate: iso(3) }).tone, "soon");

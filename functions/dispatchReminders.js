@@ -48,13 +48,15 @@ async function leadershipDigest(users, settings) {
 
   const tasks = (await db.collection("tasks").get()).docs.map((d) => ({ id: d.id, ...d.data() }));
   const today = localToday();
-  const active = tasks.filter((t) => t.status !== "Posted");
+  // Trashed tasks are inactive — they must not inflate ANY leadership count.
+  const live = tasks.filter((t) => !t.deletedAt);
+  const active = live.filter((t) => t.status !== "Posted");
   const counts = {
     overdue: active.filter((t) => t.postDate && t.postDate < today).length,
     blocked: active.filter((t) => t.blockedOn).length,
     noOwner: active.filter((t) => !t.owner || t.owner === "Pending").length,
     noCrew: active.filter((t) => !t.support || !t.support.length).length,
-    review: tasks.filter((t) => t.status === "In Review").length,
+    review: live.filter((t) => t.status === "In Review").length,
     pendingUsers: users.filter((u) => u.status === "pending").length,
   };
   const bits = [];
@@ -96,8 +98,10 @@ async function runDispatch() {
     try {
       const taskSnap = await db.doc(`tasks/${inst.taskId}`).get();
       const task = taskSnap.exists ? taskSnap.data() : null;
-      // Never remind on completed/archived tasks.
-      if (!task || task.status === "Posted") {
+      // Re-read at send time and never remind on a missing, trashed, or completed
+      // task. A trashed task is inactive: no in-app, no push, no email digest item
+      // (the digest is only enqueued further down, after this skip).
+      if (!task || task.deletedAt || task.status === "Posted") {
         await snap.ref.update({ status: "skipped", processedAt: FieldValue.serverTimestamp() });
         skipped++; continue;
       }
