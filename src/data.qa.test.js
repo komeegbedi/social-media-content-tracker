@@ -8,6 +8,8 @@ import {
   autoAssign, searchPeople, reviewMetrics, reviewQueue, reviewTiming,
   searchTasks, qaTaskCapabilities, isReviewableState,
   REVISION_MAX, clampRevision, canSendRevision, revisionCharState, hasUnsentRevision, approveGate,
+  canMakeReviewDecision, canAdminOverride, isActiveUser,
+  latestChangeRequest, ADMIN_OVERRIDE_NO_INSTRUCTIONS,
 } from "./data.js";
 
 // A local-midnight ISO date `off` days from today, so daysTo() returns exactly `off`.
@@ -152,7 +154,7 @@ test("reviewQueue: changes + recently-reviewed are separate secondary buckets", 
 
 test("reviewTiming: shown only when it helps (overdue / due soon), else null", () => {
   assert.equal(reviewTiming({ postDate: iso(-3) }).tone, "overdue");
-  assert.match(reviewTiming({ postDate: iso(-3) }).text, /3d overdue/);
+  assert.match(reviewTiming({ postDate: iso(-3) }).text, /3 days overdue/);   // enCount English plural
   assert.equal(reviewTiming({ postDate: iso(0) }).text, "Due today");
   assert.equal(reviewTiming({ postDate: iso(1) }).text, "Due tomorrow");
   assert.equal(reviewTiming({ postDate: iso(3) }).tone, "soon");
@@ -273,4 +275,96 @@ test("approveGate: sending blocks; a dirty draft confirms; otherwise approve", (
   assert.equal(approveGate({ dirty: true, sending: false }), "confirm-discard");
   assert.equal(approveGate({ dirty: false, sending: false }), "approve");
   assert.equal(approveGate({}), "approve");
+});
+
+/* ---- Admin vs QA are SEPARATE capability axes (the review-authority boundary) ---- */
+
+const member  = { qa: false, role: "member", status: "approved" };
+const adminOnly = { qa: false, role: "admin",  status: "approved" };
+const qaOnly  = { qa: true,  role: "member", status: "approved" };
+const adminQa = { qa: true,  role: "admin",  status: "approved" };
+const inReview = { status: "In Review" };
+
+test("canMakeReviewDecision matrix: only qa===true reviews (Admin does NOT inherit)", () => {
+  assert.equal(canMakeReviewDecision(member,    inReview), false, "Member: no");
+  assert.equal(canMakeReviewDecision(adminOnly, inReview), false, "Admin-only: no — admin ≠ QA");
+  assert.equal(canMakeReviewDecision(qaOnly,    inReview), true,  "QA-only: yes");
+  assert.equal(canMakeReviewDecision(adminQa,   inReview), true,  "Admin+QA: yes (because qa===true)");
+});
+
+test("canMakeReviewDecision requires the In Review status", () => {
+  for (const s of ["Planned", "In Progress", "Changes Requested", "Approved", "Ready to Post", "Posted"]) {
+    assert.equal(canMakeReviewDecision(qaOnly, { status: s }), false, `${s} is not reviewable`);
+    assert.equal(canMakeReviewDecision(adminQa, { status: s }), false, `${s} is not reviewable`);
+  }
+});
+
+test("canMakeReviewDecision requires an active, approved account", () => {
+  assert.equal(canMakeReviewDecision({ ...qaOnly, disabled: true }, inReview), false, "disabled reviewer denied");
+  assert.equal(canMakeReviewDecision({ qa: true, role: "member", status: "pending" }, inReview), false, "unapproved reviewer denied");
+  assert.equal(canMakeReviewDecision(null, inReview), false);
+  assert.equal(canMakeReviewDecision(qaOnly, null), false);
+});
+
+test("canAdminOverride: active admins only, independent of QA", () => {
+  assert.equal(canAdminOverride(adminOnly), true,  "Admin-only can override");
+  assert.equal(canAdminOverride(adminQa),   true,  "Admin+QA can override");
+  assert.equal(canAdminOverride(qaOnly),    false, "QA-only cannot override");
+  assert.equal(canAdminOverride(member),    false, "Member cannot override");
+  assert.equal(canAdminOverride({ ...adminOnly, disabled: true }), false, "disabled admin cannot override");
+});
+
+test("isActiveUser reflects the disabled kill switch", () => {
+  assert.equal(isActiveUser({ role: "admin" }), true);
+  assert.equal(isActiveUser({ role: "admin", disabled: true }), false);
+  assert.equal(isActiveUser(null), false);
+});
+
+/* ---- latestChangeRequest: creator-facing feedback never exposes an admin reason ---- */
+
+test("latestChangeRequest: normal QA feedback comes from changes_requested.note", () => {
+  const t = { activity: [{ type: "created" }, { type: "changes_requested", by: "Quinn QA", note: "Tighten the hook.", at: 5 }] };
+  const cr = latestChangeRequest(t);
+  assert.equal(cr.text, "Tighten the hook.");
+  assert.equal(cr.source, "qa");
+  assert.equal(cr.hasInstructions, true);
+});
+
+test("latestChangeRequest: a current override uses requestedChanges — NEVER its note/reason", () => {
+  const t = { activity: [{ type: "admin_override", to: "Changes Requested",
+    requestedChanges: "Shorten the opening to 3s.", note: "reviewer OOO", reason: "reviewer OOO", by: "Ada", at: 6 }] };
+  const cr = latestChangeRequest(t);
+  assert.equal(cr.text, "Shorten the opening to 3s.");
+  assert.equal(cr.source, "admin_override");
+  assert.equal(cr.hasInstructions, true);
+  assert.notEqual(cr.text, "reviewer OOO");
+});
+
+test("latestChangeRequest: a LEGACY override without requestedChanges never exposes the audit reason", () => {
+  const t = { activity: [{ type: "admin_override", to: "Changes Requested",
+    note: "SENSITIVE audit reason", reason: "SENSITIVE audit reason", by: "Ada", at: 3 }] };
+  const cr = latestChangeRequest(t);
+  assert.equal(cr.hasInstructions, false);
+  assert.equal(cr.text, ADMIN_OVERRIDE_NO_INSTRUCTIONS);
+  assert.ok(!cr.text.includes("SENSITIVE"), "audit reason must not leak");
+});
+
+test("latestChangeRequest: the newest applicable event wins", () => {
+  const t = { activity: [
+    { type: "admin_override", to: "Changes Requested", requestedChanges: "older override note", at: 1 },
+    { type: "changes_requested", note: "newest QA feedback", at: 9 },
+  ] };
+  assert.equal(latestChangeRequest(t).text, "newest QA feedback");
+  assert.equal(latestChangeRequest(t).source, "qa");
+});
+
+test("latestChangeRequest: an override to a non-Changes-Requested destination is not change feedback", () => {
+  const t = { activity: [{ type: "admin_override", to: "Approved", note: "approved via override", reason: "x", at: 4 }] };
+  assert.equal(latestChangeRequest(t), null);
+});
+
+test("latestChangeRequest: no applicable event → null", () => {
+  assert.equal(latestChangeRequest({ activity: [{ type: "created" }, { type: "started" }] }), null);
+  assert.equal(latestChangeRequest({}), null);
+  assert.equal(latestChangeRequest(null), null);
 });

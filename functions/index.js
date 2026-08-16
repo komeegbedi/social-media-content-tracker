@@ -18,3 +18,4 @@ exports.onFcmTokenWrite = require("./onFcmTokenWrite").onFcmTokenWrite;
 exports.sendTestEmail = require("./sendTestEmail").sendTestEmail;
 exports.removeUser = require("./removeUser").removeUser;
 exports.bulkAssign = require("./bulkAssign").bulkAssign;
+exports.adminOverrideStatus = require("./adminOverride").adminOverrideStatus;

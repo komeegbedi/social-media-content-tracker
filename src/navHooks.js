@@ -83,6 +83,22 @@ export function useNav() {
     openComposeNew: () => setSearch(buildComposeNew(location.search)),
     openComposeEdit: (id) => setSearch(buildComposeEdit(location.search, id)),
     openPanel: (name) => setSearch(buildPanel(location.search, name)),
+    /* Launcher → local modal: drop the ?panel query with REPLACE (never a Back
+       navigation), staying on the SAME pathname, so opening a local modal from a
+       panel launcher can't step history back onto an unrelated prior page. */
+    dismissPanel: () =>
+      navigate(
+        { pathname: location.pathname, search: withParams(location.search, { [PARAM.panel]: null }) },
+        { replace: true }
+      ),
+    /* Launcher → another URL panel: swap the panel ATOMICALLY with REPLACE, so the
+       new panel sits directly on the underlying page (Back/Close return there, and
+       the previous launcher panel is never resurrected). */
+    replacePanel: (name) =>
+      navigate(
+        { pathname: location.pathname, search: buildPanel(location.search, name) },
+        { replace: true }
+      ),
     // Dismiss an overlay by UNWINDING to its parent, never by pushing a fresh
     // parent on top (which created the Task↔Edit loop). See nav.js overlayClose.
     closeOverlay: () => {

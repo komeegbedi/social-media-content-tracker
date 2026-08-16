@@ -103,10 +103,55 @@ test("band is capacity-relative and only reflects ACTIVE load", () => {
   assert.equal(workloadBand({}, 5, 20).label, "Light");      // 25%
   assert.equal(workloadBand({}, 12, 20).label, "Balanced");  // 60%
   assert.equal(workloadBand({}, 16, 20).label, "Busy");      // 80%
-  assert.equal(workloadBand({}, 19, 20).label, "High workload"); // 95%
+  assert.equal(workloadBand({}, 19, 20).label, "Near capacity"); // 95%
   // Same 5 points, tighter capacity -> higher band (25% -> 50%).
   assert.equal(workloadBand({}, 5, 20).label, "Light");
   assert.equal(workloadBand({ limited: true }, 5, 10).label, "Balanced");
+});
+
+/* The single capacity presentation model: workloadBand owns key/label/tone/level
+   and every consumer reads it. These lock the grammar and the exact thresholds. */
+test("capacity model: unavailable always overrides load", () => {
+  for (const pts of [0, 5, 12, 19, 40]) {
+    const b = workloadBand({ available: false }, pts, 20);
+    assert.equal(b.key, "unavail"); assert.equal(b.tone, "neutral"); assert.equal(b.level, 0);
+  }
+});
+test("capacity model: zero (or missing) load is Available/neutral", () => {
+  assert.equal(workloadBand({}, 0, 20).key, "available");
+  assert.equal(workloadBand({}, undefined, 20).key, "available");
+  assert.equal(workloadBand({}, 0, 20).tone, "neutral");
+});
+test("capacity model: threshold boundaries (just below / at / just above)", () => {
+  const cap = 100;
+  const cases = [
+    [1, "light"], [40, "light"], [41, "balanced"],    // 40% boundary
+    [70, "balanced"], [71, "busy"],                    // 70% boundary
+    [90, "busy"], [91, "high"],                        // 90% boundary
+  ];
+  for (const [pts, key] of cases) assert.equal(workloadBand({}, pts, cap).key, key, `${pts}/${cap} -> ${key}`);
+});
+test("capacity model: tone + level are consistent per key", () => {
+  const expect = {
+    unavail: ["neutral", 0], available: ["neutral", 0], light: ["blue", 1],
+    balanced: ["green", 2], busy: ["amber", 3], high: ["red", 4],
+  };
+  const samples = [
+    workloadBand({ available: false }, 5, 20), workloadBand({}, 0, 20),
+    workloadBand({}, 20, 100), workloadBand({}, 60, 100),
+    workloadBand({}, 85, 100), workloadBand({}, 99, 100),
+  ];
+  for (const b of samples) {
+    const [tone, level] = expect[b.key];
+    assert.equal(b.tone, tone, `${b.key} tone`); assert.equal(b.level, level, `${b.key} level`);
+  }
+});
+test("capacity model: high state label is the single 'Near capacity'", () => {
+  assert.equal(workloadBand({}, 99, 100).label, "Near capacity");
+});
+test("capacity model: zero/invalid capacity does not divide-by-zero", () => {
+  const b = workloadBand({}, 5, 0);   // capacity 0 -> ratio treated as full
+  assert.equal(b.key, "high"); assert.ok(Number.isFinite(b.level));
 });
 
 test("staleFlags surface out-of-date statuses (never auto-changes them)", () => {

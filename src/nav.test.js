@@ -248,3 +248,44 @@ test("the leadership DIGEST still routes to the follow-up list, not People", () 
     notificationDestination({ type: "leadership", body: "4 overdue · 1 blocked" }),
     { pathname: "/workflow", search: "?filter=attention" });
 });
+
+/* Profile-menu launcher URL semantics (P0-A). The App wires these exact pure
+   transitions: replacePanel(name) = openPanel() swap; dismissPanel() =
+   withParams(panel:null). Both must be atomic (one panel) and preserve other
+   query params, so no launcher can strand a stale ?panel or drop a filter. */
+test("launcher: swapping one panel for another is atomic (profile -> notifications)", () => {
+  const next = openPanel("?panel=profile", "notifications");
+  const ov = parseOverlay(next);
+  assert.equal(ov.panel, "notifications");
+  assert.ok(!/panel=profile/.test(next), `stale profile panel remained: ${next}`);
+});
+
+test("launcher: dismissPanel drops ONLY the panel and keeps other params", () => {
+  // from Admin Content with a profile panel open
+  const dropped = withParams("?section=content&panel=profile", { [PARAM.panel]: null });
+  const ov = parseOverlay(dropped);
+  assert.equal(ov.panel, null, `panel should be gone: ${dropped}`);
+  assert.ok(/section=content/.test(dropped), `section filter must survive: ${dropped}`);
+});
+
+test("launcher: dismissPanel on a bare profile panel yields no query", () => {
+  const dropped = withParams("?panel=profile", { [PARAM.panel]: null });
+  assert.equal(parseOverlay(dropped).panel, null);
+  assert.ok(!/panel=/.test(dropped), `no panel param should remain: "${dropped}"`);
+});
+
+test("launcher: closing a swapped notifications panel returns to the page, not the drawer", () => {
+  // notifications sitting on the underlying page (profile was REPLACED, not stacked)
+  const action = overlayClose({ search: "?panel=notifications", canGoBack: true });
+  // whichever unwind it chooses, it must not resolve back to a profile panel
+  const resultSearch = action.type === "back" ? "" : action.search;
+  assert.ok(!/panel=profile/.test(resultSearch || ""), "must not resurrect the profile panel");
+});
+
+test("launcher: Settings from Notifications drops the panel, keeps pathname+params", () => {
+  // /team?panel=notifications → open Settings (local) → dismissPanel()
+  const dropped = withParams("?panel=notifications&section=content", { [PARAM.panel]: null });
+  assert.equal(parseOverlay(dropped).panel, null, `notifications panel must be gone: ${dropped}`);
+  assert.ok(/section=content/.test(dropped), "unrelated params preserved");
+  assert.ok(!/panel=notifications/.test(dropped), "no stale notifications panel");
+});

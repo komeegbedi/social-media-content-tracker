@@ -58,8 +58,19 @@ async function applyBulkAssign({ database, opRef, page = CHUNK, hooks = {} }) {
     const slice = assignments.slice(cursor, cursor + page);
     const results = await Promise.all(slice.map(async (a) => {
       try {
-        await database.collection("tasks").doc(a.taskId).update({ support: a.support, updatedAt: FieldValue.serverTimestamp() });
-        return { ok: true };
+        // Re-read the task INSIDE the write transaction, immediately before the
+        // update: a task trashed (or deleted) since validation must be skipped, not
+        // mutated. The skip is an explicit per-item failure so the op stays honest
+        // and continues applying the rest.
+        const skip = await database.runTransaction(async (tx) => {
+          const ref = database.collection("tasks").doc(a.taskId);
+          const snap = await tx.get(ref);
+          if (!snap.exists) return "missing";
+          if (snap.data().deletedAt) return "trashed";
+          tx.update(ref, { support: a.support, updatedAt: FieldValue.serverTimestamp() });
+          return null;
+        });
+        return skip ? { ok: false, taskId: a.taskId, reason: skip } : { ok: true };
       } catch (e) { return { ok: false, taskId: a.taskId, reason: (e && e.code) || "update-failed" }; }
     }));
     const applied = results.filter((r) => r.ok).length;

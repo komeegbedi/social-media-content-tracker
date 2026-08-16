@@ -55,7 +55,11 @@ test("happy path: tombstones, disables Auth, clears tokens, writes an immutable 
 
   const audit = await get("auditEvents/remove_t1");
   assert.equal(audit.type, "user_removed");
-  assert.equal(audit.reversible, true);
+  // Truthful lifecycle metadata (NOT a misleading `reversible: true`): the Auth
+  // account is preserved (disabled), but no product restore path exists.
+  assert.equal(audit.reversible, undefined, "the misleading `reversible` flag is gone");
+  assert.equal(audit.authAccountPreserved, true);
+  assert.equal(audit.restorationAvailable, false);
   assert.equal(audit.targetUid, "t1");
   assert.equal((await get("adminOps/remove_t1")).phase, "done");
 });

@@ -21,42 +21,113 @@ service cloud.firestore {
     function isApproved() {
       return hasProfile() && notDisabled() && (myDoc().status == 'approved' || myDoc().role == 'admin');
     }
+    // QA review authority is a SEPARATE axis from Admin. `qa == true` is the sole
+    // grant — an Admin does NOT inherit review authority. A user who is both may
+    // review because qa == true, not because they are an Admin. (Mirrors
+    // canMakeReviewDecision in src/data.js.)
     function isQA() {
-      return hasProfile() && (myDoc().qa == true || myDoc().role == 'admin');
+      return isApproved() && myDoc().get('qa', false) == true;
     }
+
+    // ---- Parameterized profile predicates (hot path) ----
+    // The task-UPDATE rule is the most complex in the ruleset. Calling myDoc()/
+    // isAdmin()/isApproved()/isQA() repeatedly across its branches re-runs the
+    // profile get() many times and blows the 1000-expression evaluation budget — so
+    // an assertFails could pass on exhaustion instead of on the intended policy.
+    // These `p*` helpers take the ALREADY-RESOLVED profile `p` (one get(), bound once
+    // in the allow rule) and read only fields — no further document lookups. Same
+    // semantics as isAdmin()/isApproved()/isQA(), just without the repeated get().
+    function pDisabled(p)   { return p.get('disabled', false) == true; }
+    function pIsAdmin(p)    { return p.role == 'admin' && !pDisabled(p); }
+    function pIsApproved(p) { return !pDisabled(p) && (p.status == 'approved' || p.role == 'admin'); }
+    function pIsQA(p)       { return pIsApproved(p) && p.get('qa', false) == true; }
 
     // ---- task workflow (the 7-stage state machine, mirrored from src/data.js) ----
     function taskStatuses() {
       return ['Planned', 'In Progress', 'In Review', 'Changes Requested',
               'Approved', 'Ready to Post', 'Posted'];
     }
-    // Is a proposed `from -> to` status change legal for THIS actor?
-    //   owner/admin   : Planned→In Progress, In Progress→In Review, Changes Requested→In Review
-    //   QA/admin      : In Review→Approved | Changes Requested   (the QA decision)
-    //   captions/admin: Approved→Ready to Post, Ready to Post→Posted
-    //   admin         : any valid status (manual correction)
-    // A no-op (from == to) is always allowed so members can edit other fields.
-    function transitionAllowed(from, to) {
-      let isOwner = resource.data.owner == myDoc().name;
-      let isCap = myDoc().get('captions', false) == true;
-      return from == to
-        || isAdmin()
-        || (isOwner && (
-              (from == 'Planned' && to == 'In Progress') ||
-              (from == 'In Progress' && to == 'In Review') ||
-              (from == 'Changes Requested' && to == 'In Review')))
-        || (isQA() && from == 'In Review' && (to == 'Approved' || to == 'Changes Requested'))
-        || (isCap && (
-              (from == 'Approved' && to == 'Ready to Post') ||
-              (from == 'Ready to Post' && to == 'Posted')));
+    // The QA REVIEW DECISION: the two transitions that constitute normal content
+    // review. These require qa == true and are NEVER granted by the Admin axis —
+    // an Admin reaches Approved from In Review only through the audited override
+    // callable (Admin SDK), producing an `admin_override` event, not a fake QA one.
+    function isQaDecision(from, to) {
+      return from == 'In Review' && (to == 'Approved' || to == 'Changes Requested');
     }
+    // The newly-appended activity entry (only meaningful when the log grew by one).
+    function grewByOne() {
+      return request.resource.data.get('activity', []).size()
+           == resource.data.get('activity', []).size() + 1;
+    }
+    // The last activity entry, or an empty map when the log is empty. Returning {}
+    // (instead of indexing a[-1], which THROWS on an empty list) keeps every caller
+    // throw-proof: their `.get(field, default)` reads simply fall back to defaults.
+    function newEntry() {
+      let a = request.resource.data.get('activity', []);
+      return a.size() > 0 ? a[a.size() - 1] : {'uid': '', 'type': ''};
+    }
+    // A QA decision must be HARD-attributed AND correctly typed: the appended entry
+    // carries the caller's own uid (no anonymous/impersonated review) and its event
+    // type matches the destination — an approval is recorded as exactly 'approved',
+    // a request-changes as 'changes_requested' (never mislabelled, e.g. as an override).
+    // `grew`/`entry` are computed ONCE by the caller (pNormalUpdateOk) and passed in,
+    // so the whole update decision evaluates grewByOne()/newEntry() a single time —
+    // keeping the eagerly-evaluated expression tree small.
+    function reviewDecisionAttributed(to, grew, entry) {
+      return grew
+        && entry.get('uid', '') == request.auth.uid
+        && entry.get('type', '') == (to == 'Approved' ? 'approved' : 'changes_requested');
+    }
+    // EVERY task write's audit-log append must be attributed to the caller (no forging
+    // another actor) AND must NOT be a client-authored admin_override (that event is
+    // produced ONLY by the server-side override callable). Combines the former
+    // activityAttributionOk + noClientOverrideEntry into one pass over `grew`/`entry`.
+    function auditAppendOk(grew, entry) {
+      return !grew
+        || (entry.get('uid', request.auth.uid) == request.auth.uid
+            && entry.get('type', '') != 'admin_override');
+    }
+    // Is a proposed `from -> to` status change legal for THIS actor via a DIRECT
+    // client write?
+    //   owner        : Planned→In Progress, In Progress→In Review, Changes Requested→In Review
+    //   QA (qa==true): In Review→Approved | Changes Requested   (the QA decision, attributed)
+    //   captions     : Approved→Ready to Post, Ready to Post→Posted
+    // An Admin drives the same NORMAL FORWARD steps as an owner-/caption-substitute
+    // (mirrors src/data.js workflowAction) — but this grants NO shortcut to the QA
+    // decision and NO arbitrary, backward, or lifecycle-bypassing jump. Therefore:
+    //   • the ONLY direct path into Approved / Changes Requested is In Review by a
+    //     qa===true actor with authenticated attribution (an Admin-only user can
+    //     never reach them directly, from any status);
+    //   • Ready to Post / Posted are reachable only from their immediate predecessor
+    //     (no Planned→Posted style bypass);
+    //   • every OTHER exceptional correction (backward moves, bypass jumps, an Admin
+    //     forcing a QA-decision status) MUST go through the server-authored, audited
+    //     adminOverrideStatus callable, which records an admin_override event.
+    // A no-op (from == to) is always allowed so members/admins can edit other fields.
+    // Takes the resolved profile `p` (no get() inside) — same policy as before.
+    function pTransitionAllowed(p, from, to, grew, entry) {
+      let ownerLike = resource.data.get('owner', '') == p.get('name', ' ') || pIsAdmin(p);
+      let capLike = p.get('captions', false) == true || pIsAdmin(p);
+      // Encode the step as "from>to" and test SET membership — one `in` check per
+      // role instead of a fan-out of paired comparisons, which keeps the eagerly-
+      // evaluated expression tree well under the emulator's budget.
+      let step = from + '>' + to;
+      return from == to
+        || (pIsQA(p) && isQaDecision(from, to) && reviewDecisionAttributed(to, grew, entry))
+        || (ownerLike && step in ['Planned>In Progress', 'In Progress>In Review', 'Changes Requested>In Review'])
+        || (capLike && step in ['Approved>Ready to Post', 'Ready to Post>Posted']);
+    }
+    // Attribution integrity for EVERY task write: when the audit log grows, the new
+    // entry's uid (when the client supplies one) must be the caller — no forging
+    // another actor into the history. Backward-compatible with older entries that
+    // carry no uid (they default to the caller and pass).
     // Integrity checks applied to EVERY task write (members AND admins):
     //  • status is a real status value;
     //  • the audit log is append-only — it can only grow, by at most one entry
     //    per write (no truncation, no wholesale forgery of history);
     //  • archivedAt only appears on a Posted task, and a non-admin can never
     //    clear one that's already set (no un-archiving to hide history).
-    function taskIntegrityOk() {
+    function pTaskIntegrityOk(p) {
       let oldAct = resource.data.get('activity', []);
       let newAct = request.resource.data.get('activity', []);
       let oldArch = resource.data.get('archivedAt', null);
@@ -66,7 +137,76 @@ service cloud.firestore {
         && newAct.size() >= oldAct.size()
         && newAct.size() <= oldAct.size() + 1
         && (newArch == null || request.resource.data.status == 'Posted')
-        && (isAdmin() || oldArch == null || newArch != null);
+        && (pIsAdmin(p) || oldArch == null || newArch != null);
+    }
+
+    // ---- Trash (soft-delete) invariants ----
+    // A task is trashed iff it carries a deletedAt marker. The status field is NEVER
+    // repurposed for deletion, so restore returns the exact prior workflow state.
+    function isTrashed(d) { return d.get('deletedAt', null) != null; }
+    // The ONLY keys the trash/restore transitions may touch.
+    function trashKeysOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['deletedAt', 'deletedBy', 'deletedByName', 'updatedAt']);
+    }
+    // active → trashed: an active admin, deletedAt == request.time, deletedBy == the
+    // caller, deletedByName is REQUIRED and must equal the caller's profile name (no
+    // rule-supplied default — a missing name is denied), and ONLY the marker keys
+    // change — so status and every business field stay exactly as they were.
+    // Every optional field is read via .get()/`in` so a MISSING marker yields an
+    // ordinary false (an explicit denial), never a "Property X is undefined"
+    // evaluation error. deletedByName is still REQUIRED (missing -> denied).
+    function pTrashTransitionOk(p) {
+      return pIsAdmin(p)
+        && trashKeysOnly()
+        && request.resource.data.get('deletedAt', null) == request.time
+        && request.resource.data.get('deletedBy', '') == request.auth.uid
+        && ('deletedByName' in request.resource.data)
+        && request.resource.data.get('deletedByName', '') == p.name
+        && request.resource.data.status == resource.data.status;
+    }
+    // trashed → active (restore): an active admin removes ALL markers together and
+    // changes nothing else. Partial clearing (leaving deletedBy/deletedByName) is denied.
+    function pRestoreTransitionOk(p) {
+      return pIsAdmin(p)
+        && trashKeysOnly()
+        && !('deletedAt' in request.resource.data)
+        && !('deletedBy' in request.resource.data)
+        && !('deletedByName' in request.resource.data)
+        && request.resource.data.status == resource.data.status;
+    }
+    // A NORMAL (active → active) update: base integrity + attribution + no forged
+    // override, a role-legal status transition, and — for non-admins — only the
+    // collaboration allowlist. The status transition is evaluated ONCE and shared.
+    function pNormalUpdateOk(p) {
+      // Compute the audit-append facts ONCE and thread them through both the
+      // attribution check and the QA-decision check — a single grewByOne()/newEntry()
+      // evaluation for the whole decision (keeps the eager expression tree small).
+      let grew = grewByOne();
+      let entry = newEntry();
+      return pTaskIntegrityOk(p)
+        && auditAppendOk(grew, entry)
+        && pTransitionAllowed(p, resource.data.status, request.resource.data.status, grew, entry)
+        && (pIsAdmin(p)
+            || (pIsApproved(p)
+                && request.resource.data.diff(resource.data).affectedKeys()
+                     .hasOnly(['status', 'comments', 'reactions', 'updatedAt', 'archivedAt',
+                               'blockedOn', 'links', 'activity', 'caption', 'postLink'])));
+    }
+    // THE task-update decision, structured around mutually-exclusive Trash-state
+    // transitions so exactly ONE branch's predicate evaluates (the others fail their
+    // cheap state guard and short-circuit — no wasted profile lookups, no evaluator
+    // exhaustion). `p` is the caller's profile, resolved ONCE by the allow rule.
+    //   active  → trashed : Trash transition
+    //   trashed → active  : Restore transition
+    //   active  → active  : normal update
+    //   trashed → trashed : (no matching branch) → DENIED
+    function taskUpdateDecision(p) {
+      let wasTrashed = isTrashed(resource.data);
+      let nowTrashed = isTrashed(request.resource.data);
+      return (!wasTrashed && nowTrashed  && pTrashTransitionOk(p))
+          || (wasTrashed  && !nowTrashed && pRestoreTransitionOk(p))
+          || (!wasTrashed && !nowTrashed && pNormalUpdateOk(p));
     }
 
     match /users/{uid} {
@@ -163,7 +303,12 @@ service cloud.firestore {
     // active series (Home renders occurrences); only admins create/edit.
     match /eventSeries/{id} {
       allow read: if isApproved();
-      allow create, update, delete: if isAdmin();
+      // Admins create + edit series (archive/unarchive is an `archived` flag update).
+      // HARD DELETE IS DENIED for every client: a recurring series is retired by
+      // ARCHIVING it (reversible), never erased — so linked history/occurrences and
+      // the restore path are never lost to a stray client delete.
+      allow create, update: if isAdmin();
+      allow delete: if false;
     }
 
     // App-wide settings (e.g. default reminder schedule, leadership roles).
@@ -173,31 +318,55 @@ service cloud.firestore {
     }
 
     match /tasks/{taskId} {
+      // READ-ACCESS POLICY — Option A: Trash is NOT confidential.
+      // This is a shared internal board: every approved member already reads every
+      // task, and a trashed task is the same content that was visible moments ago —
+      // there is no data-sensitivity reason to hide it at the data layer. So members
+      // retain read access to trashed tasks; the app hides Trash OPERATIONALLY (the
+      // shared activeTasks boundary + a non-admin "unavailable" dead-end). That
+      // dead-end is a UX affordance, NOT a security boundary — it is deliberately not
+      // described to users as "unauthorized". Admin-only confidentiality (Option B)
+      // would need an explicit queryable `trashed` field + a migration of every
+      // existing task; it is intentionally NOT adopted here.
       allow read: if isApproved();
 
-      // Only admins create or delete tasks.
-      allow create, delete: if isAdmin();
+      // Admins create tasks. A task can never be BORN trashed — client-supplied
+      // Trash metadata is rejected at creation.
+      allow create: if isAdmin()
+        && request.resource.data.get('deletedAt', null) == null
+        && !('deletedBy' in request.resource.data)
+        && !('deletedByName' in request.resource.data);
+      // HARD DELETE IS DENIED for everyone, including admins. Removal is a reversible
+      // soft-delete (the Trash transition below); permanent deletion is out of scope
+      // and has no client path — so a stale/compromised client can never erase content.
+      allow delete: if false;
 
-      // Every write must pass base integrity (valid status, append-only audit
-      // log, archivedAt semantics). On top of that:
-      //  • admins may change anything else;
-      //  • approved members may touch only collaboration fields, and any status
-      //    change must be a role-legal transition (owner/QA/captions matrix).
-      allow update: if taskIntegrityOk() && (
-        isAdmin()
-        || (isApproved()
-            && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['status', 'comments', 'reactions', 'updatedAt', 'archivedAt',
-                           'blockedOn', 'links', 'activity', 'caption', 'postLink'])
-            && transitionAllowed(resource.data.status, request.resource.data.status)));
+      // Updates are decided by taskUpdateDecision(), structured around mutually-
+      // exclusive Trash-state transitions (active->trashed, trashed->active,
+      // active->active); trashed->trashed has no matching branch and is denied. The
+      // caller's profile is resolved ONCE here and threaded in, so the whole decision
+      // stays well under the evaluator's expression budget — no assertFails can pass
+      // by exhaustion instead of by an explicit false policy result.
+      allow update: if signedIn() && hasProfile() && taskUpdateDecision(myDoc());
 
       // Comments as a subcollection (v1.1) — the canonical comment store. Approved
       // members read all and may post their OWN (uid must match the caller;
       // display name is trusted only for rendering). Strict schema + size limits;
       // edits/removal are admin-only. Feeds the server-side @mention trigger.
       match /comments/{commentId} {
+        // The parent task must EXIST and be ACTIVE for any comment WRITE. While a task
+        // is in Trash (or missing), ALL comment collaboration stops — creation AND
+        // admin moderation (edit/delete) — so Trash freezes the whole thread;
+        // moderation resumes on Restore. Reads are unaffected. The exists() guard
+        // means a missing parent returns an ordinary `false`, never a `null.data`
+        // evaluation error.
+        function parentTaskActive() {
+          return exists(/databases/$(database)/documents/tasks/$(taskId))
+            && get(/databases/$(database)/documents/tasks/$(taskId)).data.get('deletedAt', null) == null;
+        }
         allow read: if isApproved();
         allow create: if isApproved()
+          && parentTaskActive()
           && request.resource.data.uid == request.auth.uid
           && request.resource.data.keys().hasOnly(['uid', 'who', 'txt', 'tm', 'mentions'])
           && request.resource.data.txt is string
@@ -206,7 +375,7 @@ service cloud.firestore {
           && request.resource.data.tm == request.time
           && request.resource.data.get('mentions', []) is list
           && request.resource.data.get('mentions', []).size() <= 20;
-        allow update, delete: if isAdmin();
+        allow update, delete: if isAdmin() && parentTaskActive();
       }
     }
 

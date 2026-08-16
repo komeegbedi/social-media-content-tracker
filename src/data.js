@@ -1,4 +1,5 @@
 /* Pure logic — no React, no Firebase. Easy to unit-test or reuse. */
+import { formatShortDate, enCount } from "./dateFormat.js";
 
 // The full 7-stage content workflow. A task's `status` is always one of these.
 // "Changes Requested" and "Ready to Post" are first-class statuses — they mark
@@ -181,7 +182,10 @@ export const QA_STATUSES = ["In Review", "Approved", "Posted"];
 
 // ---- activity timeline ----
 // One entry per meaningful event on a task. `at` is a millisecond timestamp.
-export const activityEntry = (type, by, note = "") => ({ type, by, at: Date.now(), note });
+// Activity entry. `meta` carries trustworthy attribution (uid + capability at the
+// time) alongside the display name; older entries without it still render fine.
+export const activityEntry = (type, by, note = "", meta = null) =>
+  ({ type, by, at: Date.now(), note, ...(meta && typeof meta === "object" ? meta : {}) });
 // Human label for an activity entry (approval history is just the QA subset).
 export function activityLabel(e) {
   switch (e.type) {
@@ -192,11 +196,53 @@ export function activityLabel(e) {
     case "changes_requested": return "Requested changes";
     case "ready": return "Marked ready to post";
     case "posted": return "Posted";
+    // Administrative override is deliberately NOT a QA decision — it reads as an
+    // admin correction in the timeline, never "Approved by a reviewer".
+    case "admin_override": return `Administrative override → ${e.to || e.note || "status changed"}`;
     case "status": return `Moved to ${e.note || "next stage"}`;
     case "assigned": return e.note || "Assignment changed";
     case "comment": return "Commented";
     default: return e.type;
   }
+}
+// True for administrative-override history entries (rendered distinctly).
+export const isAdminOverrideEvent = (e) => !!e && e.type === "admin_override";
+
+// Shown when an administrative override sent content back for revision but carries
+// no instructions (a legacy override predating requestedChanges) — we NEVER expose
+// the administrative audit reason to the creator.
+export const ADMIN_OVERRIDE_NO_INSTRUCTIONS =
+  "Changes were requested through an administrative correction. Contact an administrator for the revision details.";
+
+/* The newest creator-facing "changes requested" feedback for a task, resolved
+   SOURCE-FIRST so an administrative audit reason is never surfaced as revision
+   guidance:
+     - a QA `changes_requested` event → its `note`;
+     - an `admin_override` whose destination is Changes Requested → its
+       `requestedChanges` ONLY (never `note`/`reason`); a legacy override without
+       requestedChanges yields hasInstructions:false + a neutral fallback.
+   Scans newest-first; the newest applicable event wins. Returns null if none.
+   Shape: { text, source: "qa"|"admin_override", by, at, hasInstructions }. */
+export function latestChangeRequest(task) {
+  const acts = (task && task.activity) || [];
+  for (let i = acts.length - 1; i >= 0; i--) {
+    const e = acts[i];
+    if (!e) continue;
+    if (e.type === "changes_requested") {
+      const note = (typeof e.note === "string" ? e.note : "").trim();
+      return { text: note, source: "qa", by: e.by, at: e.at, hasInstructions: !!note };
+    }
+    if (e.type === "admin_override" && e.to === "Changes Requested") {
+      // ONLY requestedChanges is creator-facing — never note/reason.
+      const rc = (typeof e.requestedChanges === "string" ? e.requestedChanges : "").trim();
+      const has = !!rc;
+      return {
+        text: has ? rc : ADMIN_OVERRIDE_NO_INSTRUCTIONS,
+        source: "admin_override", by: e.by, at: e.at, hasInstructions: has,
+      };
+    }
+  }
+  return null;
 }
 export const isApprovalEvent = (e) =>
   ["qa_sent", "approved", "changes_requested", "ready", "started"].includes(e.type);
@@ -237,10 +283,37 @@ export const emailFor = (name="") =>
 export const today = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
 export const addDays = (n) => { const d=today(); d.setDate(d.getDate()+n); return d; };
 export const iso = (d) => d.toISOString().slice(0,10);
-export const fmt = (s) => { if(!s) return "-"; const d=new Date(s+"T00:00:00");
-  return d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); };
+// Locale-aware month+day for a calendar-only date (delegates to the central Intl
+// layer; still local-midnight/calendar-safe). Keeps the "-" empty fallback.
+export const fmt = (s) => formatShortDate(s, { fallback: "-" });
 export const daysTo = (s) => { if(!s) return null; const d=new Date(s+"T00:00:00");
   return Math.round((d-today())/86400000); };
+
+/* ---- Trash (soft-delete) — the single source of truth for "is this content
+   deleted?" and the shared boundary that every normal surface filters through.
+   A trashed task keeps its real workflow status untouched, so restoring returns
+   the EXACT prior state; only `deletedAt` (+ who) mark it. Firebase-free + pure. */
+export const isDeleted = (t) => !!(t && t.deletedAt);
+// The ONE boundary all active surfaces use — Home, My Day, Workflow, My Work,
+// Team capacity/workload, Admin counts, Search, events, QA, auto-assign, reminders.
+export const visibleTasks = (tasks) => (tasks || []).filter((t) => !isDeleted(t));
+export const trashedTasks = (tasks) => (tasks || []).filter(isDeleted);
+// Only an admin may restore, and only a trashed task can be restored.
+export const canRestoreTask = (user, task) =>
+  !!(user && user.role === "admin" && isDeleted(task));
+// A compact, presentation-ready description of a trashed task for the Trash view.
+export function taskDeletionSummary(task) {
+  if (!isDeleted(task)) return null;
+  return {
+    id: task.id,
+    title: task._rawTitle || task.title || "(untitled)",
+    previousStatus: task.status || null,   // preserved — restore returns this exact state
+    owner: task.owner || null,
+    deletedAt: task.deletedAt || null,
+    deletedBy: task.deletedBy || null,
+    deletedByName: task.deletedByName || null,
+  };
+}
 
 /* ---- date validation ------------------------------------------------------
    Rules the planner enforces before a piece of content can be saved. Pure and
@@ -822,10 +895,10 @@ export function reviewMetrics(tasks) {
 export function reviewTiming(task) {
   const d = daysTo(task && task.postDate);
   if (d === null || d === undefined) return null;
-  if (d < 0) return { text: `${Math.abs(d)}d overdue`, tone: "overdue" };
+  if (d < 0) return { text: `${enCount(Math.abs(d), "day")} overdue`, tone: "overdue" };
   if (d === 0) return { text: "Due today", tone: "soon" };
   if (d === 1) return { text: "Due tomorrow", tone: "soon" };
-  if (d <= 3) return { text: `Due in ${d} days`, tone: "soon" };
+  if (d <= 3) return { text: `Due in ${enCount(d, "day")}`, tone: "soon" };
   return null;
 }
 
@@ -1005,9 +1078,33 @@ export function userDepartments(user) {
 
 export const isApproved = (user) => !!(user && (user.status === "approved" || user.role === "admin"));
 
-// Is this a QA reviewer? `qa` is the authoret­ative permission flag (also gates
-// firestore.rules and the review notifications).
+// Active = not the disabled kill-switch. The `disabled` tombstone denies a user
+// everywhere even if their role/qa flags still say otherwise.
+export const isActiveUser = (user) => !!(user && user.disabled !== true);
+
+// Is this a QA reviewer? `qa` is the AUTHORITATIVE permission flag (also gates
+// firestore.rules and the review notifications). Admin does NOT imply QA.
 export const isQA = (user) => !!(user && user.qa === true);
+
+// Is this an application admin (governs the system)? Separate axis from QA.
+export const isAdminUser = (user) => !!(user && user.role === "admin" && isActiveUser(user));
+
+/* ── The review-authority boundary (Admin and QA are separate capability axes) ──
+   Admin governs the application; QA makes content-review decisions. An admin does
+   NOT inherit review authority — a user who is both may review because qa === true,
+   not because they are an admin. This predicate is the single source of truth for
+   the Approve / Request-changes controls AND is mirrored by firestore.rules; the UI
+   never gates review on `isAdmin`. */
+export function canMakeReviewDecision(user, task) {
+  return isActiveUser(user)                    // active (not disabled)
+    && isApproved(user)                        // approved (or admin) account
+    && user.qa === true                        // QA capability — NEVER admin-implied
+    && !!task && task.status === "In Review";  // only a reviewable status
+}
+
+// An administrative override is an exceptional, audited recovery action, available
+// ONLY to active admins and deliberately distinct from a QA review decision.
+export const canAdminOverride = (user) => isAdminUser(user);
 
 // Eligible to be staffed on production work. QA is excluded even when they are
 // also an admin — admin governs what you can MANAGE, QA governs the department
@@ -1157,13 +1254,18 @@ export function personLoad(user, tasks) {
 // Coarse capacity band (never a false-precise %). Driven by ACTIVE load only;
 // upcoming work is shown separately. Unavailable always wins.
 export function workloadBand(user, activePoints, capacity) {
-  if (!isAvailable(user)) return { key: "unavail", label: "Unavailable", tone: "neutral" };
-  if (!activePoints || activePoints <= 0) return { key: "available", label: "Available", tone: "green" };
+  // One capacity colour grammar (badge, meter, crew-load, summary all agree):
+  // Available/Unavailable = neutral · Light = cool blue · Balanced = green ·
+  // Busy = amber · Near capacity = red.
+  // `level` is the coarse 0-4 meter step; every consumer (badge, meter, crew-load,
+  // summary, a11y label) reads THIS object — the single capacity presentation model.
+  if (!isAvailable(user)) return { key: "unavail",  label: "Unavailable",   tone: "neutral", level: 0 };
+  if (!activePoints || activePoints <= 0) return { key: "available", label: "Available", tone: "neutral", level: 0 };
   const ratio = capacity > 0 ? activePoints / capacity : 1;
-  if (ratio <= 0.4) return { key: "light",    label: "Light",         tone: "green" };
-  if (ratio <= 0.7) return { key: "balanced", label: "Balanced",      tone: "blue" };
-  if (ratio <= 0.9) return { key: "busy",     label: "Busy",          tone: "amber" };
-  return { key: "high", label: "High workload", tone: "red" };
+  if (ratio <= 0.4) return { key: "light",    label: "Light",         tone: "blue",  level: 1 };
+  if (ratio <= 0.7) return { key: "balanced", label: "Balanced",      tone: "green", level: 2 };
+  if (ratio <= 0.9) return { key: "busy",     label: "Busy",          tone: "amber", level: 3 };
+  return { key: "high", label: "Near capacity", tone: "red", level: 4 };
 }
 
 // Human label for a responsibility, weight-tiered (heavy/standard/light).
