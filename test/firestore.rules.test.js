@@ -37,6 +37,8 @@ const USERS = {
   adminqa:{ name: "Andy AdminQA", role: "admin", status: "approved", qa: true },
   caps:   { name: "Cara Caps",  role: "member", status: "approved", captions: true },
   member: { name: "Mel Member", role: "member", status: "approved" },
+  // A regular approved member who is NOT owner/crew of the test tasks.
+  outsider:{ name: "Odell Outsider", role: "member", status: "approved" },
   pending:{ name: "Peggy Pend", role: "member", status: "pending" },
   // A removed admin: role still says admin, but the disabled kill switch denies it.
   exadmin:{ name: "Ex Admin",   role: "admin",  status: "removed", disabled: true },
@@ -64,7 +66,7 @@ test("owner may Start work (Planned → In Progress); a bystander member may not
   await seed("tasks", "t1", baseTask());
   const move = (uid) => updateDoc(doc(as(uid), "tasks", "t1"), {
     status: "In Progress",
-    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "started", by: "Otis Owner", at: 2 }],
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "started", by: "Otis Owner", uid, at: 2 }],
     updatedAt: serverTimestamp(),
   });
   await assertSucceeds(move("owner"));
@@ -380,7 +382,8 @@ test("Admin MAY drive the normal FORWARD workflow (owner/caption substitute) and
   // Forward steps the guided workflow grants an admin (as owner-/caption-substitute).
   await seed("tasks", "tf", baseTask({ status: "Planned" }));
   await assertSucceeds(directWrite("admin", "tf", "In Progress", "started"));
-  await seed("tasks", "tf", baseTask({ status: "In Progress" }));
+  // Submitting to QA now requires the type's deliverable link at the boundary.
+  await seed("tasks", "tf", baseTask({ status: "In Progress", links: { video: "https://drive.example/reel" } }));
   await assertSucceeds(directWrite("admin", "tf", "In Review", "qa_sent"));
   await seed("tasks", "tf", baseTask({ status: "Approved" }));
   await assertSucceeds(directWrite("admin", "tf", "Ready to Post", "ready"));
@@ -418,6 +421,179 @@ test("the audited override PATH (server context, like the callable) CAN reach Ap
   });
   assert.equal(after.status, "Approved");
   assert.equal(after.activity[after.activity.length - 1].type, "admin_override", "history says override, not QA-approved");
+});
+
+/* ============================================================================
+   ASSIGNED-TEAM PRODUCTION WORKFLOW (UID-based) — feature/assigned-team-workflow
+   A task with STABLE uid assignment: owner = Otis(owner), crew = Mel(member, shoot).
+   ============================================================================ */
+const assignedTask = (over = {}) => baseTask({
+  ownerUid: "owner", owner: "Otis Owner",
+  support: [{ name: "Mel Member", uid: "member", role: "shoot" }],
+  assigneeUids: ["owner", "member"],
+  ...over,
+});
+const VIDEO = { links: { video: "https://drive.example/reel" } };
+
+test("assigned SHOOTER (crew, not owner) can Start work: Planned → In Progress", async () => {
+  await seed("tasks", "aw1", assignedTask({ status: "Planned" }));
+  await assertSucceeds(directWrite("member", "aw1", "In Progress", "started"));
+});
+
+test("assigned EDITOR (crew) can attach the required link AND submit for QA in one write", async () => {
+  await seed("tasks", "aw2", assignedTask({ status: "In Progress" }));
+  await assertSucceeds(updateDoc(doc(as("member"), "tasks", "aw2"), {
+    status: "In Review", links: { video: "https://drive.example/edit" },
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "qa_sent", by: "Mel Member", uid: "member", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("assigned member can RESUBMIT after changes: Changes Requested → In Review (with link)", async () => {
+  await seed("tasks", "aw3", assignedTask({ status: "Changes Requested", ...VIDEO }));
+  await assertSucceeds(directWrite("member", "aw3", "In Review", "qa_sent"));
+});
+
+test("UNASSIGNED member cannot perform ANY production transition", async () => {
+  await seed("tasks", "aw4", assignedTask({ status: "Planned" }));
+  await assertFails(directWrite("outsider", "aw4", "In Progress", "started"));
+  await seed("tasks", "aw4", assignedTask({ status: "In Progress", ...VIDEO }));
+  await assertFails(directWrite("outsider", "aw4", "In Review", "qa_sent"));
+});
+
+test("UNASSIGNED member cannot edit production links or blockers; an assignee can", async () => {
+  await seed("tasks", "aw5", assignedTask({ status: "In Progress" }));
+  await assertFails(updateDoc(doc(as("outsider"), "tasks", "aw5"), { links: { video: "x" }, updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(as("outsider"), "tasks", "aw5"), { blockedOn: "waiting", updatedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(as("member"), "tasks", "aw5"), { blockedOn: "waiting on assets", updatedAt: serverTimestamp() }));
+});
+
+test("a member cannot ADD THEIR UID to the assignment and advance status in one request", async () => {
+  await seed("tasks", "aw6", assignedTask({ status: "Planned" }));
+  await assertFails(updateDoc(doc(as("outsider"), "tasks", "aw6"), {
+    assigneeUids: ["owner", "member", "outsider"],
+    support: [{ name: "Mel Member", uid: "member", role: "shoot" }, { name: "Odell Outsider", uid: "outsider", role: "edit" }],
+    status: "In Progress",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "started", by: "Odell Outsider", uid: "outsider", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("PENDING / REMOVED / DISABLED assigned users are denied production", async () => {
+  await seed("tasks", "aw7", assignedTask({ status: "Planned", assigneeUids: ["owner", "pending", "exadmin"] }));
+  await assertFails(directWrite("pending", "aw7", "In Progress", "started"));   // not approved
+  await assertFails(directWrite("exadmin", "aw7", "In Progress", "started"));   // disabled/removed
+});
+
+test("RENAMING an assigned user does NOT remove access (uid-authoritative)", async () => {
+  // Stored owner name is stale, but the crew uid still matches → access preserved.
+  await seed("tasks", "aw8", assignedTask({ status: "Planned", owner: "Old Display Name" }));
+  await assertSucceeds(directWrite("member", "aw8", "In Progress", "started"));
+});
+
+test("MISSING required links are rejected at the boundary on submit to QA", async () => {
+  await seed("tasks", "aw9", assignedTask({ status: "In Progress", type: "Reel", links: {} }));
+  await assertFails(directWrite("member", "aw9", "In Review", "qa_sent"));       // Reel needs video
+  await seed("tasks", "aw9", assignedTask({ status: "In Progress", type: "Poster", links: { ig: "x" } }));
+  await assertFails(directWrite("member", "aw9", "In Review", "qa_sent"));       // Poster needs ig + landscape
+});
+
+test("assigned production members CANNOT approve or request changes (QA-only)", async () => {
+  await seed("tasks", "aw10", assignedTask({ status: "In Review" }));
+  await assertFails(directWrite("member", "aw10", "Approved", "approved"));
+  await assertFails(directWrite("owner", "aw10", "Changes Requested", "changes_requested"));
+});
+
+test("QA-only user can make QA decisions but CANNOT operate production", async () => {
+  await seed("tasks", "aw11", assignedTask({ status: "In Review" }));
+  await assertSucceeds(updateDoc(doc(as("qa"), "tasks", "aw11"), {
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "Quinn QA", uid: "qa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+  await seed("tasks", "aw11", assignedTask({ status: "Planned" }));
+  await assertFails(directWrite("qa", "aw11", "In Progress", "started"));        // qa not assigned here
+});
+
+test("Admin + QA CAN make normal QA decisions (qa === true)", async () => {
+  await seed("tasks", "aw12", assignedTask({ status: "In Review" }));
+  await assertSucceeds(updateDoc(doc(as("adminqa"), "tasks", "aw12"), {
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "Andy AdminQA", uid: "adminqa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Only Admins may change assignment identity (owner/ownerUid/support/assigneeUids)", async () => {
+  await seed("tasks", "aw13", assignedTask({ status: "Planned" }));
+  // A member (even an assignee) cannot change the assignment identity fields.
+  await assertFails(updateDoc(doc(as("member"), "tasks", "aw13"), { assigneeUids: ["owner"], updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(as("member"), "tasks", "aw13"), { ownerUid: "member", updatedAt: serverTimestamp() }));
+  // Admins can.
+  await assertSucceeds(updateDoc(doc(as("admin"), "tasks", "aw13"), {
+    ownerUid: "member", owner: "Mel Member", assigneeUids: ["member"], updatedAt: serverTimestamp() }));
+});
+
+/* ---- Finding 2: QA-only never operates production, even if (mis)assigned ---- */
+test("QA-only is DENIED production even with their uid in ownerUid / support / assigneeUids", async () => {
+  await seed("tasks", "qa1", assignedTask({ status: "Planned",
+    ownerUid: "qa", owner: "Quinn QA", assigneeUids: ["qa"], support: [{ name: "Quinn QA", uid: "qa", role: "shoot" }] }));
+  await assertFails(directWrite("qa", "qa1", "In Progress", "started"));            // no Start work
+  await seed("tasks", "qa1", assignedTask({ status: "In Progress", ownerUid: "qa", owner: "Quinn QA", assigneeUids: ["qa"], links: { video: "x" } }));
+  await assertFails(directWrite("qa", "qa1", "In Review", "qa_sent"));              // no Submit for QA
+  await assertFails(updateDoc(doc(as("qa"), "tasks", "qa1"), { links: { video: "y" }, updatedAt: serverTimestamp() })); // no links edit
+  await assertFails(updateDoc(doc(as("qa"), "tasks", "qa1"), { blockedOn: "z", updatedAt: serverTimestamp() }));         // no blocker edit
+});
+test("Admin + QA CAN operate production via Admin authority", async () => {
+  await seed("tasks", "aq1", assignedTask({ status: "Planned", assigneeUids: [] }));  // not assigned, but admin
+  await assertSucceeds(directWrite("adminqa", "aq1", "In Progress", "started"));
+});
+
+/* ---- Finding 7: legacy fallback only when the assigneeUids FIELD is absent ---- */
+test("legacy fallback: NO assigneeUids field → owner-name fallback authorizes the owner", async () => {
+  await seed("tasks", "lf1", baseTask({ status: "Planned" }));   // baseTask has no assigneeUids field
+  await assertSucceeds(directWrite("owner", "lf1", "In Progress", "started"));
+});
+test("assigneeUids: [] (present, empty) → NO name fallback; nobody is an assignee", async () => {
+  await seed("tasks", "lf2", baseTask({ status: "Planned", assigneeUids: [] }));
+  await assertFails(directWrite("owner", "lf2", "In Progress", "started"));   // owner NOT authorized by name
+});
+test("partially-migrated task: only STORED uids authorize (owner name ignored)", async () => {
+  await seed("tasks", "lf3", baseTask({ status: "Planned", owner: "Otis Owner", assigneeUids: ["member"] }));
+  await assertFails(directWrite("owner", "lf3", "In Progress", "started"));       // owner not in stored uids
+  await assertSucceeds(directWrite("member", "lf3", "In Progress", "started"));   // member is in stored uids
+});
+
+/* ---- Finding 1: activity discipline (transition ⟹ 1 entry; same-status ⟹ none) ---- */
+test("a STATUS-PRESERVING edit cannot modify or append activity", async () => {
+  await seed("tasks", "ac1", assignedTask({ status: "In Progress", activity: [{ type: "created", by: "Ada Admin", at: 1 }] }));
+  await assertFails(updateDoc(doc(as("member"), "tasks", "ac1"), {   // same status, appends an entry → denied
+    blockedOn: "waiting", activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "note", by: "Mel Member", uid: "member", at: 2 }],
+    updatedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(as("member"), "tasks", "ac1"), { blockedOn: "waiting", updatedAt: serverTimestamp() })); // no activity change → ok
+});
+test("a REAL transition requires exactly one appended, self-attributed entry", async () => {
+  await seed("tasks", "ac2", assignedTask({ status: "Planned", activity: [{ type: "created", by: "Ada Admin", at: 1 }] }));
+  await assertFails(updateDoc(doc(as("member"), "tasks", "ac2"), { status: "In Progress", updatedAt: serverTimestamp() })); // transition, 0 entries → denied
+  await assertSucceeds(updateDoc(doc(as("member"), "tasks", "ac2"), {
+    status: "In Progress", activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "started", by: "Mel Member", uid: "member", at: 2 }],
+    updatedAt: serverTimestamp() }));
+});
+
+/* ---- Finding 8: production-field authority (links/blockers vs caption/postLink) ---- */
+test("caption / final post-link: only captions-authorized or Admin may change them", async () => {
+  await seed("tasks", "cp1", assignedTask({ status: "Ready to Post" }));
+  await assertFails(updateDoc(doc(as("member"),  "tasks", "cp1"), { caption: "x", updatedAt: serverTimestamp() }));            // assignee w/o captions → denied
+  await assertFails(updateDoc(doc(as("outsider"),"tasks", "cp1"), { postLink: "https://ig/x", updatedAt: serverTimestamp() })); // unassigned → denied
+  await assertFails(updateDoc(doc(as("qa"),      "tasks", "cp1"), { caption: "x", updatedAt: serverTimestamp() }));            // QA → denied
+  await assertSucceeds(updateDoc(doc(as("caps"), "tasks", "cp1"), { caption: "final caption", updatedAt: serverTimestamp() })); // captions → ok
+  await assertSucceeds(updateDoc(doc(as("admin"),"tasks", "cp1"), { postLink: "https://ig/y", updatedAt: serverTimestamp() })); // admin → ok
+});
+test("links & blockers: unassigned member's handcrafted request is denied; QA read-only", async () => {
+  await seed("tasks", "cp2", assignedTask({ status: "In Progress" }));
+  await assertFails(updateDoc(doc(as("outsider"), "tasks", "cp2"), { links: { video: "x" }, updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(as("qa"),       "tasks", "cp2"), { blockedOn: "x", updatedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(as("member"),"tasks", "cp2"), { links: { video: "https://drive/x" }, updatedAt: serverTimestamp() })); // assignee → ok
 });
 
 /* ---- a client can never FORGE an admin_override, and QA events must be typed ---- */
@@ -481,11 +657,52 @@ test("QA approval requires an 'approved' event; request-changes requires 'change
   }));
 });
 
+/* ---- Finding 2: EVERY production/posting transition must record its EXACT event type ---- */
+test("production/posting transitions succeed with the destination's correct event type", async () => {
+  await seed("tasks", "et", assignedTask({ status: "Planned" }));
+  await assertSucceeds(directWrite("member", "et", "In Progress", "started"));           // → In Progress = started
+  await seed("tasks", "et", assignedTask({ status: "In Progress", ...VIDEO }));
+  await assertSucceeds(directWrite("member", "et", "In Review", "qa_sent"));             // → In Review = qa_sent
+  await seed("tasks", "et", assignedTask({ status: "Changes Requested", ...VIDEO }));
+  await assertSucceeds(directWrite("member", "et", "In Review", "qa_sent"));             // resubmit = qa_sent
+  await seed("tasks", "et", baseTask({ status: "Approved" }));
+  await assertSucceeds(directWrite("caps", "et", "Ready to Post", "ready"));             // → Ready to Post = ready
+  await seed("tasks", "et", baseTask({ status: "Ready to Post" }));
+  await assertSucceeds(directWrite("caps", "et", "Posted", "posted"));                   // → Posted = posted
+});
+
+test("production/posting transitions with a WRONG or forged event type are DENIED", async () => {
+  await seed("tasks", "ex", assignedTask({ status: "Planned" }));
+  await assertFails(directWrite("member", "ex", "In Progress", "approved"));             // must be 'started'
+  await seed("tasks", "ex", assignedTask({ status: "In Progress", ...VIDEO }));
+  await assertFails(directWrite("member", "ex", "In Review", "started"));                // must be 'qa_sent'
+  await seed("tasks", "ex", baseTask({ status: "Approved" }));
+  await assertFails(directWrite("caps", "ex", "Ready to Post", "posted"));               // must be 'ready'
+  await seed("tasks", "ex", baseTask({ status: "Ready to Post" }));
+  await assertFails(directWrite("caps", "ex", "Posted", "ready"));                       // must be 'posted'
+  await seed("tasks", "ex", assignedTask({ status: "Planned" }));
+  await assertFails(directWrite("member", "ex", "In Progress", "status"));               // generic/forged type
+});
+
+test("a production transition that appends NO event (missing type) is denied", async () => {
+  await seed("tasks", "en", assignedTask({ status: "Planned" }));
+  await assertFails(updateDoc(doc(as("member"), "tasks", "en"), { status: "In Progress", updatedAt: serverTimestamp() }));
+});
+
+test("Admin normal FORWARD workflow uses NORMAL event types, never admin_override", async () => {
+  await seed("tasks", "an", baseTask({ status: "Planned" }));
+  await assertSucceeds(directWrite("admin", "an", "In Progress", "started"));            // normal type OK
+  await seed("tasks", "an", baseTask({ status: "Planned" }));
+  await assertFails(directWrite("admin", "an", "In Progress", "admin_override"));        // override label forbidden client-side
+  await seed("tasks", "an", baseTask({ status: "Approved" }));
+  await assertSucceeds(directWrite("admin", "an", "Ready to Post", "ready"));            // posting via admin uses 'ready'
+});
+
 test("only captions/admin may post (Ready to Post → Posted) and it may set archivedAt", async () => {
   await seed("tasks", "t3", baseTask({ status: "Ready to Post" }));
   const post = (uid) => updateDoc(doc(as(uid), "tasks", "t3"), {
     status: "Posted", archivedAt: serverTimestamp(),
-    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "posted", by: "x", at: 2 }],
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "posted", by: "x", uid, at: 2 }],
     updatedAt: serverTimestamp(),
   });
   await assertFails(post("member"));

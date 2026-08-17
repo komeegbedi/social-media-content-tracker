@@ -253,10 +253,10 @@ export const isApprovalEvent = (e) =>
    (no action for this person right now; e.g. they're waiting on someone else).
    QA approve / request-changes is handled by its own panel, not here. */
 export function workflowAction(task, me) {
-  const isOwner = task.owner === me.name;
+  // PRODUCTION forward steps: any assignee (owner OR crew) or an Admin — not the
+  // owner alone. Mirrors canAdvanceProduction() + the firestore.rules predicate.
+  const mine = canAdvanceProduction(task, me);
   const isCaption = !!me.captions || me.role === "admin";
-  const isAdmin = me.role === "admin";
-  const mine = isOwner || isAdmin;
   switch (task.status) {
     case "Planned":
       return mine ? { label: "Start work", to: "In Progress", kind: "started" } : null;
@@ -425,7 +425,7 @@ export function autoAssign(task, users, allTasks = []) {
     const designers = users
       .filter(u => u.name !== task.owner && (u.skills || []).includes("design"))
       .sort((a, b) => personLoad(a, other).activePoints - personLoad(b, other).activePoints);
-    return designers.length ? [{ name: designers[0].name, role: "design" }] : [];
+    return designers.length ? [{ name: designers[0].name, uid: designers[0].id, role: "design" }] : [];
   }
   const locs = task.location==="Both" ? ["479","828"] : [task.location];
   // Seed each candidate's balance with their current active capacity points
@@ -448,13 +448,14 @@ export function autoAssign(task, users, allTasks = []) {
       const norm = cands.filter(u=>!u.deprioritize), dep = cands.filter(u=>u.deprioritize);
       norm.sort((a,b)=>load[a.name]-load[b.name]); dep.sort((a,b)=>load[a.name]-load[b.name]);
       const chosen = [...norm,...dep][0];
-      if (chosen){ used.add(chosen.name); load[chosen.name] += responsibilityWeight(role); return chosen.name; }
+      // Return the chosen USER (not just the name) so we can stamp the stable uid.
+      if (chosen){ used.add(chosen.name); load[chosen.name] += responsibilityWeight(role); return chosen; }
       return null;
     };
-    const sh=pick("shoot"); if(sh) out.push({name:sh,role:"shoot",loc});
-    const ed=pick("edit");  if(ed) out.push({name:ed,role:"edit",loc});
-    const co=pick("coordinate"); if(co) out.push({name:co,role:"coordinate",loc});
-    const sd=pick("shadow"); if(sd) out.push({name:sd,role:"shadow",loc});
+    const sh=pick("shoot"); if(sh) out.push({name:sh.name,uid:sh.id,role:"shoot",loc});
+    const ed=pick("edit");  if(ed) out.push({name:ed.name,uid:ed.id,role:"edit",loc});
+    const co=pick("coordinate"); if(co) out.push({name:co.name,uid:co.id,role:"coordinate",loc});
+    const sd=pick("shadow"); if(sd) out.push({name:sd.name,uid:sd.id,role:"shadow",loc});
   });
   return out;
 }
@@ -757,7 +758,13 @@ export function rowToTask(row, users = [], mappings = {}) {
   // Use the sheet's Support Team if that column exists; otherwise fall back
   // to auto-assigning crew (keeps the simple template working).
   task.support = hasCol(row, "support") ? parseSupport(getCol(row, "support"), users, mappings) : autoAssign(task, users);
-  return { task, error: null };
+  // Stamp stable assignment identity (ownerUid / support[].uid / assigneeUids)
+  // through the SAME resolution used for normal creation: eligible + unambiguous
+  // names get a uid; Pending / duplicate / ineligible / unmatched stay unresolved
+  // and are surfaced in `unresolved` for the import reconciliation UI. Row content
+  // (and thus the deterministic doc id) is unaffected — see buildRowKeys.
+  const { task: stamped, unresolved } = withAssigneeUids(task, users);
+  return { task: stamped, error: null, unresolved };
 }
 
 /* Collect the distinct still-"Pending" names across parsed import rows (owner +
@@ -997,16 +1004,121 @@ export function pendingMatches(user, tasks) {
   });
 }
 
-// Return a copy of `task` with every Pending slot matching `user` filled in.
+/* ============================================================================
+   STABLE ASSIGNMENT IDENTITY (UID-based) — the authorization source of truth.
+
+   Names stay for display + back-compat, but authorization is by UID:
+     - ownerUid          the owner's stable uid ("" when Pending/unresolved)
+     - support[].uid     each crew member's uid (absent when Pending/unresolved)
+     - assigneeUids      authoritative deduped uid set (owner + crew) READ BY RULES
+   Shared predicates below MUST mirror firestore.rules so UI and the security
+   boundary never disagree. QA / captions / Admin / override stay SEPARATE.
+   ============================================================================ */
+
+// The task's authoritative assignee uid set. Prefers a stored `assigneeUids`
+// (what the rules read); otherwise derives it from ownerUid + support[].uid.
+export const taskAssigneeUids = (task) => {
+  const stored = (task && task.assigneeUids) || [];
+  if (stored.length) return [...new Set(stored.filter(Boolean))];
+  const out = [];
+  if (task && task.ownerUid) out.push(task.ownerUid);
+  ((task && task.support) || []).forEach((s) => { if (s && s.uid) out.push(s.uid); });
+  return [...new Set(out.filter(Boolean))];
+};
+
+// Is `user` an assignee (owner OR any crew role) of `task`? UID-AUTHORITATIVE.
+// The legacy owner-NAME fallback applies ONLY when the `assigneeUids` FIELD is
+// genuinely ABSENT (un-backfilled). A PRESENT field — even an empty [] or a partial
+// set — authorizes only its stored uids (never reverts to name). Mirrors
+// pIsTaskAssignee() in firestore.rules exactly.
+export const isTaskAssignee = (task, user) => {
+  if (!task || !user) return false;
+  if (Array.isArray(task.assigneeUids)) return task.assigneeUids.includes(user.id);
+  return !!user.name && task.owner === user.name;   // legacy fallback: field absent, owner only
+};
+
+// Any APPROVED, active assignee — or an active Admin — may advance PRODUCTION
+// (Planned→In Progress, In Progress→In Review, Changes Requested→In Review). The
+// production ROLE (shoot/edit/design/…) is irrelevant. NOT a QA/captions/override
+// grant. Mirrors pCanAdvanceProduction() in firestore.rules (checks inlined to
+// avoid forward references to isActiveUser/isApproved defined later in the module).
+export const canAdvanceProduction = (task, user) => {
+  if (!user) return false;
+  const active = user.disabled !== true;
+  const approved = user.status === "approved" || user.role === "admin";
+  if (user.role === "admin" && active) return true;   // Admin (incl. Admin+QA) operates production
+  // A non-Admin QA reviewer NEVER operates production, even if their uid was
+  // (mistakenly) placed in assigneeUids — QA observes, it does not produce.
+  if (user.qa === true) return false;
+  return active && approved && isTaskAssignee(task, user);
+};
+
+// Rebuild `assigneeUids` from the current ownerUid + support[].uid.
+export const computeAssigneeUids = (task) =>
+  [...new Set([task && task.ownerUid, ...(((task && task.support) || []).map((s) => s && s.uid))].filter(Boolean))];
+
+// Production-assignee eligibility: active, approved, and NOT a QA reviewer. Pending,
+// removed/disabled, and QA-only users are never stamped as production staff.
+const assigneeEligible = (u) =>
+  !!u && u.disabled !== true && (u.status === "approved" || u.role === "admin") && u.qa !== true;
+
+// Reconcile a task's assignment identity with the roster, UID-AUTHORITATIVELY:
+//   • An existing VALID uid is preserved (a rename can't move it) and its display
+//     name is REFRESHED from the uid-resolved user.
+//   • A slot with no uid (legacy) is resolved by name — only to an eligible,
+//     UNAMBIGUOUS user; duplicate/unmatched/ineligible names stay unresolved (no uid).
+//   • A stored uid that is now ineligible or absent from the roster drops its
+//     authorization and is reported — but a merely-stale display name never does.
+// A valid uid is NEVER silently replaced by a name match. Admin reassignment changes
+// identity by changing the uid (the editor binds selections to uid), not the name.
+export function withAssigneeUids(task, users = []) {
+  const byId = new Map((users || []).map((u) => [u.id, u]));
+  const byName = new Map(); const dupes = new Set();
+  (users || []).forEach((u) => {
+    if (!u || !u.name) return;
+    if (byName.has(u.name)) dupes.add(u.name); else byName.set(u.name, u);
+  });
+  const unresolved = [];
+  const resolveSlot = (curUid, curName, roleLabel) => {
+    if (curUid) {                                   // uid is authoritative
+      const u = byId.get(curUid);
+      if (u && assigneeEligible(u)) return { uid: curUid, name: u.name };   // keep uid, refresh name
+      unresolved.push({ role: roleLabel, name: curName || (u && u.name) || "", uid: curUid,
+        reason: u ? "ineligible" : "uid-not-found" });
+      return { uid: "", name: curName };            // drop authorization (never guess a name)
+    }
+    if (!curName || curName === "Pending") return { uid: "", name: curName };
+    if (dupes.has(curName)) { unresolved.push({ role: roleLabel, name: curName, reason: "duplicate-name" }); return { uid: "", name: curName }; }
+    const u = byName.get(curName);
+    if (u && assigneeEligible(u)) return { uid: u.id, name: u.name };       // legacy name → uid
+    unresolved.push({ role: roleLabel, name: curName, reason: u ? "ineligible" : "no-match" });
+    return { uid: "", name: curName };
+  };
+
+  const ownerR = task.owner === "Pending" ? { uid: "", name: "Pending" } : resolveSlot(task.ownerUid, task.owner, "owner");
+  const support = (task.support || []).map((s) => {
+    if (!s || !s.name || s.name === "Pending") return s;
+    const { uid: _drop, ...restS } = s;
+    const r = resolveSlot(s.uid, s.name, s.role || "crew");
+    return r.uid ? { ...restS, uid: r.uid, name: r.name } : { ...restS, name: r.name };
+  });
+  const out = { ...task, owner: ownerR.name, ownerUid: ownerR.uid, support };
+  out.assigneeUids = computeAssigneeUids(out);
+  return { task: out, unresolved };
+}
+
+// Return a copy of `task` with every Pending slot matching `user` filled in —
+// setting the stable uid alongside the display name and refreshing assigneeUids.
 export function applyAssignment(task, user) {
   const out = { ...task };
   if (task.owner === "Pending" && task.ownerSuggested && matchUser(task.ownerSuggested, [user])) {
-    out.owner = user.name; out.ownerSuggested = "";
+    out.owner = user.name; out.ownerUid = user.id; out.ownerSuggested = "";
   }
   out.support = (task.support || []).map((s) =>
     (s.name === "Pending" && s.suggested && matchUser(s.suggested, [user]))
-      ? { name: user.name, role: s.role, ...(s.loc ? { loc: s.loc } : {}) }
+      ? { name: user.name, uid: user.id, role: s.role, ...(s.loc ? { loc: s.loc } : {}) }
       : s);
+  out.assigneeUids = computeAssigneeUids(out);
   return out;
 }
 

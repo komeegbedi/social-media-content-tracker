@@ -35,8 +35,10 @@ import {
   personLoad, responsibilityTier, staleFlags, orderedCrew,
   isApproved, isQA, isProductionMember, isAssignable, QA_DEPARTMENT,
   mergeComments, mentionableUsers,
+  withAssigneeUids, computeAssigneeUids, isTaskAssignee, canAdvanceProduction,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
+import { planTransition, workflowCapability } from "./workflowTransition";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
 import { pushState, enablePush, listenForeground, refreshPushToken } from "./push";
 import { RELEASES, LATEST_RELEASE } from "./releases";
@@ -1455,21 +1457,28 @@ function Board({ profile, isAdmin }) {
   /* ---- task writes ---- */
   const saveTask = async (t) => {
     const creating = !t.id;
+    // Stamp STABLE assignment identity (ownerUid / support[].uid / assigneeUids) from
+    // the current team roster. Duplicate or unmatched names are left unresolved and
+    // surfaced — never silently mapped to the wrong person (an admin can fix the name).
+    const { task: stamped, unresolved } = withAssigneeUids(t, users);
     showPending(creating ? "Creating content…" : "Saving changes…");
     try {
       let newId = t.id;
       if (t.id) {
-        const { id, ...rest } = t;
+        const { id, ...rest } = stamped;
         await updateDoc(doc(db, "tasks", id), { ...rest, updatedAt: serverTimestamp() });
       } else {
         const ref = await addDoc(collection(db, "tasks"), {
-          ...t, comments: [], reactions: {}, activity: [activityEntry("created", me.name)],
+          ...stamped, comments: [], reactions: {}, activity: [activityEntry("created", me.name)],
           createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
         });
         newId = ref.id;
       }
       setEditTask(null);
-      if (creating) flashBanner("Content created", "ok", { label: "View", onClick: () => setOpenId(newId) });
+      if (unresolved.length) {
+        const names = [...new Set(unresolved.map((u) => u.name))].join(", ");
+        flashBanner(`Saved. Couldn't match to a team member: ${names}. An admin should confirm the assignment.`, "err");
+      } else if (creating) flashBanner("Content created", "ok", { label: "View", onClick: () => setOpenId(newId) });
       else flashBanner("Changes saved", "ok");
     } catch (e) {
       flashBanner("Couldn't save — please try again.", "err");
@@ -1613,33 +1622,53 @@ function Board({ profile, isAdmin }) {
     "In Progress":"started", "In Review":"qa_sent", "Approved":"approved",
     "Changes Requested":"changes_requested", "Ready to Post":"ready", "Posted":"posted",
   }[status] || "status");
-  // Trustworthy attribution for a workflow activity entry: the caller's uid and
-  // their capability at action time (rules require the appended entry's uid to be
-  // the caller, so no one can forge another actor into the history).
-  const actorMeta = () => ({ uid: me.id, cap: me.qa ? "qa" : (me.role === "admin" ? "admin" : "member") });
-  // Status change that a legal transition permits (owner/QA/captions per the rules).
-  const setStatus = (task, status) => withFeedback(
-    updateDoc(doc(db, "tasks", task.id), {
-      status, ...(status === "Posted" ? { archivedAt: serverTimestamp() } : {}),
-      activity: [...(task.activity||[]), activityEntry(eventType(status), me.name, status, actorMeta())],
-      updatedAt: serverTimestamp(),
-    }), `Moved to ${status}`);
+  // CONCURRENCY-SAFE workflow advance. Re-reads the task INSIDE a transaction and
+  // delegates the idempotent/stale/links/append decision to the SHARED core
+  // (planTransition) — the identical implementation the emulator concurrency test
+  // drives, so there is no simulation drift. Two simultaneous actions can't lose or
+  // duplicate history: Firestore retries the loser on the write conflict, it re-reads
+  // the winner's status, and planTransition returns an idempotent no-op. The appended
+  // entry carries the caller's uid + name + ACTION-SPECIFIC capability + type; the
+  // required-link precondition (submit → In Review) is enforced here AND at the rules
+  // boundary.
+  const advanceTask = (taskId, opts) =>
+    runTransaction(db, async (tx) => {
+      const ref = doc(db, "tasks", taskId);
+      const snap = await tx.get(ref);
+      const actor = { uid: me.id, name: me.name, cap: workflowCapability(me, opts.kind) };
+      const plan = planTransition(snap.exists() ? snap.data() : null, { ...opts, actor });
+      if (!plan.ok) return plan;
+      if (plan.idempotent) return plan;
+      tx.update(ref, {
+        ...plan.update,
+        ...(plan.archive ? { archivedAt: serverTimestamp() } : {}),
+        updatedAt: serverTimestamp(),
+      });
+      return { ok: true };
+    });
+  const runAdvance = async (taskId, opts, okMsg) => {
+    showPending("Saving…");
+    try {
+      const res = await advanceTask(taskId, opts);
+      if (res && res.idempotent) { flashBanner(`Already ${res.current}.`, "ok"); return res; }
+      if (!res || !res.ok) {
+        flashBanner(res && res.reason === "links" ? "Add the required content link before submitting to QA."
+          : res && res.reason === "stale" ? `Already moved to ${res.current} by someone else — refresh to continue.`
+          : res && res.reason === "trashed" ? "This content is in Trash — restore it first."
+          : "That content no longer exists.", "err");
+        return res;
+      }
+      flashBanner(okMsg, "ok");
+      return res;
+    } catch { flashBanner("Something went wrong — please try again.", "err"); }
+  };
+  // Status change that a legal transition permits (assignee/QA/captions per the rules).
+  const setStatus = (task, status) => runAdvance(task.id, { fromStatus: task.status, toStatus: status, kind: eventType(status) }, `Moved to ${status}`);
   // The guided workflow action (Start work / Submit for QA / Mark ready / Posted).
-  // `extra` carries caption / postLink when the step requires them.
-  const runWorkflow = (task, action, extra = {}) => withFeedback(
-    updateDoc(doc(db, "tasks", task.id), {
-      status: action.to, ...extra,
-      ...(action.to === "Posted" ? { archivedAt: serverTimestamp() } : {}),
-      activity: [...(task.activity||[]), activityEntry(action.kind, me.name, action.to, actorMeta())],
-      updatedAt: serverTimestamp(),
-    }), `Moved to ${action.to}`);
+  // `extra` carries links / caption / postLink when the step requires them.
+  const runWorkflow = (task, action, extra = {}) => runAdvance(task.id, { fromStatus: task.status, toStatus: action.to, kind: action.kind, extra }, `Moved to ${action.to}`);
   // QA "request changes": the QA decision (qa === true only — the rules enforce it).
-  const qaRequestChanges = (task, note) => withFeedback(
-    updateDoc(doc(db, "tasks", task.id), {
-      status: "Changes Requested",
-      activity: [...(task.activity||[]), activityEntry("changes_requested", me.name, note, actorMeta())],
-      updatedAt: serverTimestamp(),
-    }), "Changes requested");
+  const qaRequestChanges = (task, note) => runAdvance(task.id, { fromStatus: task.status, toStatus: "Changes Requested", kind: "changes_requested", note }, "Changes requested");
   // Administrative override — a server-controlled callable, NOT a client status
   // write. The normal client path denies an admin the In Review→Approved /
   // Changes Requested transition, so this is the ONLY admin route to it; the server
@@ -1689,9 +1718,13 @@ function Board({ profile, isAdmin }) {
         : `Auto-assigned crew to ${data.applied} task${data.applied !== 1 ? "s" : ""}`);
     } catch (e) { flashBanner("Couldn't auto-assign crew — please try again.", "err"); }
   };
-  const autoOne = (task) => withFeedback(
-    updateDoc(doc(db, "tasks", task.id), { support: autoAssign(task, users, activeTasks), updatedAt: serverTimestamp() }),
-    "Crew auto-assigned", "Assigning crew…");
+  const autoOne = (task) => {
+    const support = autoAssign(task, users, activeTasks);   // support entries carry uids
+    return withFeedback(
+      updateDoc(doc(db, "tasks", task.id),
+        { support, assigneeUids: computeAssigneeUids({ ...task, support }), updatedAt: serverTimestamp() }),
+      "Crew auto-assigned", "Assigning crew…");
+  };
 
   /* ---- user writes ---- */
   const saveUser = async (u) => {
@@ -1723,9 +1756,10 @@ function Board({ profile, isAdmin }) {
     const matches = pendingMatches(user, activeTasks);
     if (!matches.length) return;
     await withFeedback(Promise.all(matches.map((t) => {
-      const u = applyAssignment(t, user);
+      const u = applyAssignment(t, user);   // fills Pending slots + stamps uids
       return updateDoc(doc(db, "tasks", t.id),
-        { owner: u.owner, ownerSuggested: u.ownerSuggested || "", support: u.support, updatedAt: serverTimestamp() });
+        { owner: u.owner, ownerUid: u.ownerUid || "", ownerSuggested: u.ownerSuggested || "",
+          support: u.support, assigneeUids: u.assigneeUids || [], updatedAt: serverTimestamp() });
     })), `Assigned ${matches.length} task${matches.length!==1?"s":""}`, "Assigning tasks…");
   };
 
@@ -3505,6 +3539,10 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   // it: no guided production step, no edit/assign/delete — only review actions,
   // gated by canMakeReviewDecision (the single source of the review policy).
   const reviewerOnly = !!me.qa && !isAdmin;
+  // Production DATA (content links, blocker) is editable only by an ASSIGNEE (owner
+  // or crew) or an Admin — mirrors pMemberFieldsOk() in firestore.rules. Everyone
+  // else sees the values read-only (no silently-failing controls).
+  const canEditProd = canAdvanceProduction(task, me);
   // Review authority (Approve / Request changes) is qa === true only — an admin
   // does NOT inherit it. This is the single source for showing the QA panel, and
   // it mirrors the firestore.rules boundary. Admin override is a separate axis.
@@ -3544,6 +3582,9 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
     if (action.needsPostLink && !isValidUrl(postLink.trim())) { setWarn("Please enter a valid URL for the post link."); return; }
     setWarn("");
     const extra = {};
+    // Persist the CURRENT link draft together with the status change — one atomic
+    // submit, so status never advances to QA without its deliverable link.
+    if (action.requiresLinks) extra.links = { ...links };
     if (action.needsPostLink) extra.postLink = postLink.trim();
     onAction(action, extra);
   };
@@ -3684,6 +3725,7 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
                 <div className="sb-field" key={k}>
                   <label htmlFor={"lk-"+k}>{LINK_FIELDS[k]}{required.includes(k) && <span style={{color:"var(--red)"}}> *</span>}</label>
                   <UrlInput id={"lk-"+k} value={val} ariaLabel={LINK_FIELDS[k]} placeholder="https://drive.google.com/…"
+                    disabled={!canEditProd}
                     onChange={nv=>setLinksDraft({...links, [k]: nv})}
                     onBlur={()=>saveLinks({ ...links, [k]: (links[k]||"").trim() }, k)} />
                 </div>
@@ -3702,7 +3744,7 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
           {/* Waiting on (blocker) — editable while the task is live. */}
           {task.status!=="Posted" && (
             <div className="sb-field"><label htmlFor="td-blocked">Waiting on (leave blank if not blocked)</label>
-              <input id="td-blocked" value={blocked} onChange={e=>setBlocked(e.target.value)}
+              <input id="td-blocked" value={blocked} onChange={e=>setBlocked(e.target.value)} disabled={!canEditProd}
                 onBlur={()=>commit(task.blockedOn, blocked, v=>onBlocked(v))}
                 placeholder="e.g. Pastor's approval, David's graphics" />
             </div>
@@ -4158,12 +4200,17 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
   // keep an already-set owner visible on an existing task so it still displays.
   const ownerOptions = useMemo(() => {
     const avail = users.filter(isAssignable);
-    if (hasOwner && !avail.some(u => u.name === f.owner)) {
-      const cur = users.find(u => u.name === f.owner);
-      if (cur) return [cur, ...avail];
-    }
+    // Keep an already-set owner visible even if not currently assignable — matched by
+    // stable UID first, then legacy name (for un-backfilled tasks).
+    const cur = f.ownerUid ? users.find(u => u.id === f.ownerUid)
+      : (hasOwner ? users.find(u => u.name === f.owner) : null);
+    if (cur && !avail.some(u => u.id === cur.id)) return [cur, ...avail];
     return avail;
-  }, [users, f.owner]);
+  }, [users, f.owner, f.ownerUid]);
+  // The owner <select> is bound to the UID (its stable selection value). For a legacy
+  // task with no ownerUid, fall back to the name-resolved uid so it still displays.
+  const ownerSelectVal = f.owner === "Pending" ? "__pending__"
+    : (f.ownerUid || (hasOwner ? (users.find(u => u.name === f.owner) || {}).id || "" : ""));
   // #5 — one clear reason the form can't be saved yet (empty when it's valid).
   /* Floors for the native date pickers. Normally today (and, for the post
      date, the shoot date). When editing a task whose date already sits in the
@@ -4311,15 +4358,20 @@ function TaskEditor({ task, prefill, users, allTasks, defaultReminders, onClose,
                 <option value="">Select location</option><option>479</option><option>828</option><option>Both</option></select></div>}
           </div>
           <div className="sb-field"><label htmlFor="pc-owner">Owner: who brings the idea / leads<span className="sb-req" aria-hidden="true">*</span></label>
-            <select id="pc-owner" name="owner" value={f.owner||""} onChange={e=>set("owner",e.target.value)}>
+            <select id="pc-owner" name="owner" value={ownerSelectVal} onChange={e=>{
+              const v = e.target.value;
+              if (v === "__pending__") { setF(p=>({...p, owner:"Pending", ownerUid:""})); return; }
+              const u = users.find(x=>x.id===v);   // select value is the stable UID
+              setF(p=>({...p, ownerUid:v, owner:u ? u.name : ""}));
+            }}>
               <option value="" disabled>Select owner</option>
-              <option value="Pending">Pending: unassigned</option>
-              {ownerOptions.map(u=><option key={u.id}>{u.name}</option>)}</select>
+              <option value="__pending__">Pending: unassigned</option>
+              {ownerOptions.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select>
             {f.owner==="Pending" && f.ownerSuggested && (() => {
               const m = matchUser(f.ownerSuggested, users);
               return m
                 ? <button type="button" className="link" style={{marginTop:6}}
-                    onClick={()=>{ set("owner", m.name); set("ownerSuggested",""); }}>
+                    onClick={()=>{ setF(p=>({...p, owner:m.name, ownerUid:m.id, ownerSuggested:""})); }}>
                     <LightBulbIcon className="hi hi-sm" aria-hidden="true"/> From the sheet this was “{f.ownerSuggested}”. Assign {m.name}?</button>
                 : <div className="sb-sub" style={{marginTop:6}}>From the sheet: “{f.ownerSuggested}” (no matching account yet)</div>;
             })()}
@@ -4484,13 +4536,16 @@ function CrewRow({ s, idx, pos = 0, users, allTasks, showLoc, recommended, reaso
 function AddCrew({ users, allTasks, onAdd }) {
   const assignable = (users || []).filter(isAssignable);   // production members only — never QA, never unavailable
   const [open, setOpen] = useState(false);
-  const [n,setN] = useState(""); const [r,setR] = useState(""); const [label,setLabel] = useState("");
+  const [uid,setUid] = useState(""); const [r,setR] = useState(""); const [label,setLabel] = useState("");
   const isOther = r === "other";
-  const canAdd = !!n && !!r && (!isOther || label.trim());
-  const picked = assignable.find(u => u.name === n);
+  // Bind selection to the stable UID (not the display name) so a duplicate name can
+  // never pick the wrong person; the uid is written onto the crew entry.
+  const picked = assignable.find(u => u.id === uid);
+  const n = picked ? picked.name : "";
+  const canAdd = !!uid && !!r && (!isOther || label.trim());
   const pickedLoad = useMemo(() => picked ? loadSummary(picked, allTasks || []) : null, [picked, allTasks]);
-  const reset = () => { setN(""); setR(""); setLabel(""); setOpen(false); };
-  const add = () => { onAdd(isOther ? { name:n, role:"other", label:label.trim() } : { name:n, role:r }); reset(); };
+  const reset = () => { setUid(""); setR(""); setLabel(""); setOpen(false); };
+  const add = () => { onAdd(isOther ? { name:n, uid, role:"other", label:label.trim() } : { name:n, uid, role:r }); reset(); };
   if (!open) return (
     <button type="button" className="sb-addcrew-btn" onClick={()=>setOpen(true)}>
       <PlusIcon className="hi hi-sm" aria-hidden="true"/> Add crew member</button>
@@ -4498,9 +4553,9 @@ function AddCrew({ users, allTasks, onAdd }) {
   return (
     <div className="sb-addcrew-panel">
       <div className="sb-field"><label htmlFor="crew-who">Who's joining?</label>
-        <select id="crew-who" value={n} autoFocus onChange={e=>setN(e.target.value)}>
+        <select id="crew-who" value={uid} autoFocus onChange={e=>setUid(e.target.value)}>
           <option value="" disabled>Select team member</option>
-          {assignable.map(u=><option key={u.id}>{u.name}</option>)}</select></div>
+          {assignable.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
       {/* Consequence of this choice, stated before it is made — a nudge, not a
           blocking dialog, so adding a busy person stays a one-tap decision. */}
       {pickedLoad && <div className={"sb-crewhint"+(pickedLoad.notable?" notable":"")}>

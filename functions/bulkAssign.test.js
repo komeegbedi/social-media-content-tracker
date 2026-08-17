@@ -39,3 +39,9 @@ test("an empty support list is valid (clears crew)", () => {
 test("tolerates non-array input", () => {
   assert.deepEqual(validateAssignments(undefined, byName), { valid: [], failures: [] });
 });
+
+const { assigneeUidsFrom } = require("./bulkAssign");
+test("assigneeUidsFrom: owner uid + crew uids, deduped, empties dropped", () => {
+  assert.deepEqual(assigneeUidsFrom("own", [{ uid: "a" }, { uid: "" }, { uid: "a" }, { name: "Pending" }]).sort(), ["a", "own"]);
+  assert.deepEqual(assigneeUidsFrom("", []), []);
+});

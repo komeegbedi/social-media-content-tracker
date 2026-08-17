@@ -112,6 +112,10 @@ async function runRemoval({ db, opRef, targetUid, targetName, removedBy, disable
       db, opRef, userName: name,
       mode: (op.policy && op.policy.mode) || "unassign",
       resolvedTargetName: op.resolvedTargetName || null,
+      // Stable identity: match the removed user by uid (rename-safe) and stamp the
+      // reassignment target's uid so assigneeUids stays correct after removal.
+      removedUid: targetUid,
+      resolvedTargetUid: (op.policy && op.policy.reassignToUid) || null,
       hooks: { afterChunk: hooks.afterChunk },
     });
     await opRef.update({ phase: "tasks_detached", updatedAt: FieldValue.serverTimestamp() });

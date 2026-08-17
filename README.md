@@ -270,6 +270,44 @@ Normal review authorization is a single predicate — `canMakeReviewDecision(use
 
 **QA is a distinct department, not another production role.** Reviewers land on a review-focused **Reviews** screen and approve or request changes only while an item is in review. They can **observe** all of production — search any task, read task detail, and view Team capacity — but can never **operate** it: QA carries no production skills or availability, is never staffed as owner/crew, never appears in auto-assignment or recommendations, and never counts toward production capacity. This holds even for an admin who is also QA (admin governs what you manage; QA governs the department you belong to). The exclusions run through central predicates (`isProductionMember` / `isAssignable`) and the user-doc invariant is enforced in Firestore rules.
 
+### Production workflow authorization (the assigned team)
+
+Production is driven by a task's **assigned team**, not the owner alone. The **project owner and every assigned production crew member** — shooter, editor, designer, coordinator, any role — can drive the forward production steps and attach the required deliverable links. The production **role is irrelevant**: an assigned shooter can Start work, an assigned editor can add the editing link and Submit for QA. This is enforced in **Firestore security rules**, not just the UI.
+
+| Actor | Start work / Submit / Resubmit (→ In Progress / In Review) | Approve / Request changes (QA) | Ready to Post / Posted | Edit content links & blocker | Change assignment identity | Admin override |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Assigned** owner or crew (any role) | **Yes** — submit needs the type's required link | No | No | **Yes** | No | No |
+| **Unassigned** member | No | No | No | No | No | No |
+| **QA** only (`qa: true`) | No | **Yes** | No | No | No | No |
+| **Captions** (`captions: true`) | No | No | **Yes** | No | No | No |
+| **Admin** only | **Yes** — normal workflow events, *not* `admin_override` | No | **Yes** | **Yes** | **Yes** | **Yes** |
+| **Admin + QA** | Yes | **Yes** | Yes | Yes | Yes | Yes |
+
+- **Assigned production members cannot approve their own work** — In Review → Approved / Changes Requested is `qa === true` only (see the QA matrix above).
+- **Admins drive the normal forward workflow with normal actions** (Planned → In Progress, → In Review, Changes Requested → In Review, Approved → Ready to Post, → Posted); these are recorded as **normal workflow events**, never `admin_override`. Override stays reserved for exceptional corrections (backward moves, stage skips, forcing a QA outcome without QA).
+- **Required links are validated at the security boundary** — submitting to QA (→ In Review) is denied unless the content type's deliverable link(s) are present (`Reel` → video · `Poster` → ig + landscape · `Photography` → photos). Submit persists the link **and** status together in one concurrency-safe transaction that re-reads the task, so status never advances without its link and two simultaneous actions can't lose activity history.
+- **Content links & blocker** are production data — editable only by an assignee or an Admin; everyone else sees them read-only.
+
+Authorization is a pair of shared predicates used by the UI **and** mirrored by the rules: `isTaskAssignee(task, user)` and `canAdvanceProduction(task, user)` (in `src/data.js` ↔ `pIsTaskAssignee` / `pCanAdvanceProduction` in `firestore.rules`). QA, captions, Admin, and override remain **separate** capabilities.
+
+### Stable assignment identity (UID-based)
+
+Authorization is by **stable user id**, never by display-name comparison — so **renaming a user never removes their access**. Each task carries, alongside the display names (kept for rendering + back-compat):
+
+- `ownerUid` — the owner's uid
+- `support[].uid` — each crew member's uid
+- `assigneeUids` — the authoritative deduped uid set the **security rules** read
+
+These are maintained consistently across creation, editing, duplication, import, auto-assignment, bulk assignment, and user removal/reassignment. When a display name is a **duplicate**, **ineligible** (pending / removed / disabled / QA), or has **no matching active user**, it is **left unresolved and reported** — never silently mapped to the wrong person; an admin confirms the assignment. Existing uids are **authoritative across renames**: a valid stored uid is preserved (its display name is merely refreshed), never re-derived from a name — so a rename keeps access and another user later taking the old name cannot inherit it.
+
+**Server paths never trust client-supplied uids.** The stable identity is re-derived on the trusted server for every write that isn't a plain client edit: **CSV import** stamps `ownerUid` / `support[].uid` / `assigneeUids` through the same resolution as normal creation (deterministic doc ids are hashed from the raw row, so stamping never affects idempotency); **bulk assignment** re-resolves each crew member by name to the *server's* user record and rewrites the uid from it (rejecting duplicate-name ambiguity and inactive/QA people), so a request pairing a valid name with a foreign uid can't authorize that uid; **assignment notifications** resolve recipients by `ownerUid` / `support[].uid` (name only as a legacy fallback), so a rename never mis-fires an "assigned" notice and a duplicate name never notifies the wrong person.
+
+**Migration / rollout.** Existing tasks are backfilled with `scripts/backfill-assignee-uids.js` (dry-run by default; `--write` to apply; `--prod` for production). The rules keep a **legacy owner-name fallback keyed on field *presence*** — used **only** when a task has no `assigneeUids` field at all; a present-but-empty `assigneeUids: []` authorizes **nobody** (no name fallback), so a fully-migrated task with no assignees is closed rather than open. This lets the backfill run with zero downtime. The script reports **coverage** — once every *active* task's assignees resolve to a uid (0 unresolved), the legacy fallback in `firestore.rules` (`pIsTaskAssignee`) can be removed to make authorization strictly UID-only.
+
+**Concurrency-safe transitions.** Every workflow advance runs through **one shared implementation** (`src/workflowTransition.js` → `planTransition`) that the client transaction *and* the emulator regression test both execute — no simulation drift. It re-reads the task inside a transaction against an expected source status: already at the destination → **idempotent success** (no duplicate activity event); at an unexpected status → **stale, no write** (the client is told to refresh); otherwise the status and its deliverable link persist together with exactly **one** self-attributed activity entry. Firestore's write-contention retry re-invokes the callback, so the loser of a race re-reads the winner's status and becomes an idempotent no-op — proven by concurrent Planned→In Progress and In Progress→In Review regression tests (exactly one `started`/`qa_sent` event; no lost history).
+
+**Each transition records its exact event type.** The rules pin every stage to its activity type, and a missing / wrong / forged type is denied: `Planned→In Progress` = `started`, `In Progress`/`Changes Requested`→`In Review` = `qa_sent`, `In Review→Approved` = `approved`, `In Review→Changes Requested` = `changes_requested`, `Approved→Ready to Post` = `ready`, `Ready to Post→Posted` = `posted`. Every appended entry must carry the caller's own uid, a client-authored `admin_override` is always rejected (override is server-authored only), and the entry's **capability is attributed to the action, not the profile**: a QA decision records `qa`; an Admin driving production/posting records `admin`; a captions user posting records `captions`; an assigned owner/crew driving production records `member`.
+
 ### Auto-assignment
 
 `autoAssign` filters eligible people (skill · location · availability) **first**, then balances by real, effort-weighted active workload across the whole board — so the genuinely lightest qualified person is chosen, not merely whoever appears on fewer rows. When picking a crew member manually, the editor shows that person's current load *before* you add them.

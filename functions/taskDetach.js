@@ -37,25 +37,37 @@ function validatePolicy(policy, byUid, removedUid) {
 
 /* Pure per-task patch. Returns null when the user isn't on the task (→ idempotent
    no-op on a re-run). Owner → reassigned or set Pending; crew → removed. Never
-   called for Posted tasks. */
-function detachPatch(task, userName, mode, resolvedTargetName) {
-  const isOwner = task.owner === userName;
+   called for Posted tasks. Matches by UID when available (rename-safe) AND legacy
+   name, and MAINTAINS the stable identity fields: ownerUid + the authoritative
+   assigneeUids set (so a removed user's uid is dropped and a reassignment target's
+   uid is added — keeping production access correct after removal/reassignment). */
+function detachPatch(task, userName, mode, resolvedTargetName, removedUid, resolvedTargetUid) {
   const support = Array.isArray(task.support) ? task.support : [];
-  const crewHas = support.some((s) => s && s.name === userName);
+  const matches = (val, uid) => val === userName || (!!removedUid && uid === removedUid);
+  const isOwner = matches(task.owner, task.ownerUid);
+  const crewHas = support.some((s) => s && matches(s.name, s.uid));
   if (!isOwner && !crewHas) return null;
   const patch = {};
+  let ownerUid = task.ownerUid || "";
+  let newSupport = support;
   if (isOwner) {
-    patch.owner = mode === "reassign" ? (resolvedTargetName || "Pending") : "Pending";
+    if (mode === "reassign") { patch.owner = resolvedTargetName || "Pending"; ownerUid = resolvedTargetUid || ""; }
+    else { patch.owner = "Pending"; ownerUid = ""; }
     patch.ownerSuggested = "";
+    patch.ownerUid = ownerUid;
   }
-  if (crewHas) patch.support = support.filter((s) => s && s.name !== userName);
+  if (crewHas) {
+    newSupport = support.filter((s) => s && !matches(s.name, s.uid));
+    patch.support = newSupport;
+  }
+  patch.assigneeUids = [...new Set([ownerUid, ...newSupport.map((s) => s && s.uid)].filter(Boolean))];
   return patch;
 }
 
 /* Chunked, resumable detach. Cursor is persisted on the op doc and advanced in the
    same batch as the chunk's task writes. `hooks.afterChunk` is a test seam for the
    crash-between-chunks case. */
-async function detachTasks({ db, opRef, userName, mode, resolvedTargetName, page = 400, hooks = {} }) {
+async function detachTasks({ db, opRef, userName, mode, resolvedTargetName, removedUid, resolvedTargetUid, page = 400, hooks = {} }) {
   let cursor = (await opRef.get()).data().taskCursor || null;
   for (;;) {
     let q = db.collection("tasks").orderBy("__name__").limit(page);
@@ -73,7 +85,7 @@ async function detachTasks({ db, opRef, userName, mode, resolvedTargetName, page
       // views still showing the removed (disabled) person; the admin then reassigns
       // it through the normal owner/crew flow, exactly like any restored content.
       if (t.deletedAt) continue;
-      const patch = detachPatch(t, userName, mode, resolvedTargetName);
+      const patch = detachPatch(t, userName, mode, resolvedTargetName, removedUid, resolvedTargetUid);
       if (patch) { patch.updatedAt = FieldValue.serverTimestamp(); batch.update(doc.ref, patch); }
     }
     cursor = snap.docs[snap.docs.length - 1].id;

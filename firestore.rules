@@ -78,6 +78,28 @@ service cloud.firestore {
         && entry.get('uid', '') == request.auth.uid
         && entry.get('type', '') == (to == 'Approved' ? 'approved' : 'changes_requested');
     }
+    // The activity-event type that a PRODUCTION / POSTING transition MUST record, keyed
+    // by destination status (mirrors eventType()/workflowAction().kind in src/data.js):
+    //   → In Progress  : 'started'      → In Review    : 'qa_sent'
+    //   → Ready to Post : 'ready'       → Posted       : 'posted'
+    function productionEventType(to) {
+      return to == 'In Progress' ? 'started'
+           : to == 'In Review' ? 'qa_sent'
+           : to == 'Ready to Post' ? 'ready'
+           : to == 'Posted' ? 'posted'
+           : '';
+    }
+    // A production/posting transition must be HARD-attributed AND correctly typed: the
+    // appended entry carries the caller's own uid and its event type is EXACTLY the one
+    // this destination requires — a missing, wrong, or forged type is denied (e.g. a
+    // Planned→In Progress that records 'approved', or a Ready to Post→Posted that
+    // records 'ready'). Combined with reviewDecisionAttributed (QA) this fixes the
+    // type to the transition for every stage.
+    function productionTransitionAttributed(to, grew, entry) {
+      return grew
+        && entry.get('uid', '') == request.auth.uid
+        && entry.get('type', '') == productionEventType(to);
+    }
     // EVERY task write's audit-log append must be attributed to the caller (no forging
     // another actor) AND must NOT be a client-authored admin_override (that event is
     // produced ONLY by the server-side override callable). Combines the former
@@ -87,9 +109,48 @@ service cloud.firestore {
         || (entry.get('uid', request.auth.uid) == request.auth.uid
             && entry.get('type', '') != 'admin_override');
     }
+    // ---- Stable assignment identity (UID-based authorization) ----
+    // A task's AUTHORITATIVE assignee uid set, read from the BEFORE state so a caller
+    // can never authorize themselves with the same write. Legacy tasks (not yet
+    // backfilled) have no `assigneeUids` — for those ONLY, fall back to an owner-NAME
+    // match (transitional; removed once backfill coverage is validated). Crew get
+    // production access exclusively via uids, so a stale name can't grant it.
+    function pIsTaskAssignee(p) {
+      // The legacy owner-NAME fallback applies ONLY when the assigneeUids FIELD is
+      // genuinely ABSENT (un-backfilled task). A PRESENT field — even an empty [] or a
+      // partial set — is UID-AUTHORITATIVE: only its stored uids authorize, and an
+      // intentionally-empty/unresolved assignment never reverts to name authorization.
+      return ('assigneeUids' in resource.data)
+        ? (request.auth.uid in resource.data.assigneeUids)
+        : (resource.data.get('owner', ' ') == p.get('name', ''));
+    }
+    // Any APPROVED, non-QA assignee (owner OR crew, any production role) — or an Admin
+    // — may advance PRODUCTION. NOT a QA or captions grant. Admin is included so
+    // admins drive the normal forward workflow WITHOUT an admin_override event
+    // (Admin+QA operates production via Admin). The pIsApproved guard denies
+    // pending/removed/disabled assignees; the `qa != true` guard denies a QA-only
+    // reviewer even if their uid was placed in assigneeUids — QA observes, never
+    // produces. This predicate also gates production DATA (links/blockers) edits.
+    function pCanAdvanceProduction(p) {
+      return pIsAdmin(p) || (pIsApproved(p) && p.get('qa', false) != true && pIsTaskAssignee(p));
+    }
+    // Captions/posting authority — or Admin. Separate from production + QA.
+    function pCanPost(p) { return pIsAdmin(p) || p.get('captions', false) == true; }
+    // Before a submit-to-QA transition (→ In Review) the content type's REQUIRED
+    // deliverable link(s) must be present — validated at the security boundary, not
+    // only in React (mirrors requiredLinkKeys() in src/data.js).
+    function pRequiredLinksPresent() {
+      let type = request.resource.data.get('type', '');
+      let links = request.resource.data.get('links', {});
+      return type == 'Poster' ? (links.get('ig', '') != '' && links.get('landscape', '') != '')
+           : type == 'Reel' ? (links.get('video', '') != '')
+           : type == 'Photography' ? (links.get('photos', '') != '')
+           : true;
+    }
     // Is a proposed `from -> to` status change legal for THIS actor via a DIRECT
     // client write?
-    //   owner        : Planned→In Progress, In Progress→In Review, Changes Requested→In Review
+    //   assignee     : Planned→In Progress, In Progress→In Review, Changes Requested→In Review
+    //                  (any owner/crew production role; →In Review also needs the links)
     //   QA (qa==true): In Review→Approved | Changes Requested   (the QA decision, attributed)
     //   captions     : Approved→Ready to Post, Ready to Post→Posted
     // An Admin drives the same NORMAL FORWARD steps as an owner-/caption-substitute
@@ -106,16 +167,18 @@ service cloud.firestore {
     // A no-op (from == to) is always allowed so members/admins can edit other fields.
     // Takes the resolved profile `p` (no get() inside) — same policy as before.
     function pTransitionAllowed(p, from, to, grew, entry) {
-      let ownerLike = resource.data.get('owner', '') == p.get('name', ' ') || pIsAdmin(p);
-      let capLike = p.get('captions', false) == true || pIsAdmin(p);
       // Encode the step as "from>to" and test SET membership — one `in` check per
       // role instead of a fan-out of paired comparisons, which keeps the eagerly-
       // evaluated expression tree well under the emulator's budget.
       let step = from + '>' + to;
+      let toReview = step == 'In Progress>In Review' || step == 'Changes Requested>In Review';
       return from == to
         || (pIsQA(p) && isQaDecision(from, to) && reviewDecisionAttributed(to, grew, entry))
-        || (ownerLike && step in ['Planned>In Progress', 'In Progress>In Review', 'Changes Requested>In Review'])
-        || (capLike && step in ['Approved>Ready to Post', 'Ready to Post>Posted']);
+        || (pCanAdvanceProduction(p) && productionTransitionAttributed(to, grew, entry) && (
+              step == 'Planned>In Progress'
+              || (toReview && pRequiredLinksPresent())))
+        || (pCanPost(p) && productionTransitionAttributed(to, grew, entry)
+              && step in ['Approved>Ready to Post', 'Ready to Post>Posted']);
     }
     // Attribution integrity for EVERY task write: when the audit log grows, the new
     // entry's uid (when the client supplies one) must be the caller — no forging
@@ -178,6 +241,32 @@ service cloud.firestore {
     // A NORMAL (active → active) update: base integrity + attribution + no forged
     // override, a role-legal status transition, and — for non-admins — only the
     // collaboration allowlist. The status transition is evaluated ONCE and shared.
+    // A non-admin member's field set. ASSIGNMENT IDENTITY (owner/ownerUid/support/
+    // assigneeUids/ownerSuggested) is deliberately NOT in this allowlist, so a member
+    // can never grant themselves access — and PRODUCTION DATA (links, blockedOn) may
+    // change only when the caller is an assignee. Reactions + comments stay open so
+    // any member can still react/comment/mention.
+    function pMemberFieldsOk(p) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return pIsApproved(p)
+        && changed.hasOnly(['status', 'comments', 'reactions', 'updatedAt', 'archivedAt',
+                            'blockedOn', 'links', 'activity', 'caption', 'postLink'])
+        // Production DATA (links, blockers) → production operators only (assignee,
+        // non-QA, approved) or Admin — same authority as advancing production.
+        && (!changed.hasAny(['links', 'blockedOn']) || pCanAdvanceProduction(p))
+        // Caption / final post-link → captions-authorized or Admin (posting axis).
+        && (!changed.hasAny(['caption', 'postLink']) || pCanPost(p));
+    }
+    // A REAL status transition must append EXACTLY ONE activity entry (grewByOne),
+    // and a STATUS-PRESERVING edit must NOT modify or append activity at all. Combined
+    // with auditAppendOk (attribution) + taskIntegrityOk (append-only, ≤ +1) this makes
+    // every transition carry exactly one correctly-attributed event and blocks a
+    // same-status write from injecting or rewriting workflow history.
+    function pActivityConsistent(grew) {
+      return resource.data.status != request.resource.data.status
+        ? grew
+        : request.resource.data.get('activity', []) == resource.data.get('activity', []);
+    }
     function pNormalUpdateOk(p) {
       // Compute the audit-append facts ONCE and thread them through both the
       // attribution check and the QA-decision check — a single grewByOne()/newEntry()
@@ -185,13 +274,10 @@ service cloud.firestore {
       let grew = grewByOne();
       let entry = newEntry();
       return pTaskIntegrityOk(p)
+        && pActivityConsistent(grew)
         && auditAppendOk(grew, entry)
         && pTransitionAllowed(p, resource.data.status, request.resource.data.status, grew, entry)
-        && (pIsAdmin(p)
-            || (pIsApproved(p)
-                && request.resource.data.diff(resource.data).affectedKeys()
-                     .hasOnly(['status', 'comments', 'reactions', 'updatedAt', 'archivedAt',
-                               'blockedOn', 'links', 'activity', 'caption', 'postLink'])));
+        && (pIsAdmin(p) || pMemberFieldsOk(p));
     }
     // THE task-update decision, structured around mutually-exclusive Trash-state
     // transitions so exactly ONE branch's predicate evaluates (the others fail their
