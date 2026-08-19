@@ -95,9 +95,9 @@ test("no direction-sensitive PHYSICAL inline styles remain in JSX/modules (allow
 });
 
 test("extracted inline blocks are now named classes with LOGICAL properties", () => {
-  assert.ok(/\.sb-mention-menu\{[^}]*inset-inline-start:0/.test(css), "mention menu → inset-inline-start");
-  assert.ok(/\.sb-mention-item\{[^}]*text-align:start/.test(css), "mention item → text-align:start");
-  assert.ok(/\.sb-mention-check\{[^}]*margin-inline-start:6px/.test(css), "mention check → margin-inline-start");
+  assert.ok(/\.sb-mention-pop\{[^}]*inset-inline:0/.test(css), "mention popup → inset-inline (logical)");
+  assert.ok(/\.sb-mention-opt\{[^}]*text-align:start/.test(css), "mention option → text-align:start");
+  assert.ok(/\.sb-mention-hint\{[^}]*margin-inline-start:auto/.test(css), "mention hint → margin-inline-start");
   assert.ok(/\.sb-detail-val\{[^}]*text-align:end/.test(css), "detail value → text-align:end");
 });
 
@@ -122,8 +122,9 @@ test("mixed-direction user content is bidi-isolated (dir=auto / <bdi>)", () => {
   assert.ok(/dir="auto"[^>]*aria-label="Search tasks|value=\{q\}[^>]*dir="auto"/.test(app), "the search input should use dir=auto");
   const pd = read("ProfileDrawer.jsx");
   assert.ok(/<bdi>\{me\.name\}<\/bdi>/.test(pd) && /<bdi>\{me\.email\}<\/bdi>/.test(pd), "profile name + email should be bdi-isolated");
-  // mention list options isolate names too
-  assert.ok(/<bdi>\{u\.name\}<\/bdi>\{mentions\.includes/.test(app), "mention option names should be bdi-isolated");
+  // mention typeahead options isolate names too (MentionComposer)
+  const mc = read("MentionComposer.jsx");
+  assert.ok(/<bdi>\{item\.user\.name\}<\/bdi>/.test(mc), "mention option names should be bdi-isolated");
 });
 
 test("Admin People cards bidi-isolate names, emails, and campus/department", () => {

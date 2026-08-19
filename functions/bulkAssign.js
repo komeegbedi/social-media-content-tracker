@@ -18,13 +18,26 @@ const { db, FieldValue, loadUsers } = require("./lib");
 
 const MAX_ASSIGNMENTS = 1000;
 const CHUNK = 300;
+
+// Authoritative assignee uid set = owner uid + every crew member's uid (deduped,
+// non-empty). Mirrors computeAssigneeUids() in src/data.js and the rules.
+function assigneeUidsFrom(ownerUid, support) {
+  const uids = [ownerUid, ...(Array.isArray(support) ? support : []).map((s) => s && s.uid)];
+  return [...new Set(uids.filter(Boolean))];
+}
+exports.assigneeUidsFrom = assigneeUidsFrom;
 const VALID_ROLES = new Set(["shoot", "edit", "coordinate", "design", "shadow", "other"]);
 const isActive = (u) => u && (u.status === "approved" || u.role === "admin") && u.disabled !== true;
 
 /* Pure: split a request into valid assignments + explicit failures. Every crew
-   member must be an active, non-QA (staffable) user; every role must be known. */
+   member must be an active, non-QA (staffable), UNAMBIGUOUS user; every role must
+   be known. The stored crew identity is REBUILT from the server-resolved user —
+   the client's `uid` is never trusted, so a request that pairs a valid person's
+   NAME with a foreign uid can't authorize that uid. `dupeNames` (names shared by
+   two+ users) are rejected so an ambiguous name never resolves to the wrong person. */
 function validateAssignments(assignments, byName, opts = {}) {
   const validRoles = opts.validRoles || VALID_ROLES;
+  const dupeNames = opts.dupeNames || new Set();
   const valid = [];
   const failures = [];
   for (const a of Array.isArray(assignments) ? assignments : []) {
@@ -33,14 +46,21 @@ function validateAssignments(assignments, byName, opts = {}) {
       continue;
     }
     let bad = null;
+    const support = [];   // rebuilt server-side; client-supplied uids are discarded
     for (const s of a.support) {
       if (!s || !validRoles.has(s.role)) { bad = "invalid-role"; break; }
+      if (typeof s.name !== "string" || !s.name) { bad = "invalid-assignee"; break; }
+      if (dupeNames.has(s.name)) { bad = "ambiguous-name"; break; }
       const u = byName[s.name];
       if (!isActive(u)) { bad = "invalid-assignee"; break; }
       if (u.qa === true) { bad = "qa-not-staffable"; break; }
+      // Trust ONLY the server-resolved identity — this is the security boundary.
+      const entry = { name: u.name, uid: u.uid, role: s.role };
+      if (s.role === "other" && typeof s.label === "string" && s.label) entry.label = s.label;
+      support.push(entry);
     }
     if (bad) failures.push({ taskId: a.taskId, reason: bad });
-    else valid.push({ taskId: a.taskId, support: a.support });
+    else valid.push({ taskId: a.taskId, support });
   }
   return { valid, failures };
 }
@@ -66,8 +86,15 @@ async function applyBulkAssign({ database, opRef, page = CHUNK, hooks = {} }) {
           const ref = database.collection("tasks").doc(a.taskId);
           const snap = await tx.get(ref);
           if (!snap.exists) return "missing";
-          if (snap.data().deletedAt) return "trashed";
-          tx.update(ref, { support: a.support, updatedAt: FieldValue.serverTimestamp() });
+          const cur = snap.data();
+          if (cur.deletedAt) return "trashed";
+          // Maintain the authoritative uid set alongside support so crew keep their
+          // production access after an auto/bulk (re)assignment.
+          tx.update(ref, {
+            support: a.support,
+            assigneeUids: assigneeUidsFrom(cur.ownerUid, a.support),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
           return null;
         });
         return skip ? { ok: false, taskId: a.taskId, reason: skip } : { ok: true };
@@ -105,8 +132,12 @@ async function bulkAssignCore({ database, callerUid, opId, assignments, deps = {
     return { opId: opRef.id, total: d.total, applied: d.appliedCount || 0, failed: (d.failures || []).length, failures: d.failures || [], phase: "done", alreadyDone: true };
   }
   if (!existing.exists) {
-    const { byName } = await loadUsers();
-    const { valid, failures } = validateAssignments(assignments, byName);
+    const { byName, list } = await loadUsers();
+    // Names shared by two+ users are ambiguous — reject them rather than let
+    // byName's last-writer-wins silently resolve to the wrong person.
+    const seen = new Set(), dupeNames = new Set();
+    (list || []).forEach((u) => { if (!u || !u.name) return; if (seen.has(u.name)) dupeNames.add(u.name); else seen.add(u.name); });
+    const { valid, failures } = validateAssignments(assignments, byName, { dupeNames });
     await opRef.create({
       type: "bulk_assign", requestedBy: callerUid, assignments: valid,
       cursor: 0, appliedCount: 0, failures, total: valid.length, requested: assignments.length,

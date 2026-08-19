@@ -13,11 +13,12 @@ process.env.FIRESTORE_EMULATOR_HOST ||= "127.0.0.1:8080";
 process.env.FUNCTIONS_EMULATOR = "true";
 
 const { db, notifyUsers, loadUsers, isActive } = await import("../functions/lib.js");
-const { resolveMentions } = await import("../functions/mentions.js");
+const { resolveMentions, resolveGroupMention } = await import("../functions/mentions.js");
 
 const USERS = {
   author: { name: "Ada", status: "approved" },
   m1: { name: "Bo", status: "approved" },
+  m2: { name: "Cy", status: "approved" },
   pend: { name: "Peg", status: "pending" },
 };
 
@@ -51,4 +52,44 @@ test("a re-fired comment trigger dedupes to one notification", async () => {
   await notifyMention("c2", "author", ["m1"]);
   await notifyMention("c2", "author", ["m1"]); // Firebase redelivers the create event
   assert.equal(await countFor("m1"), 1);
+});
+
+// Mirror onCommentCreate's FULL recipient logic: individual mentions + a group
+// (@all/@everyone) derived from the task's assigneeUids, merged and deduped.
+async function notifyComment(commentId, authorUid, { mentions = [], mentionAll = false }, taskData) {
+  const { byUid } = await loadUsers();
+  const individual = mentions.length ? resolveMentions(mentions, authorUid, byUid, isActive) : [];
+  const group = mentionAll ? resolveGroupMention(taskData, authorUid, byUid, isActive) : [];
+  const byId = new Map();
+  for (const u of [...individual, ...group]) { const id = u && (u.uid || u.id); if (id) byId.set(id, u); }
+  const recipients = [...byId.values()];
+  if (!recipients.length) return;
+  await notifyUsers(recipients, {
+    type: "mention", taskId: "t1", commentId,
+    keyBase: `mention_${commentId}`, title: "Ada mentioned you", channels: ["in-app"],
+  });
+}
+
+test("@all notifies the task's active assignees, excluding the author", async () => {
+  const task = { assigneeUids: ["author", "m1", "m2", "pend", "ghost"] };
+  await notifyComment("g1", "author", { mentionAll: true }, task);
+  assert.equal(await countFor("m1"), 1);        // assignee → notified
+  assert.equal(await countFor("m2"), 1);        // assignee → notified
+  assert.equal(await countFor("author"), 0);    // author excluded
+  assert.equal(await countFor("pend"), 0);      // unapproved assignee dropped
+  assert.equal(await countFor("ghost"), 0);     // unknown dropped
+});
+
+test("individual + @all does NOT double-notify a person who is both", async () => {
+  const task = { assigneeUids: ["author", "m1", "m2"] };
+  await notifyComment("g2", "author", { mentions: ["m1"], mentionAll: true }, task);
+  assert.equal(await countFor("m1"), 1);        // named AND in the group → exactly once
+  assert.equal(await countFor("m2"), 1);
+});
+
+test("@all falls back to owner + support for a legacy task without assigneeUids", async () => {
+  const task = { ownerUid: "m1", support: [{ uid: "m2" }] };   // no assigneeUids field
+  await notifyComment("g3", "author", { mentionAll: true }, task);
+  assert.equal(await countFor("m1"), 1);
+  assert.equal(await countFor("m2"), 1);
 });

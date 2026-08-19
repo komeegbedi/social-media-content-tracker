@@ -45,7 +45,8 @@ test("applies valid assignments, reports invalid ones as explicit failures", asy
   assert.equal(r.total, 1);                       // only the valid one is scheduled
   assert.equal(r.applied, 1);
   assert.equal(r.failed, 1);
-  assert.deepEqual((await getTask("t1")).support, [{ name: "Bo Crew", role: "shoot" }]);
+  assert.deepEqual((await getTask("t1")).support, [{ name: "Bo Crew", uid: "bo", role: "shoot" }]);
+  assert.deepEqual((await getTask("t1")).assigneeUids, ["bo"]);  // owner has no uid here; only the resolved crew
 });
 
 test("a missing task is a per-item failure, not a thrown batch", async () => {
@@ -71,7 +72,7 @@ test(">chunk assignments apply across bounded chunks; a crash resumes without du
   const r = await bulkAssignCore({ database: db, callerUid: "admin1", opId: "op3", assignments });
   assert.equal(r.phase, "done");
   assert.equal(r.applied, N);                      // all applied, none double-counted beyond N
-  for (let i = 0; i < N; i++) assert.deepEqual((await getTask(`t${String(i).padStart(2, "0")}`)).support, [{ name: "Bo Crew", role: "shoot" }]);
+  for (let i = 0; i < N; i++) assert.deepEqual((await getTask(`t${String(i).padStart(2, "0")}`)).support, [{ name: "Bo Crew", uid: "bo", role: "shoot" }]);
 });
 
 test("re-invoking a completed op is an idempotent success", async () => {
@@ -91,5 +92,40 @@ test("a task trashed AFTER validation is skipped (reason: trashed), others still
   assert.ok(r.failures.some((f) => f.taskId === "gone" && f.reason === "trashed"), "trashed task recorded as a skip");
   // The trashed task's crew is untouched; the live one got the assignment.
   assert.deepEqual((await getTask("gone")).support, []);
-  assert.deepEqual((await getTask("live")).support, [{ name: "Bo Crew", role: "shoot" }]);
+  assert.deepEqual((await getTask("live")).support, [{ name: "Bo Crew", uid: "bo", role: "shoot" }]);
+});
+
+test("finding 5 · a foreign uid paired with a valid person's NAME is never stored or authorized", async () => {
+  await tasksCol().doc("t1").set({ owner: "Ada", ownerUid: "admin1", status: "Planned", support: [] });
+  // The client sends Bo Crew's NAME but ATTACKER's uid. The name passes the active
+  // check, but the stored uid must be the server-resolved one (bo), never "attacker".
+  const r = await bulkAssignCore({ database: db, callerUid: "admin1", opId: "op-foreign", assignments: [
+    { taskId: "t1", support: [{ name: "Bo Crew", uid: "attacker", role: "shoot" }] },
+  ] });
+  assert.equal(r.applied, 1);
+  const t = await getTask("t1");
+  assert.deepEqual(t.support, [{ name: "Bo Crew", uid: "bo", role: "shoot" }], "client uid discarded");
+  assert.ok(!t.assigneeUids.includes("attacker"), "foreign uid never authorized");
+  assert.deepEqual([...t.assigneeUids].sort(), ["admin1", "bo"]);  // owner uid + trusted crew uid
+});
+
+test("finding 5 · an ambiguous (duplicate) crew name is rejected, not resolved to the wrong person", async () => {
+  // A second, different user shares the name "Bo Crew".
+  await db.collection("users").doc("bo2").set({ role: "member", status: "approved", name: "Bo Crew" });
+  await tasksCol().doc("t1").set({ status: "Planned", support: [] });
+  const r = await bulkAssignCore({ database: db, callerUid: "admin1", opId: "op-dupe", assignments: [A("t1")] });
+  assert.equal(r.applied, 0);
+  assert.equal(r.failed, 1);
+  assert.ok(r.failures.some((f) => f.taskId === "t1" && f.reason === "ambiguous-name"));
+  assert.deepEqual((await getTask("t1")).support, []);  // untouched — no guess made
+});
+
+test("finding 5 · a QA person is not staffable even by an admin bulk request", async () => {
+  await db.collection("users").doc("q1").set({ role: "member", status: "approved", name: "Quinn QA", qa: true });
+  await tasksCol().doc("t1").set({ status: "Planned", support: [] });
+  const r = await bulkAssignCore({ database: db, callerUid: "admin1", opId: "op-qa", assignments: [
+    { taskId: "t1", support: [{ name: "Quinn QA", role: "shoot" }] },
+  ] });
+  assert.equal(r.applied, 0);
+  assert.ok(r.failures.some((f) => f.reason === "qa-not-staffable"));
 });

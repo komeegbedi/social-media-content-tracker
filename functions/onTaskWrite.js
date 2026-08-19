@@ -9,6 +9,7 @@ const {
 const { resendApiKey } = require("./emailService");
 const { eventToken, notificationKeyBase } = require("./eventIdentity");
 const { scheduleRevision, instanceId } = require("./reminderSchedule");
+const { assignmentRecipients, resolveByIdentity, deriveDupeNames } = require("./assignmentRecipients");
 
 // Rebuild the pending reminderInstances for a task. Every instance id carries a
 // schedule-revision hash, so:
@@ -114,7 +115,8 @@ exports.onTaskWrite = onDocumentWritten(
       return;
     }
 
-    const { list: users, byName } = await loadUsers();
+    const { list: users, byName, byUid } = await loadUsers();
+    const dupeNames = deriveDupeNames(users);   // ambiguous legacy names → resolve to nobody
     const dispTitle = formatContentTitle(after.title);   // Title Case for all notification text
     const admins = users.filter((u) => u.role === "admin");
     const captionUsers = users.filter((u) => u.captions === true);
@@ -125,27 +127,32 @@ exports.onTaskWrite = onDocumentWritten(
     const token = eventToken(event.id, event.data.after.updateTime);
     const kb = (type) => notificationKeyBase(type, taskId, token);
 
-    // --- assignment notifications ---
-    if (after.owner && after.owner !== "Pending" && after.owner !== before?.owner) {
-      const ou = byName[after.owner];
-      if (ou) await notifyUsers([ou], { type: "assigned", taskId,
-        title: `You've been assigned to '${dispTitle}'`, body: "You're leading this piece.",
-        keyBase: kb("assigned") });
-    }
-    const beforeCrew = new Set((before?.support || []).map((s) => s.name));
-    for (const s of (after.support || [])) {
-      if (beforeCrew.has(s.name)) continue;
-      const cu = byName[s.name];
-      // Crew identity is the recipient uid (+ event token); the display name is
-      // only copy. A re-add is a new write → new token → re-notify.
-      if (cu) await notifyUsers([cu], { type: "assigned", taskId,
-        title: `You've been added to '${dispTitle}'`, body: `As ${crewRoleLabel(s)}.`,
-        keyBase: kb("assigned") });
+    // --- assignment notifications (recipients resolved by STABLE uid identity) ---
+    // uid-first resolution means a pure rename does NOT mis-fire an assignment and
+    // a duplicate display name can't notify the wrong person; a same-name replacement
+    // IS still detected; a re-add is a new write → new token → re-notify. The full
+    // user `list` lets it reject ambiguous LEGACY names (notify nobody, log it)
+    // rather than trust byName's last-writer-wins. See functions/assignmentRecipients.js.
+    const onUnresolved = (info) => logger.warn("assignment notification: unresolved recipient (skipped)",
+      { taskId, kind: info.kind, name: info.name, reason: info.reason });
+    for (const rec of assignmentRecipients(before, after, { byUid, byName, list: users, onUnresolved })) {
+      if (rec.kind === "owner") {
+        await notifyUsers([rec.user], { type: "assigned", taskId,
+          title: `You've been assigned to '${dispTitle}'`, body: "You're leading this piece.",
+          keyBase: kb("assigned") });
+      } else {
+        await notifyUsers([rec.user], { type: "assigned", taskId,
+          title: `You've been added to '${dispTitle}'`, body: `As ${crewRoleLabel(rec.crew)}.`,
+          keyBase: kb("assigned") });
+      }
     }
 
     // --- status transition notifications ---
     if (after.status !== before?.status) {
-      const owner = byName[after.owner];
+      // Resolve the task owner by uid (strict legacy name fallback) so QA-decision
+      // and approval notifications reach the real owner across renames, and never the
+      // wrong person when a legacy owner name is duplicated.
+      const owner = resolveByIdentity(after.ownerUid, after.owner, byUid, byName, dupeNames);
       // An administrative override is announced as exactly that — never as a QA
       // decision. Detected from the newest activity entry the override callable wrote.
       const acts = after.activity || [];

@@ -172,11 +172,21 @@ export function requiredLinkKeys(type) {
   if (type === "Photography") return ["photos"];       // Photography folder
   return [];
 }
-// Required link keys still missing on a task.
+// Required link keys whose value is missing OR NOT a valid http(s) URL. A blank,
+// whitespace-only, plain-text, or scheme-less value counts as missing — the same
+// isValidUrl gate the UI and Firestore rules use, so "submitted for QA" can never
+// mean "with a junk link".
 export function missingLinks(task) {
   const links = task.links || {};
-  return requiredLinkKeys(task.type).filter((k) => !String(links[k] || "").trim());
+  return requiredLinkKeys(task.type).filter((k) => !isValidUrl(links[k]));
 }
+// Statuses that mean "submitted to QA or beyond" — the type's required content
+// links MUST be present and valid at (and after) these stages. "Changes Requested"
+// is a rework state (links may be mid-fix) and is deliberately excluded, so QA can
+// still bounce a link-less item back for correction. Mirrors pStatusRequiresLinks()
+// in firestore.rules and gates transitions in workflowTransition.planTransition().
+export const LINK_GATED_STAGES = ["In Review", "Approved", "Ready to Post", "Posted"];
+export const statusRequiresLinks = (status) => LINK_GATED_STAGES.includes(status);
 // Statuses that mean "submitted to QA or beyond" — content must be attached.
 export const QA_STATUSES = ["In Review", "Approved", "Posted"];
 
@@ -253,10 +263,10 @@ export const isApprovalEvent = (e) =>
    (no action for this person right now; e.g. they're waiting on someone else).
    QA approve / request-changes is handled by its own panel, not here. */
 export function workflowAction(task, me) {
-  const isOwner = task.owner === me.name;
+  // PRODUCTION forward steps: any assignee (owner OR crew) or an Admin — not the
+  // owner alone. Mirrors canAdvanceProduction() + the firestore.rules predicate.
+  const mine = canAdvanceProduction(task, me);
   const isCaption = !!me.captions || me.role === "admin";
-  const isAdmin = me.role === "admin";
-  const mine = isOwner || isAdmin;
   switch (task.status) {
     case "Planned":
       return mine ? { label: "Start work", to: "In Progress", kind: "started" } : null;
@@ -425,7 +435,7 @@ export function autoAssign(task, users, allTasks = []) {
     const designers = users
       .filter(u => u.name !== task.owner && (u.skills || []).includes("design"))
       .sort((a, b) => personLoad(a, other).activePoints - personLoad(b, other).activePoints);
-    return designers.length ? [{ name: designers[0].name, role: "design" }] : [];
+    return designers.length ? [{ name: designers[0].name, uid: designers[0].id, role: "design" }] : [];
   }
   const locs = task.location==="Both" ? ["479","828"] : [task.location];
   // Seed each candidate's balance with their current active capacity points
@@ -448,13 +458,14 @@ export function autoAssign(task, users, allTasks = []) {
       const norm = cands.filter(u=>!u.deprioritize), dep = cands.filter(u=>u.deprioritize);
       norm.sort((a,b)=>load[a.name]-load[b.name]); dep.sort((a,b)=>load[a.name]-load[b.name]);
       const chosen = [...norm,...dep][0];
-      if (chosen){ used.add(chosen.name); load[chosen.name] += responsibilityWeight(role); return chosen.name; }
+      // Return the chosen USER (not just the name) so we can stamp the stable uid.
+      if (chosen){ used.add(chosen.name); load[chosen.name] += responsibilityWeight(role); return chosen; }
       return null;
     };
-    const sh=pick("shoot"); if(sh) out.push({name:sh,role:"shoot",loc});
-    const ed=pick("edit");  if(ed) out.push({name:ed,role:"edit",loc});
-    const co=pick("coordinate"); if(co) out.push({name:co,role:"coordinate",loc});
-    const sd=pick("shadow"); if(sd) out.push({name:sd,role:"shadow",loc});
+    const sh=pick("shoot"); if(sh) out.push({name:sh.name,uid:sh.id,role:"shoot",loc});
+    const ed=pick("edit");  if(ed) out.push({name:ed.name,uid:ed.id,role:"edit",loc});
+    const co=pick("coordinate"); if(co) out.push({name:co.name,uid:co.id,role:"coordinate",loc});
+    const sd=pick("shadow"); if(sd) out.push({name:sd.name,uid:sd.id,role:"shadow",loc});
   });
   return out;
 }
@@ -757,7 +768,13 @@ export function rowToTask(row, users = [], mappings = {}) {
   // Use the sheet's Support Team if that column exists; otherwise fall back
   // to auto-assigning crew (keeps the simple template working).
   task.support = hasCol(row, "support") ? parseSupport(getCol(row, "support"), users, mappings) : autoAssign(task, users);
-  return { task, error: null };
+  // Stamp stable assignment identity (ownerUid / support[].uid / assigneeUids)
+  // through the SAME resolution used for normal creation: eligible + unambiguous
+  // names get a uid; Pending / duplicate / ineligible / unmatched stay unresolved
+  // and are surfaced in `unresolved` for the import reconciliation UI. Row content
+  // (and thus the deterministic doc id) is unaffected — see buildRowKeys.
+  const { task: stamped, unresolved } = withAssigneeUids(task, users);
+  return { task: stamped, error: null, unresolved };
 }
 
 /* Collect the distinct still-"Pending" names across parsed import rows (owner +
@@ -997,16 +1014,121 @@ export function pendingMatches(user, tasks) {
   });
 }
 
-// Return a copy of `task` with every Pending slot matching `user` filled in.
+/* ============================================================================
+   STABLE ASSIGNMENT IDENTITY (UID-based) — the authorization source of truth.
+
+   Names stay for display + back-compat, but authorization is by UID:
+     - ownerUid          the owner's stable uid ("" when Pending/unresolved)
+     - support[].uid     each crew member's uid (absent when Pending/unresolved)
+     - assigneeUids      authoritative deduped uid set (owner + crew) READ BY RULES
+   Shared predicates below MUST mirror firestore.rules so UI and the security
+   boundary never disagree. QA / captions / Admin / override stay SEPARATE.
+   ============================================================================ */
+
+// The task's authoritative assignee uid set. Prefers a stored `assigneeUids`
+// (what the rules read); otherwise derives it from ownerUid + support[].uid.
+export const taskAssigneeUids = (task) => {
+  const stored = (task && task.assigneeUids) || [];
+  if (stored.length) return [...new Set(stored.filter(Boolean))];
+  const out = [];
+  if (task && task.ownerUid) out.push(task.ownerUid);
+  ((task && task.support) || []).forEach((s) => { if (s && s.uid) out.push(s.uid); });
+  return [...new Set(out.filter(Boolean))];
+};
+
+// Is `user` an assignee (owner OR any crew role) of `task`? UID-AUTHORITATIVE.
+// The legacy owner-NAME fallback applies ONLY when the `assigneeUids` FIELD is
+// genuinely ABSENT (un-backfilled). A PRESENT field — even an empty [] or a partial
+// set — authorizes only its stored uids (never reverts to name). Mirrors
+// pIsTaskAssignee() in firestore.rules exactly.
+export const isTaskAssignee = (task, user) => {
+  if (!task || !user) return false;
+  if (Array.isArray(task.assigneeUids)) return task.assigneeUids.includes(user.id);
+  return !!user.name && task.owner === user.name;   // legacy fallback: field absent, owner only
+};
+
+// Any APPROVED, active assignee — or an active Admin — may advance PRODUCTION
+// (Planned→In Progress, In Progress→In Review, Changes Requested→In Review). The
+// production ROLE (shoot/edit/design/…) is irrelevant. NOT a QA/captions/override
+// grant. Mirrors pCanAdvanceProduction() in firestore.rules (checks inlined to
+// avoid forward references to isActiveUser/isApproved defined later in the module).
+export const canAdvanceProduction = (task, user) => {
+  if (!user) return false;
+  const active = user.disabled !== true;
+  const approved = user.status === "approved" || user.role === "admin";
+  if (user.role === "admin" && active) return true;   // Admin (incl. Admin+QA) operates production
+  // A non-Admin QA reviewer NEVER operates production, even if their uid was
+  // (mistakenly) placed in assigneeUids — QA observes, it does not produce.
+  if (user.qa === true) return false;
+  return active && approved && isTaskAssignee(task, user);
+};
+
+// Rebuild `assigneeUids` from the current ownerUid + support[].uid.
+export const computeAssigneeUids = (task) =>
+  [...new Set([task && task.ownerUid, ...(((task && task.support) || []).map((s) => s && s.uid))].filter(Boolean))];
+
+// Production-assignee eligibility: active, approved, and NOT a QA reviewer. Pending,
+// removed/disabled, and QA-only users are never stamped as production staff.
+const assigneeEligible = (u) =>
+  !!u && u.disabled !== true && (u.status === "approved" || u.role === "admin") && u.qa !== true;
+
+// Reconcile a task's assignment identity with the roster, UID-AUTHORITATIVELY:
+//   • An existing VALID uid is preserved (a rename can't move it) and its display
+//     name is REFRESHED from the uid-resolved user.
+//   • A slot with no uid (legacy) is resolved by name — only to an eligible,
+//     UNAMBIGUOUS user; duplicate/unmatched/ineligible names stay unresolved (no uid).
+//   • A stored uid that is now ineligible or absent from the roster drops its
+//     authorization and is reported — but a merely-stale display name never does.
+// A valid uid is NEVER silently replaced by a name match. Admin reassignment changes
+// identity by changing the uid (the editor binds selections to uid), not the name.
+export function withAssigneeUids(task, users = []) {
+  const byId = new Map((users || []).map((u) => [u.id, u]));
+  const byName = new Map(); const dupes = new Set();
+  (users || []).forEach((u) => {
+    if (!u || !u.name) return;
+    if (byName.has(u.name)) dupes.add(u.name); else byName.set(u.name, u);
+  });
+  const unresolved = [];
+  const resolveSlot = (curUid, curName, roleLabel) => {
+    if (curUid) {                                   // uid is authoritative
+      const u = byId.get(curUid);
+      if (u && assigneeEligible(u)) return { uid: curUid, name: u.name };   // keep uid, refresh name
+      unresolved.push({ role: roleLabel, name: curName || (u && u.name) || "", uid: curUid,
+        reason: u ? "ineligible" : "uid-not-found" });
+      return { uid: "", name: curName };            // drop authorization (never guess a name)
+    }
+    if (!curName || curName === "Pending") return { uid: "", name: curName };
+    if (dupes.has(curName)) { unresolved.push({ role: roleLabel, name: curName, reason: "duplicate-name" }); return { uid: "", name: curName }; }
+    const u = byName.get(curName);
+    if (u && assigneeEligible(u)) return { uid: u.id, name: u.name };       // legacy name → uid
+    unresolved.push({ role: roleLabel, name: curName, reason: u ? "ineligible" : "no-match" });
+    return { uid: "", name: curName };
+  };
+
+  const ownerR = task.owner === "Pending" ? { uid: "", name: "Pending" } : resolveSlot(task.ownerUid, task.owner, "owner");
+  const support = (task.support || []).map((s) => {
+    if (!s || !s.name || s.name === "Pending") return s;
+    const { uid: _drop, ...restS } = s;
+    const r = resolveSlot(s.uid, s.name, s.role || "crew");
+    return r.uid ? { ...restS, uid: r.uid, name: r.name } : { ...restS, name: r.name };
+  });
+  const out = { ...task, owner: ownerR.name, ownerUid: ownerR.uid, support };
+  out.assigneeUids = computeAssigneeUids(out);
+  return { task: out, unresolved };
+}
+
+// Return a copy of `task` with every Pending slot matching `user` filled in —
+// setting the stable uid alongside the display name and refreshing assigneeUids.
 export function applyAssignment(task, user) {
   const out = { ...task };
   if (task.owner === "Pending" && task.ownerSuggested && matchUser(task.ownerSuggested, [user])) {
-    out.owner = user.name; out.ownerSuggested = "";
+    out.owner = user.name; out.ownerUid = user.id; out.ownerSuggested = "";
   }
   out.support = (task.support || []).map((s) =>
     (s.name === "Pending" && s.suggested && matchUser(s.suggested, [user]))
-      ? { name: user.name, role: s.role, ...(s.loc ? { loc: s.loc } : {}) }
+      ? { name: user.name, uid: user.id, role: s.role, ...(s.loc ? { loc: s.loc } : {}) }
       : s);
+  out.assigneeUids = computeAssigneeUids(out);
   return out;
 }
 
@@ -1761,13 +1883,160 @@ export function tmMillis(v) {
   return 0;
 }
 
-// Team members a user can @mention: approved teammates other than themselves,
-// sorted by name. The UID (`id`) is the identity that gets stored; the name is
-// only for display + the copy.
+// Team members a user can @mention: active, approved teammates other than
+// themselves, sorted by name. The UID (`id`) is the identity that gets stored;
+// the name is only for display + the copy.
 export function mentionableUsers(users, me) {
   return (users || [])
-    .filter((u) => u && u.id !== (me && me.id) && isApproved(u))
+    .filter((u) => u && u.id !== (me && me.id) && isApproved(u) && u.disabled !== true)
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+}
+
+/* ---- @mention typeahead + rendering (pure; drives MentionComposer + comment render) ----
+   Identity is always the UID; the display name is only copy. A mention token is
+   `@Full Name` (spaces and all) — never just a first name. The group token `@all`
+   means "everyone assigned to THIS task" (resolved server-side from the task's
+   assigneeUids), never every user in the app. */
+
+// The single group-mention token; resolves server-side to the task's assignees.
+export const GROUP_MENTION_ALIASES = ["all"];
+
+// An '@' only STARTS a mention when it's at the start of the text or right after
+// whitespace — so an email local part ("name@host") never triggers a mention.
+const mentionBoundaryBefore = (ch) => ch === "" || ch === undefined || /\s/.test(ch);
+const mentionWordChar = (ch) => !!ch && /[A-Za-z0-9]/.test(ch);
+
+// The active @query at the caret: the nearest '@' at/left of the caret that begins
+// a mention token (start-or-after-whitespace, same line). Returns { start, query }
+// where query is the text between '@' and the caret (MAY contain spaces — full
+// names have them), or null when the caret isn't inside a mention token.
+export function mentionQuery(text, caret) {
+  if (typeof text !== "string") return null;
+  const pos = Math.max(0, Math.min(caret == null ? text.length : caret, text.length));
+  for (let i = pos - 1; i >= 0; i--) {
+    const ch = text[i];
+    if (ch === "\n") return null;                       // typeahead stays on one line
+    if (ch === "@") {
+      return mentionBoundaryBefore(i > 0 ? text[i - 1] : "")
+        ? { start: i, query: text.slice(i + 1, pos) }
+        : null;                                          // preceded by a word char → email, not a mention
+    }
+  }
+  return null;
+}
+
+// Filter candidates by a case-insensitive PREFIX of the FULL name; current-task
+// assignees float to the top, then alphabetical. An empty query returns everyone
+// (the initial "@" list) — filtered live as the user types.
+export function filterMentionCandidates(candidates, query, assigneeUids = []) {
+  const q = String(query || "").trim().toLowerCase();
+  const assignee = new Set(assigneeUids || []);
+  return (candidates || [])
+    .filter((u) => u && u.name && (!q || u.name.toLowerCase().startsWith(q)))
+    .sort((a, b) => {
+      const ra = assignee.has(a.id) ? 0 : 1, rb = assignee.has(b.id) ? 0 : 1;
+      return ra !== rb ? ra - rb : (a.name || "").localeCompare(b.name || "");
+    });
+}
+
+// The group option (@all) to offer for a query — those whose alias the
+// query is a prefix of (all of them when the query is empty).
+export function groupMentionOptions(query) {
+  const q = String(query || "").trim().toLowerCase();
+  return GROUP_MENTION_ALIASES.filter((a) => !q || a.startsWith(q));
+}
+
+// Secondary text to DISAMBIGUATE a candidate whose full name is shared by another
+// candidate — email · department · role, whichever exists. "" when the name is unique.
+export function mentionDisambiguator(user, candidates) {
+  if (!user || !user.name) return "";
+  const shared = (candidates || []).filter((u) => u && u.name === user.name);
+  if (shared.length < 2) return "";
+  return user.email || (Array.isArray(user.departments) && user.departments[0]) || user.role || user.id || "";
+}
+
+// Replace the active @query span [start, caret) with a completed token (`@Full Name `
+// or `@all `) — inserting AT THE CARET, not appending. Returns { text, caret }.
+export function applyMention(text, start, caret, insertName) {
+  const t = String(text || "");
+  const head = t.slice(0, Math.max(0, start));
+  const tail = t.slice(Math.max(start, caret));
+  // End the token with one space, but don't double it when the caret sits right
+  // before existing whitespace (inserting into the middle of a sentence).
+  const token = `@${insertName}` + (/^\s/.test(tail) ? "" : " ");
+  return { text: head + token + tail, caret: (head + token).length };
+}
+
+// Non-overlapping @mention spans in `text`. `userNames`/`groupNames` are the display
+// strings to match after '@' (case-insensitive). Longest names match first, so
+// "@David Graphic Design" wins over "@David". An '@' only matches at a token boundary
+// (so emails never match) and a name only matches when the following char is a
+// boundary (so "@Sam" never highlights inside "@Sammy").
+function findMentionSpans(text, userNames = [], groupNames = []) {
+  const t = String(text || "");
+  const targets = [
+    ...(userNames || []).filter(Boolean).map((n) => ({ name: String(n), group: false })),
+    ...(groupNames || []).filter(Boolean).map((n) => ({ name: String(n), group: true })),
+  ].sort((a, b) => b.name.length - a.name.length);
+  if (!targets.length) return [];
+  const spans = [];
+  let i = 0;
+  while (i < t.length) {
+    if (t[i] === "@" && mentionBoundaryBefore(i > 0 ? t[i - 1] : "")) {
+      let hit = null;
+      for (const tg of targets) {
+        const seg = t.slice(i + 1, i + 1 + tg.name.length);
+        if (seg.length === tg.name.length && seg.toLowerCase() === tg.name.toLowerCase()
+            && !mentionWordChar(t[i + 1 + tg.name.length])) { hit = tg; break; }
+      }
+      if (hit) { spans.push({ start: i, end: i + 1 + hit.name.length, group: hit.group }); i = spans[spans.length - 1].end; continue; }
+    }
+    i++;
+  }
+  return spans;
+}
+
+// Whether `name` appears as a mention token in `text` — used to drop a selected
+// mention whose "@Name" the user edited or deleted before posting.
+export function mentionTokenPresent(text, name) {
+  return !!name && findMentionSpans(text, [name], []).length > 0;
+}
+
+// Reconcile a draft with the user's SELECTED mentions: keep only those whose "@Name"
+// token still appears, dedup by uid, and detect the group (@all) token.
+// Returns exactly what gets persisted: { mentions, mentionNames, mentionAll }.
+export function syncCommentMentions(draft, selected = []) {
+  const text = String(draft || "");
+  const mentions = [], mentionNames = [], seen = new Set();
+  for (const s of selected || []) {
+    if (!s || !s.uid || !s.name || seen.has(s.uid)) continue;
+    if (mentionTokenPresent(text, s.name)) { mentions.push(s.uid); mentionNames.push(s.name); seen.add(s.uid); }
+  }
+  const mentionAll = GROUP_MENTION_ALIASES.some((a) => mentionTokenPresent(text, a));
+  return { mentions, mentionNames, mentionAll };
+}
+
+// Split comment text into render segments, marking @mention spans. `mentionNames`
+// are the exact selected display strings (preferred); `legacyNames` is the
+// first-name fallback for comments from the OLD implementation; `mentionAll` adds
+// the @all group token. Returns [{ text, mention, group }] — the caller
+// renders these as SAFE React text nodes (never HTML), so whitespace, punctuation
+// and line breaks are preserved verbatim.
+export function mentionSegments(text, opts = {}) {
+  const t = String(text || "");
+  const userNames = (opts.mentionNames && opts.mentionNames.length) ? opts.mentionNames : (opts.legacyNames || []);
+  const groupNames = opts.mentionAll ? GROUP_MENTION_ALIASES : [];
+  const spans = findMentionSpans(t, userNames, groupNames);
+  if (!spans.length) return [{ text: t, mention: false, group: false }];
+  const out = [];
+  let cur = 0;
+  for (const s of spans) {
+    if (s.start > cur) out.push({ text: t.slice(cur, s.start), mention: false, group: false });
+    out.push({ text: t.slice(s.start, s.end), mention: true, group: s.group });
+    cur = s.end;
+  }
+  if (cur < t.length) out.push({ text: t.slice(cur), mention: false, group: false });
+  return out;
 }
 
 // Identity of a comment for dedup: author + text + when. A migrated subcollection
@@ -1782,11 +2051,20 @@ export function commentKey(c) {
 // subcollection copy wins), oldest first — the order the Discussion thread reads in.
 export function mergeComments(embedded = [], subDocs = []) {
   const byKey = new Map();
+  // Preserve mention metadata (uids + the exact selected name strings + the group
+  // flag) from BOTH representations so highlighting + rename-resilience survive the
+  // merge; the canonical subcollection copy still wins on collision.
+  const withMentions = (c, base) => ({
+    ...base,
+    mentions: Array.isArray(c.mentions) ? c.mentions : [],
+    mentionNames: Array.isArray(c.mentionNames) ? c.mentionNames : [],
+    mentionAll: !!c.mentionAll,
+  });
   for (const c of embedded || []) {
-    byKey.set(commentKey(c), { who: c.who, txt: c.txt, tm: tmMillis(c.tm), source: "legacy" });
+    byKey.set(commentKey(c), withMentions(c, { who: c.who, txt: c.txt, tm: tmMillis(c.tm), source: "legacy" }));
   }
   for (const c of subDocs || []) {
-    byKey.set(commentKey(c), { who: c.who, txt: c.txt, tm: tmMillis(c.tm), source: "sub", id: c.id });
+    byKey.set(commentKey(c), withMentions(c, { who: c.who, txt: c.txt, tm: tmMillis(c.tm), source: "sub", id: c.id }));
   }
   return [...byKey.values()].sort((a, b) => a.tm - b.tm);
 }
