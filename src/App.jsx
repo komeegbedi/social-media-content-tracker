@@ -34,7 +34,7 @@ import {
   isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, loadSummary, crewReason, sameCrew, dateIssues, todayStr, isShootType,
   personLoad, responsibilityTier, staleFlags, orderedCrew,
   isApproved, isQA, isProductionMember, isAssignable, QA_DEPARTMENT,
-  mergeComments, mentionableUsers,
+  mergeComments, mentionableUsers, mentionSegments, taskAssigneeUids,
   withAssigneeUids, computeAssigneeUids, isTaskAssignee, canAdvanceProduction,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
@@ -56,6 +56,7 @@ import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging"
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
 import { useNav, useScrollRestoration, useDirtyNavGuard } from "./navHooks.js";
 import RevisionComposer from "./RevisionComposer.jsx";
+import MentionComposer from "./MentionComposer.jsx";
 import AdminOverrideDialog from "./AdminOverrideDialog.jsx";
 import ScreenFallback from "./ScreenFallback.jsx";
 import { SaveBanner } from "./saveBanner.jsx";
@@ -1685,11 +1686,19 @@ function Board({ profile, isAdmin }) {
   // Comments live in the tasks/{id}/comments subcollection (the canonical store).
   // The author is the trusted signed-in uid — never a client-supplied name — and
   // the timestamp is server-set; rules reject anything else.
-  const addComment = (task, txt, mentions = []) => withFeedback(
-    addDoc(collection(db, "tasks", task.id, "comments"), {
-      uid: me.id, who: me.name, txt, tm: serverTimestamp(),
-      mentions: [...new Set(mentions)].slice(0, 20), // uids; server re-validates + the trigger notifies
-    }), "Note posted");
+  // meta = { mentions:[uid], mentionNames:[string], mentionAll:bool } from the
+  // composer (already deduped + aligned + reconciled with the visible draft text).
+  // UIDs are the identity the server re-validates + notifies; mentionNames records
+  // the exact selected text so highlighting survives a later display-name change;
+  // mentionAll is the group token the trigger expands from the task's assignees.
+  const addComment = (task, txt, meta = {}) => {
+    const mentions = (Array.isArray(meta.mentions) ? meta.mentions : []).slice(0, 20);
+    const mentionNames = (Array.isArray(meta.mentionNames) ? meta.mentionNames : []).slice(0, 20);
+    const body = { uid: me.id, who: me.name, txt, tm: serverTimestamp(), mentions };
+    if (mentionNames.length) body.mentionNames = mentionNames;   // omit empties → keep legacy docs minimal
+    if (meta.mentionAll) body.mentionAll = true;
+    return withFeedback(addDoc(collection(db, "tasks", task.id, "comments"), body), "Note posted");
+  };
   // Reactions are a read-modify-write on one shared map, so concurrent taps from
   // different people would clobber each other. Run it in a transaction: Firestore
   // retries on a conflicting write, so every toggle survives.
@@ -1961,7 +1970,7 @@ function Board({ profile, isAdmin }) {
           onLinks={(links)=>setLinks(openTask, links)}
           onRequestChanges={(note)=>qaRequestChanges(openTask, note)}
           onBlocked={(b)=>setBlocked(openTask.id, b)}
-          onComment={(txt, mentions)=>addComment(openTask, txt, mentions)}
+          onComment={(txt, meta)=>addComment(openTask, txt, meta)}
           onReact={(emo)=>toggleReact(openTask, emo)}
           onSaved={()=>flashBanner("Saved just now")}
           onDuplicate={isAdmin ? async ()=>{ await duplicateTask(openTask); setOpenId(null); } : undefined}
@@ -3429,9 +3438,30 @@ function TrashedContentNotice({ task, onRestore, onClose }) {
   );
 }
 
+// Render a comment body with WhatsApp-style @mention highlighting. Mentions are
+// matched from the stored exact name strings (mentionNames) — so a full name with
+// spaces highlights as ONE unit and survives the mentioned user later renaming — or,
+// for comments from the OLD first-name implementation, the first names of the
+// mentioned users; plus @all/@everyone when the comment carries the group flag.
+// Rendered as SAFE React text nodes (never HTML), preserving whitespace + newlines.
+function CommentText({ c, users }) {
+  const legacyNames = useMemo(() => {
+    if (Array.isArray(c.mentionNames) && c.mentionNames.length) return [];
+    const byId = new Map((users || []).map((u) => [u.id, u]));
+    return (c.mentions || [])
+      .map((uid) => { const u = byId.get(uid); return u && u.name ? u.name.split(/\s+/)[0] : null; })
+      .filter(Boolean);
+  }, [c.mentions, c.mentionNames, users]);
+  const segs = useMemo(
+    () => mentionSegments(c.txt || "", { mentionNames: c.mentionNames, legacyNames, mentionAll: c.mentionAll }),
+    [c.txt, c.mentionNames, c.mentionAll, legacyNames]);
+  return segs.map((s, i) => s.mention
+    ? <span key={i} className={"sb-mention-tag" + (s.group ? " grp" : "")}>{s.text}</span>
+    : <span key={i}>{s.text}</span>);
+}
+
 function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, onClose, onStatus, onAction, onApprove, onAdminOverride, onLinks, onRequestChanges, onBlocked, onComment, onReact, onEdit, onDuplicate, onDelete, onSaved }) {
   const [confirmDel, setConfirmDel] = useState(false);   // admin delete confirmation
-  const [draft, setDraft] = useState("");
   // Escape closes the detail overlay — but not while the delete confirmation is
   // up (that alertdialog handles its own Escape first).
   useEffect(() => {
@@ -3439,18 +3469,12 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, confirmDel]);
-  // @mentions: uids selected from the team (the identity that gets stored); the
-  // "@Name" inserted into the note is just context. Server re-validates.
-  const [mentions, setMentions] = useState([]);
-  const [mentionOpen, setMentionOpen] = useState(false);
+  // @mentions: the MentionComposer owns the draft + typeahead and reports the
+  // selected UIDs (identity) + exact name strings + the group flag on post; the
+  // server re-validates every recipient. Candidates = active/approved teammates
+  // (minus self); current-task assignees are ranked first in the typeahead.
   const mentionCandidates = useMemo(() => mentionableUsers(users, me), [users, me]);
-  const mentionedUsers = mentions.map((id) => mentionCandidates.find((u) => u.id === id)).filter(Boolean);
-  const addMention = (u) => {
-    if (!mentions.includes(u.id)) { setMentions((m) => [...m, u.id]); setDraft((d) => `${d}${d && !d.endsWith(" ") ? " " : ""}@${(u.name || "").split(/\s+/)[0]} `); }
-    setMentionOpen(false);
-  };
-  const removeMention = (id) => setMentions((m) => m.filter((x) => x !== id));
-  const postNote = () => { onComment(draft.trim(), mentions); setDraft(""); setMentions([]); setMentionOpen(false); };
+  const mentionAssignees = useMemo(() => taskAssigneeUids(task), [task]);
   // Local drafts; persisted on blur. Component is keyed by task id, so these
   // reset when a new task opens.
   const [blocked, setBlocked] = useState(task.blockedOn || "");
@@ -3843,39 +3867,13 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
           <div className="sb-sub" style={{marginTop:-6}}>Keep it here, not in WhatsApp.</div>
           {comments.map((c,i)=>(
             <div className="sb-cmt" key={c.id||i}>
-              <div className="who">{c.who}</div><div className="txt">{c.txt}</div><div className="tm">{tm(c.tm)}</div>
+              <div className="who">{c.who}</div>
+              <div className="txt"><CommentText c={c} users={users} /></div>
+              <div className="tm">{tm(c.tm)}</div>
             </div>
           ))}
-          <div className="sb-field" style={{marginTop:10}}>
-            <label htmlFor="td-comment" className="sb-vh">Add a note for the crew</label>
-            <textarea id="td-comment" rows={2} placeholder="Add a note for the crew…" value={draft} onChange={e=>setDraft(e.target.value)} />
-          </div>
-          {mentionedUsers.length>0 && (
-            <div className="sb-mention-chips" style={{display:"flex",flexWrap:"wrap",gap:6,margin:"8px 0 2px"}}>
-              {mentionedUsers.map((u)=>(
-                <span key={u.id} className="sb-chip" style={{display:"inline-flex",alignItems:"center",gap:4}}>
-                  @{u.name}
-                  <button type="button" aria-label={`Remove ${u.name}`} className="sb-chip-x" onClick={()=>removeMention(u.id)}>×</button>
-                </span>
-              ))}
-            </div>
-          )}
-          <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8,position:"relative"}}>
-            <button className="sb-btn compact" disabled={!draft.trim()} onClick={postNote}>Post note</button>
-            {mentionCandidates.length>0 && (
-              <button type="button" className="sb-btn ghost compact" aria-haspopup="listbox" aria-expanded={mentionOpen}
-                onClick={()=>setMentionOpen((o)=>!o)}>@ Mention</button>
-            )}
-            {mentionOpen && (
-              <div className="sb-mention-menu" role="listbox">
-                {mentionCandidates.map((u)=>(
-                  <button key={u.id} type="button" role="option" aria-selected={mentions.includes(u.id)}
-                    className="sb-mention-item" disabled={mentions.includes(u.id)}
-                    onClick={()=>addMention(u)}><bdi>{u.name}</bdi>{mentions.includes(u.id) && <CheckIcon className="hi hi-sm sb-mention-check" aria-hidden="true"/>}</button>
-                ))}
-              </div>
-            )}
-          </div>
+          <MentionComposer candidates={mentionCandidates} assigneeUids={mentionAssignees}
+            onPost={(txt, meta) => onComment(txt, meta)} />
 
           {/* Admin controls = application management, SEPARATE from the QA review
               panel above (Admin ≠ QA). Three tiers: content management, then the

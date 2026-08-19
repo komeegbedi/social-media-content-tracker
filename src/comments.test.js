@@ -55,3 +55,21 @@ test("distinct comments are not collapsed", () => {
   ];
   assert.equal(mergeComments([], sub).length, 3);
 });
+
+test("mergeComments preserves mention metadata (uids, exact names, group flag)", () => {
+  const sub = [{
+    who: "Ada", txt: "@Bo Crew and @everyone", tm: { toMillis: () => 1000 }, id: "m1",
+    mentions: ["bo"], mentionNames: ["Bo Crew"], mentionAll: true,
+  }];
+  const [m] = mergeComments([], sub);
+  assert.deepEqual(m.mentions, ["bo"]);
+  assert.deepEqual(m.mentionNames, ["Bo Crew"]);
+  assert.equal(m.mentionAll, true);
+});
+
+test("mergeComments defaults mention metadata for comments that carry none (legacy)", () => {
+  const [m] = mergeComments([{ who: "A", txt: "hi", tm: 5 }], []);
+  assert.deepEqual(m.mentions, []);
+  assert.deepEqual(m.mentionNames, []);
+  assert.equal(m.mentionAll, false);
+});

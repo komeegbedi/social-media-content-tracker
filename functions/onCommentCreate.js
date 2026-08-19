@@ -5,7 +5,7 @@
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { db, loadUsers, notifyUsers, formatContentTitle, isActive } = require("./lib");
 const { resendApiKey } = require("./emailService");
-const { resolveMentions } = require("./mentions");
+const { resolveMentions, resolveGroupMention } = require("./mentions");
 
 const truncate = (s, n = 120) => (s && s.length > n ? s.slice(0, n) + "…" : (s || ""));
 
@@ -20,21 +20,30 @@ exports.onCommentCreate = onDocumentCreated(
   { document: "tasks/{taskId}/comments/{commentId}", memory: "256MiB", timeoutSeconds: 30, secrets: [resendApiKey] },
   async (event) => {
     const c = event.data.data();
-    if (!Array.isArray(c.mentions) || !c.mentions.length) return;
+    const hasIndividual = Array.isArray(c.mentions) && c.mentions.length > 0;
+    const hasGroup = c.mentionAll === true;   // @all / @everyone group token
+    if (!hasIndividual && !hasGroup) return;
 
-    // Validate the client's mention list server-side: real, approved, active
-    // users only; author never self-notified; duplicates collapsed. The comment
-    // itself was already created — a delivery failure here never un-posts it.
     const { taskId, commentId } = event.params;
-    const { byUid } = await loadUsers();
-    const recipients = resolveMentions(c.mentions, c.uid, byUid, isActive);
-    if (!recipients.length) return;
-
     const taskSnap = await db.doc(`tasks/${taskId}`).get();
     // Never notify a mention against trashed (or vanished) content. Firestore rules
     // already deny creating comments on a trashed task; this is defense-in-depth for
     // any comment created before the task was trashed, or via a trusted path.
     if (!commentTargetActive(taskSnap.exists, taskSnap.exists ? taskSnap.data() : null)) return;
+
+    // Validate recipients SERVER-SIDE: real, approved, active users only; author
+    // never self-notified; duplicates collapsed. Individual mentions come from the
+    // client's uid list; a group mention (@all/@everyone) is derived from the TASK's
+    // assigneeUids — never a client-supplied expansion. The two sets are merged and
+    // deduped, so an individual + @all mention notifies each person exactly once.
+    const { byUid } = await loadUsers();
+    const individual = hasIndividual ? resolveMentions(c.mentions, c.uid, byUid, isActive) : [];
+    const group = hasGroup ? resolveGroupMention(taskSnap.data(), c.uid, byUid, isActive) : [];
+    const byId = new Map();
+    for (const u of [...individual, ...group]) { const id = u && (u.uid || u.id); if (id) byId.set(id, u); }
+    const recipients = [...byId.values()];
+    if (!recipients.length) return;
+
     const title = formatContentTitle(taskSnap.data().title);
 
     await notifyUsers(recipients, {

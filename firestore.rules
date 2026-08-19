@@ -481,13 +481,22 @@ service cloud.firestore {
         allow create: if isApproved()
           && parentTaskActive()
           && request.resource.data.uid == request.auth.uid
-          && request.resource.data.keys().hasOnly(['uid', 'who', 'txt', 'tm', 'mentions'])
+          && request.resource.data.keys().hasOnly(['uid', 'who', 'txt', 'tm', 'mentions', 'mentionNames', 'mentionAll'])
           && request.resource.data.txt is string
           && request.resource.data.txt.size() > 0
           && request.resource.data.txt.size() <= 2000
           && request.resource.data.tm == request.time
+          // Individual mentions: uids the trigger re-validates + notifies (≤ 20).
           && request.resource.data.get('mentions', []) is list
-          && request.resource.data.get('mentions', []).size() <= 20;
+          && request.resource.data.get('mentions', []).size() <= 20
+          // mentionNames: the exact selected display strings (render + rename-resilience),
+          // aligned to `mentions`. Client-only rendering aid — the server never trusts it
+          // for identity — so it is bounded but not otherwise constrained.
+          && request.resource.data.get('mentionNames', []) is list
+          && request.resource.data.get('mentionNames', []).size() <= 20
+          // mentionAll: the @all/@everyone group token. The TRIGGER derives recipients
+          // from the task's assigneeUids — a client-supplied uid list is never expanded.
+          && request.resource.data.get('mentionAll', false) is bool;
         allow update, delete: if isAdmin() && parentTaskActive();
       }
     }

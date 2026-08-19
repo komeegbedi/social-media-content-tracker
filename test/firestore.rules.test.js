@@ -836,6 +836,24 @@ test("a comment must be owned by the caller, well-formed, and size-bounded", asy
   await assertFails(setDoc(doc(as("pending"), "tasks/t9/comments", "c5"), { ...good, uid: "pending" }));
 });
 
+test("comment schema accepts the mention fields (mentionNames, mentionAll) with bounds", async () => {
+  await seed("tasks", "tm", baseTask());
+  const base = { uid: "member", who: "Mel Member", txt: "hey @Bo Crew and @everyone", tm: serverTimestamp() };
+  // A full mention payload is accepted.
+  await assertSucceeds(setDoc(doc(as("member"), "tasks/tm/comments", "ok1"), {
+    ...base, mentions: ["bo"], mentionNames: ["Bo Crew"], mentionAll: true }));
+  // A group-only mention (@everyone) with no individual uids is accepted.
+  await assertSucceeds(setDoc(doc(as("member"), "tasks/tm/comments", "ok2"), { ...base, mentionAll: true }));
+  // mentionAll must be a BOOL.
+  await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad1"), { ...base, mentionAll: "yes" }));
+  // mentionNames must be a LIST, bounded at 20.
+  await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad2"), { ...base, mentionNames: "Bo" }));
+  await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad3"), {
+    ...base, mentionNames: Array.from({ length: 21 }, (_, i) => "N" + i) }));
+  // An unknown field is STILL rejected — the schema stays strict.
+  await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad4"), { ...base, mentionsAll: true }));
+});
+
 /* ---- issues schema (#11) ---- */
 
 test("auto-captured errors are allowed for any signed-in user; reports require approval", async () => {
