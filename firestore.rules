@@ -136,16 +136,30 @@ service cloud.firestore {
     }
     // Captions/posting authority — or Admin. Separate from production + QA.
     function pCanPost(p) { return pIsAdmin(p) || p.get('captions', false) == true; }
-    // Before a submit-to-QA transition (→ In Review) the content type's REQUIRED
-    // deliverable link(s) must be present — validated at the security boundary, not
-    // only in React (mirrors requiredLinkKeys() in src/data.js).
+    // A stored content link must be a real http(s) URL — never blank, whitespace,
+    // plain text, or a scheme-less string. Mirrors isValidUrl() in src/data.js:
+    // an http/https scheme, no whitespace, and a dotted host. (?i) makes the scheme
+    // case-insensitive; the leading host label excludes '/' so a dotted host is required.
+    function pValidLink(links, key) {
+      let v = links.get(key, '');
+      return v is string && v.matches('(?i)^https?://[^\\s/]+[.][^\\s]+$');
+    }
+    // The content type's REQUIRED deliverable link(s) are all present AND valid —
+    // validated at the security boundary, not only in React (mirrors requiredLinkKeys()
+    // + missingLinks() in src/data.js).
     function pRequiredLinksPresent() {
       let type = request.resource.data.get('type', '');
       let links = request.resource.data.get('links', {});
-      return type == 'Poster' ? (links.get('ig', '') != '' && links.get('landscape', '') != '')
-           : type == 'Reel' ? (links.get('video', '') != '')
-           : type == 'Photography' ? (links.get('photos', '') != '')
+      return type == 'Poster' ? (pValidLink(links, 'ig') && pValidLink(links, 'landscape'))
+           : type == 'Reel' ? pValidLink(links, 'video')
+           : type == 'Photography' ? pValidLink(links, 'photos')
            : true;
+    }
+    // Statuses at which the required links MUST be present + valid ("submitted to QA
+    // or beyond"). "Changes Requested" is a rework state and is excluded, so QA can
+    // still bounce a link-less item back. Mirrors statusRequiresLinks() in src/data.js.
+    function pStatusRequiresLinks(s) {
+      return s == 'In Review' || s == 'Approved' || s == 'Ready to Post' || s == 'Posted';
     }
     // Is a proposed `from -> to` status change legal for THIS actor via a DIRECT
     // client write?
@@ -170,13 +184,15 @@ service cloud.firestore {
       // Encode the step as "from>to" and test SET membership — one `in` check per
       // role instead of a fan-out of paired comparisons, which keeps the eagerly-
       // evaluated expression tree well under the emulator's budget.
+      // The type's required links are enforced separately (pNormalUpdateOk, for ANY
+      // transition INTO a link-gated stage), so this predicate is purely about which
+      // actor may make which step — no link check duplicated here.
       let step = from + '>' + to;
       let toReview = step == 'In Progress>In Review' || step == 'Changes Requested>In Review';
       return from == to
         || (pIsQA(p) && isQaDecision(from, to) && reviewDecisionAttributed(to, grew, entry))
         || (pCanAdvanceProduction(p) && productionTransitionAttributed(to, grew, entry) && (
-              step == 'Planned>In Progress'
-              || (toReview && pRequiredLinksPresent())))
+              step == 'Planned>In Progress' || toReview))
         || (pCanPost(p) && productionTransitionAttributed(to, grew, entry)
               && step in ['Approved>Ready to Post', 'Ready to Post>Posted']);
     }
@@ -277,6 +293,13 @@ service cloud.firestore {
         && pActivityConsistent(grew)
         && auditAppendOk(grew, entry)
         && pTransitionAllowed(p, resource.data.status, request.resource.data.status, grew, entry)
+        // Any TRANSITION into a link-gated stage (submit / resubmit / QA approve /
+        // ready / posted) requires the type's valid links. A same-status edit is left
+        // to its existing policy, so reactions/comments on a legacy record aren't newly
+        // blocked; a stale/modified client still can't advance a link-less item.
+        && (resource.data.status == request.resource.data.status
+            || !pStatusRequiresLinks(request.resource.data.status)
+            || pRequiredLinksPresent())
         && (pIsAdmin(p) || pMemberFieldsOk(p));
     }
     // THE task-update decision, structured around mutually-exclusive Trash-state
@@ -417,11 +440,15 @@ service cloud.firestore {
       allow read: if isApproved();
 
       // Admins create tasks. A task can never be BORN trashed — client-supplied
-      // Trash metadata is rejected at creation.
+      // Trash metadata is rejected at creation. Nor can it be BORN (or imported)
+      // directly into a link-gated stage (In Review / Approved / Ready to Post /
+      // Posted) without the type's valid required links — same invariant as updates.
       allow create: if isAdmin()
         && request.resource.data.get('deletedAt', null) == null
         && !('deletedBy' in request.resource.data)
-        && !('deletedByName' in request.resource.data);
+        && !('deletedByName' in request.resource.data)
+        && (!pStatusRequiresLinks(request.resource.data.get('status', 'Planned'))
+            || pRequiredLinksPresent());
       // HARD DELETE IS DENIED for everyone, including admins. Removal is a reversible
       // soft-delete (the Trash transition below); permanent deletion is out of scope
       // and has no client path — so a stale/compromised client can never erase content.

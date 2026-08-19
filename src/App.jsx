@@ -1652,7 +1652,7 @@ function Board({ profile, isAdmin }) {
       const res = await advanceTask(taskId, opts);
       if (res && res.idempotent) { flashBanner(`Already ${res.current}.`, "ok"); return res; }
       if (!res || !res.ok) {
-        flashBanner(res && res.reason === "links" ? "Add the required content link before submitting to QA."
+        flashBanner(res && res.reason === "links" ? "This content is missing a valid required link — add it before it can move forward."
           : res && res.reason === "stale" ? `Already moved to ${res.current} by someone else — refresh to continue.`
           : res && res.reason === "trashed" ? "This content is in Trash — restore it first."
           : "That content no longer exists.", "err");
@@ -3553,6 +3553,15 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   // Only the type's required links (plus any already filled) — keeps it focused.
   const linkKeys = Object.keys(LINK_FIELDS).filter(k => required.includes(k) || (links[k]||"").trim());
   const postStage = ["Ready to Post","Posted"].includes(task.status);
+  // A submit-to-QA step (Submit / Resubmit) is BLOCKED until every required link is a
+  // valid http(s) URL — missingLinks now validates the URL, so blank, whitespace,
+  // plain text, or a scheme-less value all count as missing. Drives both the disabled
+  // button and the persistent inline hint naming the exact fields to complete.
+  const missingReqLinks = action?.requiresLinks ? missingLinks({ ...task, links }) : [];
+  const submitBlocked = missingReqLinks.length > 0;
+  const submitHint = submitBlocked
+    ? `Add a valid link (https://…) for ${missingReqLinks.map(k => LINK_FIELDS[k]).join(" and ")} before submitting for QA.`
+    : "";
   // The "Changes requested" feedback shown to the OWNER — resolved source-first by
   // latestChangeRequest so an admin override's audit reason is never exposed as
   // revision guidance (a legacy override without instructions shows a neutral note).
@@ -3670,7 +3679,9 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
               Mark ready to post / Mark as posted). */}
           {action && (
             <div style={{marginBottom:14}}>
-              <button className="sb-btn" onClick={doAction}>{action.label}</button>
+              <button className="sb-btn" onClick={doAction} disabled={submitBlocked}
+                aria-describedby={submitBlocked ? "sb-submit-hint" : undefined}>{action.label}</button>
+              {submitBlocked && <div className="sb-lerr" id="sb-submit-hint" style={{marginTop:8}}>{submitHint}</div>}
               {warn && <div className="sb-lerr" style={{marginTop:8}}>{warn}</div>}
             </div>
           )}

@@ -46,7 +46,11 @@ const USERS = {
 
 const baseTask = (over = {}) => ({
   title: "Sunday Reel", type: "Reel", owner: "Otis Owner",
-  status: "Planned", activity: [{ type: "created", by: "Ada Admin", at: 1 }],
+  // A valid Reel deliverable link by default, so a task legitimately at In Review /
+  // Approved / Ready to Post / Posted satisfies the link invariant. Tests that
+  // exercise the MISSING-link boundary override this with `links: {}` (or a bad value).
+  status: "Planned", links: { video: "https://drive.example/reel" },
+  activity: [{ type: "created", by: "Ada Admin", at: 1 }],
   ...over,
 });
 
@@ -496,6 +500,61 @@ test("MISSING required links are rejected at the boundary on submit to QA", asyn
   await assertFails(directWrite("member", "aw9", "In Review", "qa_sent"));       // Reel needs video
   await seed("tasks", "aw9", assignedTask({ status: "In Progress", type: "Poster", links: { ig: "x" } }));
   await assertFails(directWrite("member", "aw9", "In Review", "qa_sent"));       // Poster needs ig + landscape
+});
+
+/* ---- Submit-to-QA link invariant: only VALID http(s) URLs pass (the bypass fix) ---- */
+test("Reel submit → In Review is DENIED for blank / whitespace / plain-text / scheme-less links", async () => {
+  for (const bad of [{}, { video: "" }, { video: "   " }, { video: "tbd later" }, { video: "drive.google.com/x" }, { video: "ftp://a.com/x" }]) {
+    await seed("tasks", "lk", assignedTask({ status: "In Progress", type: "Reel", links: bad }));
+    await assertFails(directWrite("member", "lk", "In Review", "qa_sent"));
+  }
+  // A valid https URL submits successfully.
+  await seed("tasks", "lk", assignedTask({ status: "In Progress", type: "Reel", links: { video: "https://drive.google.com/file/abc" } }));
+  await assertSucceeds(directWrite("member", "lk", "In Review", "qa_sent"));
+});
+
+test("Poster submit → In Review needs BOTH graphics valid (one present is not enough)", async () => {
+  await seed("tasks", "lp", assignedTask({ status: "In Progress", type: "Poster", links: { ig: "https://a.com/ig" } }));
+  await assertFails(directWrite("member", "lp", "In Review", "qa_sent"));                 // landscape missing
+  await seed("tasks", "lp", assignedTask({ status: "In Progress", type: "Poster", links: { ig: "https://a.com/ig", landscape: "not-a-url" } }));
+  await assertFails(directWrite("member", "lp", "In Review", "qa_sent"));                 // landscape invalid
+  await seed("tasks", "lp", assignedTask({ status: "In Progress", type: "Poster", links: { ig: "https://a.com/ig", landscape: "https://a.com/land" } }));
+  await assertSucceeds(directWrite("member", "lp", "In Review", "qa_sent"));              // both valid → ok
+});
+
+test("direct CREATE into a link-gated status without valid links is denied (blocks import bypass)", async () => {
+  // A Reel born straight into In Review with no/invalid links → denied.
+  await assertFails(setDoc(doc(as("admin"), "tasks", "cIR"), baseTask({ status: "In Review", links: {} })));
+  await assertFails(setDoc(doc(as("admin"), "tasks", "cIR"), baseTask({ status: "In Review", links: { video: "tbd" } })));
+  // Later stages too (Approved / Ready to Post / Posted).
+  await assertFails(setDoc(doc(as("admin"), "tasks", "cAP"), baseTask({ status: "Approved", links: {} })));
+  // With valid links, creating directly at In Review is allowed (a legitimate backfill).
+  await assertSucceeds(setDoc(doc(as("admin"), "tasks", "cOK"), baseTask({ status: "In Review", links: { video: "https://drive.google.com/x" } })));
+  // Creating in a non-gated status never needs links.
+  await assertSucceeds(setDoc(doc(as("admin"), "tasks", "cPL"), baseTask({ status: "Planned", links: {} })));
+});
+
+test("QA CANNOT approve a legacy In Review record whose required links are missing/invalid", async () => {
+  // A legacy record sitting at In Review with an invalid link (seeded past the boundary).
+  await seed("tasks", "leg", assignedTask({ status: "In Review", type: "Reel", links: { video: "not a url" } }));
+  await assertFails(updateDoc(doc(as("qa"), "tasks", "leg"), {                            // approve → denied (bad links)
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "Quinn QA", uid: "qa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+  // QA can still bounce it BACK for correction (Changes Requested is not link-gated).
+  await assertSucceeds(updateDoc(doc(as("qa"), "tasks", "leg"), {
+    status: "Changes Requested",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "changes_requested", by: "Quinn QA", uid: "qa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
+  // Once a valid link is attached, approval succeeds.
+  await seed("tasks", "leg", assignedTask({ status: "In Review", type: "Reel", links: { video: "https://drive.google.com/fixed" } }));
+  await assertSucceeds(updateDoc(doc(as("qa"), "tasks", "leg"), {
+    status: "Approved",
+    activity: [{ type: "created", by: "Ada Admin", at: 1 }, { type: "approved", by: "Quinn QA", uid: "qa", at: 2 }],
+    updatedAt: serverTimestamp(),
+  }));
 });
 
 test("assigned production members CANNOT approve or request changes (QA-only)", async () => {

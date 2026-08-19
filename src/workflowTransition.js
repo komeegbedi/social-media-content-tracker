@@ -15,7 +15,7 @@
    whole callback, so the loser of a race re-reads the winner's committed status and
    `planTransition` returns an idempotent no-op — exactly one workflow event is ever
    appended, and no existing activity is lost. */
-import { missingLinks, activityEntry } from "./data.js";
+import { missingLinks, activityEntry, statusRequiresLinks } from "./data.js";
 
 // Action-specific capability attribution: which authority the actor is EXERCISING
 // for THIS transition — not merely what their profile could do. Recorded on the
@@ -50,7 +50,11 @@ export function planTransition(cur, opts = {}) {
   // report without writing, so we never advance from the wrong state.
   if (fromStatus != null && cur.status !== fromStatus) return { ok: false, reason: "stale", current: cur.status };
   const merged = { ...cur, ...extra };
-  if (toStatus === "In Review" && missingLinks(merged).length) return { ok: false, reason: "links" };
+  // A transition INTO a link-gated stage (In Review / Approved / Ready to Post /
+  // Posted) requires the type's deliverable link(s) to be present AND valid — this
+  // covers submit + resubmit, and blocks QA approval of a legacy record whose links
+  // are missing or invalid. Mirrored in firestore.rules (pStatusRequiresLinks).
+  if (statusRequiresLinks(toStatus) && missingLinks(merged).length) return { ok: false, reason: "links" };
   const meta = actor ? { uid: actor.uid, cap: actor.cap } : null;
   const entry = activityEntry(kind, actor && actor.name, note != null ? note : toStatus, meta);
   const update = {

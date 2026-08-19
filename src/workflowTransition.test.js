@@ -87,8 +87,47 @@ test("planTransition · a trashed or missing task is refused without a write", (
 });
 
 test("planTransition · Posted flags archive so the caller stamps archivedAt", () => {
-  const r = planTransition({ status: "Ready to Post" },
+  const r = planTransition({ status: "Ready to Post", type: "Reel", links: { video: "https://drive.google.com/x" } },
     { fromStatus: "Ready to Post", toStatus: "Posted", kind: "posted", actor: { ...actor, cap: "captions" } });
   assert.equal(r.ok, true);
   assert.equal(r.archive, true);
+});
+
+/* ---- submit-to-QA link invariant: only VALID http(s) URLs may cross into a gated stage ---- */
+const submit = (links, toStatus = "In Review", kind = "qa_sent") =>
+  planTransition({ status: "In Progress", type: "Reel", links },
+    { fromStatus: "In Progress", toStatus, kind, actor });
+
+test("planTransition · a Reel submit with a blank / whitespace / plain-text / scheme-less link is blocked", () => {
+  for (const links of [{}, { video: "" }, { video: "   " }, { video: "coming soon" }, { video: "drive.google.com/x" }, { video: "ftp://a.com/x" }]) {
+    const r = submit(links);
+    assert.equal(r.ok, false, `links=${JSON.stringify(links)} should block`);
+    assert.equal(r.reason, "links");
+    assert.equal(r.update, undefined, "no write is planned");
+  }
+});
+
+test("planTransition · a Reel submit with a valid https URL succeeds and appends qa_sent", () => {
+  const r = submit({ video: "https://drive.google.com/file/abc" });
+  assert.equal(r.ok, true);
+  assert.equal(r.update.status, "In Review");
+  assert.equal(r.update.activity[r.update.activity.length - 1].type, "qa_sent");
+});
+
+test("planTransition · a Poster needs BOTH graphics valid to submit", () => {
+  const poster = (links) => planTransition({ status: "In Progress", type: "Poster", links },
+    { fromStatus: "In Progress", toStatus: "In Review", kind: "qa_sent", actor });
+  assert.equal(poster({ ig: "https://a.com/ig" }).reason, "links");                              // landscape missing
+  assert.equal(poster({ ig: "https://a.com/ig", landscape: "nope" }).reason, "links");           // landscape invalid
+  assert.equal(poster({ ig: "https://a.com/ig", landscape: "https://a.com/land" }).ok, true);    // both valid → ok
+});
+
+test("planTransition · QA approval of a legacy In Review record with an invalid link is blocked", () => {
+  const legacy = { status: "In Review", type: "Reel", links: { video: "tbd" } };
+  const approve = planTransition(legacy, { fromStatus: "In Review", toStatus: "Approved", kind: "approved", actor: { ...actor, cap: "qa" } });
+  assert.equal(approve.ok, false);
+  assert.equal(approve.reason, "links");
+  // Requesting changes (a non-gated status) is NOT blocked, so QA can bounce it back.
+  const bounce = planTransition(legacy, { fromStatus: "In Review", toStatus: "Changes Requested", kind: "changes_requested", actor: { ...actor, cap: "qa" } });
+  assert.equal(bounce.ok, true);
 });

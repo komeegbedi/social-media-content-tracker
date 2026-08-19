@@ -172,11 +172,21 @@ export function requiredLinkKeys(type) {
   if (type === "Photography") return ["photos"];       // Photography folder
   return [];
 }
-// Required link keys still missing on a task.
+// Required link keys whose value is missing OR NOT a valid http(s) URL. A blank,
+// whitespace-only, plain-text, or scheme-less value counts as missing — the same
+// isValidUrl gate the UI and Firestore rules use, so "submitted for QA" can never
+// mean "with a junk link".
 export function missingLinks(task) {
   const links = task.links || {};
-  return requiredLinkKeys(task.type).filter((k) => !String(links[k] || "").trim());
+  return requiredLinkKeys(task.type).filter((k) => !isValidUrl(links[k]));
 }
+// Statuses that mean "submitted to QA or beyond" — the type's required content
+// links MUST be present and valid at (and after) these stages. "Changes Requested"
+// is a rework state (links may be mid-fix) and is deliberately excluded, so QA can
+// still bounce a link-less item back for correction. Mirrors pStatusRequiresLinks()
+// in firestore.rules and gates transitions in workflowTransition.planTransition().
+export const LINK_GATED_STAGES = ["In Review", "Approved", "Ready to Post", "Posted"];
+export const statusRequiresLinks = (status) => LINK_GATED_STAGES.includes(status);
 // Statuses that mean "submitted to QA or beyond" — content must be attached.
 export const QA_STATUSES = ["In Review", "Approved", "Posted"];
 
