@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import {
   mentionableUsers, mentionQuery, filterMentionCandidates, groupMentionOptions,
   mentionDisambiguator, applyMention, mentionTokenPresent, syncCommentMentions,
-  mentionSegments,
+  mentionSegments, selectedMentionSpans, planMentionDeletion, reconcileTokens, tokenSegments, applyTokenEdit,
 } from "./data.js";
 
 const users = [
@@ -147,4 +147,112 @@ test("mentionSegments: legacy comments fall back to the mentioned users' FIRST n
 
 test("mentionSegments: no mentions → a single plain text segment", () => {
   assert.deepEqual(mentionSegments("just text", {}), [{ text: "just text", mention: false, group: false }]);
+});
+
+/* ---------------------------------------------------------------------------
+   Atomic mention tokens — spans + whole-token deletion planning
+   --------------------------------------------------------------------------- */
+
+test("selectedMentionSpans: tags each present token with its identity (uid / group)", () => {
+  const sel = [{ uid: "u1", name: "Tofunmi" }, { uid: "u2", name: "Bo Crew" }];
+  const spans = selectedMentionSpans("hi @Tofunmi and @Bo Crew ok", sel, false);
+  assert.deepEqual(spans.map((s) => [s.start, s.end, s.uid, s.group]),
+    [[3, 11, "u1", false], [16, 24, "u2", false]]);
+  // @all tagged as a group span when the flag is set.
+  const g = selectedMentionSpans("ping @all now", [], true);
+  assert.deepEqual(g.map((s) => [s.start, s.end, s.group, s.name]), [[5, 9, true, "all"]]);
+  // An unselected name is NOT a span (no identity to make it a token).
+  assert.deepEqual(selectedMentionSpans("@Bo Crew", [], false), []);
+});
+
+test("planMentionDeletion: Backspace at a token end removes the whole token + its space", () => {
+  const sel = [{ uid: "u1", name: "Tofunmi" }];
+  const spans = selectedMentionSpans("@Tofunmi hey", sel, false);
+  assert.deepEqual(planMentionDeletion("@Tofunmi hey", 8, 8, "backward", spans),
+    { text: "hey", caret: 0, range: [0, 9], removed: [{ name: "Tofunmi", group: false, uid: "u1" }] });
+});
+
+test("planMentionDeletion: Delete at a token start, and Backspace from inside, both remove it whole", () => {
+  const sel = [{ uid: "u1", name: "Tofunmi" }];
+  const spans = selectedMentionSpans("@Tofunmi hey", sel, false);
+  assert.equal(planMentionDeletion("@Tofunmi hey", 0, 0, "forward", spans).text, "hey");   // delete at start
+  assert.equal(planMentionDeletion("@Tofunmi hey", 4, 4, "backward", spans).text, "hey");  // backspace inside
+});
+
+test("planMentionDeletion: an edit that touches no token returns null (edit normally)", () => {
+  const sel = [{ uid: "u1", name: "Tofunmi" }];
+  const spans = selectedMentionSpans("@Tofunmi hey", sel, false);
+  assert.equal(planMentionDeletion("@Tofunmi hey", 11, 11, "backward", spans), null);  // deep in "hey"
+});
+
+test("planMentionDeletion: a range overlapping a token removes the entire token", () => {
+  const sel = [{ uid: "u1", name: "Bo Crew" }];
+  const spans = selectedMentionSpans("hi @Bo Crew there", sel, false);
+  const r = planMentionDeletion("hi @Bo Crew there", 6, 13, "backward", spans);   // mid-token → mid-"there"
+  assert.equal(r.text.includes("@Bo Crew"), false);
+  assert.deepEqual(r.removed, [{ name: "Bo Crew", group: false, uid: "u1" }]);
+});
+
+test("planMentionDeletion: removing an @all token reports a group removal", () => {
+  const spans = selectedMentionSpans("ping @all now", [], true);
+  const r = planMentionDeletion("ping @all now", 7, 7, "backward", spans);
+  assert.equal(r.text, "ping now");
+  assert.equal(r.removed[0].group, true);
+});
+
+/* ---------------------------------------------------------------------------
+   Position-tracked tokens — identity survives boundary changes (the bug fix)
+   --------------------------------------------------------------------------- */
+const tok = (start, name, uid, group = false) => ({ start, name, uid, group });
+
+test("reconcileTokens: deleting the trailing separator KEEPS the token (identity survives)", () => {
+  const r = reconcileTokens([tok(0, "Tofunmi", "u1")], "@Tofunmi hey", "@Tofunmihey");
+  assert.deepEqual(r, [tok(0, "Tofunmi", "u1")]);          // still [0,8), still Tofunmi/u1
+});
+
+test("reconcileTokens: an edit BEFORE the token shifts it; an edit AFTER leaves it", () => {
+  assert.equal(reconcileTokens([tok(0, "Bo Crew", "b")], "@Bo Crew", "hi @Bo Crew")[0].start, 3);   // before → shift
+  assert.deepEqual(reconcileTokens([tok(0, "Bo Crew", "b")], "@Bo Crew ", "@Bo Crew ok"), [tok(0, "Bo Crew", "b")]); // after → unchanged
+});
+
+test("reconcileTokens: adjacent punctuation/letters do NOT demote a selected token", () => {
+  assert.equal(reconcileTokens([tok(0, "Tofunmi", "u1")], "@Tofunmi", "@Tofunmi!").length, 1);   // punctuation after
+  assert.equal(reconcileTokens([tok(0, "Tofunmi", "u1")], "@Tofunmi", "@Tofunmix").length, 1);   // letter after
+});
+
+test("reconcileTokens: an edit INSIDE the token drops it (insert or delete)", () => {
+  assert.deepEqual(reconcileTokens([tok(0, "Tofunmi", "u1")], "@Tofunmi hey", "@Tofxunmi hey"), []); // insert inside
+  assert.deepEqual(reconcileTokens([tok(0, "Tofunmi", "u1")], "@Tofunmi hey", "@Tofnmi hey"), []);   // delete inside
+});
+
+test("reconcileTokens: two tokens keep identity when the space between them is removed", () => {
+  const toks = [tok(0, "Bo Crew", "b"), tok(9, "Ada Admin", "a")];
+  const r = reconcileTokens(toks, "@Bo Crew @Ada Admin ", "@Bo Crew@Ada Admin ");
+  assert.deepEqual(r.map((t) => [t.start, t.uid]), [[0, "b"], [8, "a"]]);   // Bo stays, Ada shifts -1
+});
+
+test("tokenSegments: renders exactly the stored ranges — '@Tofunmihey' → @Tofunmi + hey", () => {
+  assert.deepEqual(tokenSegments("@Tofunmihey", [{ start: 0, end: 8 }]), [
+    { text: "@Tofunmi", mention: true, group: false },
+    { text: "hey", mention: false, group: false },
+  ]);
+});
+
+test("tokenSegments: ignores out-of-bounds or non-'@' ranges (forged-range safety)", () => {
+  assert.deepEqual(tokenSegments("hello world", [{ start: 3, end: 8 }]), [{ text: "hello world", mention: false, group: false }]); // not an @token
+  assert.deepEqual(tokenSegments("@Bo", [{ start: 0, end: 99 }]), [{ text: "@Bo", mention: false, group: false }]);               // out of bounds
+});
+
+test("applyTokenEdit: a known edit drops the intersected token and shifts later ones exactly", () => {
+  // "@Bo Crew @Ada Admin " — delete "@Bo Crew " ([0,9)); Bo dropped, Ada shifts to 0.
+  const toks = [{ start: 0, name: "Bo Crew", uid: "b" }, { start: 9, name: "Ada Admin", uid: "a" }];
+  assert.deepEqual(applyTokenEdit(toks, 0, 9, 0).map((t) => [t.start, t.uid]), [[0, "a"]]);
+  // An edit strictly after both tokens leaves them; an edit before shifts both by delta.
+  assert.deepEqual(applyTokenEdit(toks, 20, 20, 3).map((t) => t.start), [0, 9]);          // after → unchanged
+  assert.deepEqual(applyTokenEdit(toks, 0, 0, 3).map((t) => t.start), [3, 12]);           // insert 3 before → shift
+});
+
+test("planMentionDeletion reports the exact edited range (for applyTokenEdit)", () => {
+  const spans = selectedMentionSpans("hi @Bo Crew there", [{ uid: "b", name: "Bo Crew" }], false);
+  assert.deepEqual(planMentionDeletion("hi @Bo Crew there", 5, 5, "backward", spans).range, [3, 12]); // "@Bo Crew " incl. space
 });

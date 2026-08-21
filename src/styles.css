@@ -2279,6 +2279,26 @@ a{color:var(--accent-foreground)}
 /* @mention typeahead — an inline listbox anchored to the composer, filtered live as
    the user types after "@" (see MentionComposer.jsx). */
 .sb-mc{position:relative}
+/* Inline-highlight composer: a real <textarea> (transparent text + visible caret)
+   sits over an aria-hidden OVERLAY that paints the same value with green mention
+   tokens. Both layers MUST share identical box metrics so the text aligns exactly. */
+.sb-mc-wrap{position:relative;border:1px solid var(--field-border);border-radius:11px;background:var(--field)}
+.sb-mc-wrap:focus-within{outline:2px solid var(--focus-ring);outline-offset:1px;border-color:var(--focus-ring)}
+.sb-mc-overlay,.sb-mc-input{box-sizing:border-box;width:100%;margin:0;border:0;border-radius:11px;
+  padding:11px 12px;font:inherit;font-size:1rem;line-height:1.5;
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.sb-mc-overlay{position:absolute;inset:0;pointer-events:none;overflow:hidden;color:var(--text-primary);z-index:1}
+.sb-mc-input{position:relative;display:block;min-height:calc(1.5em * 2 + 22px);resize:vertical;
+  background:transparent;color:transparent;caret-color:var(--text-primary);-webkit-text-fill-color:transparent;z-index:2}
+.sb-mc-input:focus{outline:none}
+.sb-mc-input::placeholder{color:var(--text-muted);-webkit-text-fill-color:var(--text-muted)}
+@media(max-width:899px){ .sb-mc-input{min-height:calc(1.5em * 2 + 44px)} }
+/* The composer textarea MUST stay transparent in EVERY theme so the overlay shows
+   through — the wrapper (.sb-mc-wrap) owns the visible field background. This selector
+   (0,2,1) is more specific than the generic `[data-theme="dark"] textarea` rule (0,1,1)
+   that would otherwise repaint it opaque (var(--field)) and hide the text on iPhone. */
+.sb-mc-wrap > textarea.sb-mc-input{background:transparent;color:transparent;-webkit-text-fill-color:transparent;caret-color:var(--text-primary)}
+.sb-mc-wrap > textarea.sb-mc-input::placeholder{color:var(--text-muted);-webkit-text-fill-color:var(--text-muted)}
 .sb-mention-pop{position:absolute;bottom:100%;inset-inline:0;margin:0 0 6px;z-index:30;list-style:none;padding:4px;
   max-height:260px;overflow-y:auto;background:var(--card);
   border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 28px rgba(0,0,0,.16)}
@@ -2293,6 +2313,13 @@ a{color:var(--accent-foreground)}
 @media(max-width:899px){ .sb-mention-opt{min-height:44px} }
 /* Posted-comment mention highlight — WhatsApp green, one unit incl. names with spaces. */
 .sb-mention-tag{color:var(--green-fg);font-weight:600}
+/* Inside the COMPOSER overlay a mention must be METRICALLY identical to the same
+   text in the transparent textarea (which renders it at the normal weight) — a
+   heavier weight is wider, so text after the mention drifts and the caret lands on
+   the wrong glyph. Highlight by COLOR only here; the textarea stays the metric
+   source. (Posted comments keep the semibold .sb-mention-tag — they have no textarea
+   to align to.) `inherit` matches whatever weight the textarea inherits. */
+.sb-mc-overlay .sb-mention-tag{font-weight:inherit}
 .sb-chip-all{background:var(--green-soft);color:var(--green-fg)}
 /* Detail value column: end-aligned, truncates. `dir="auto"` set in JSX isolates
    user/mixed-direction values (emails, links, names). */

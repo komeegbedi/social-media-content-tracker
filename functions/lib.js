@@ -54,7 +54,12 @@ function prefsAllow(user, type) {
 }
 const pushAllow = (user) => !(user && user.notifPrefs && user.notifPrefs.push === false); // missing = on
 const emailAllow = (user) => !(user && user.notifPrefs && user.notifPrefs.email === false); // missing = on
-const isActive = (user) => user && (user.status === "approved" || user.role === "admin");
+// A user is active (eligible to receive notifications / be a mention recipient)
+// only if approved-or-admin AND NOT disabled. `disabled` is the authoritative kill
+// switch — a removed/disabled account never notifies, even if its tombstone still
+// carries an 'admin' role or an 'approved' status. Mirrors the client eligibility
+// (mentionableUsers / isApproved usage) so both sides agree on who is reachable.
+const isActive = (user) => !!user && user.disabled !== true && (user.status === "approved" || user.role === "admin");
 
 /* ---- web push (FCM) ---- send to all of a user's devices, prune dead tokens.
    Returns a delivery outcome (never throws): { ok } | { skip, reason } |

@@ -36,7 +36,7 @@ function taskAssigneeUids(taskData) {
   return [...new Set(out.filter(Boolean))];
 }
 
-// Recipients of an @all / @everyone group mention: everyone ASSIGNED to this task,
+// Recipients of an @all group mention: everyone ASSIGNED to this task,
 // resolved from the task doc's assignee uids and run through the same validation as
 // individual mentions (real, active, approved; author excluded; deduped). BOTH
 // aliases map here — never to the whole application's user base.

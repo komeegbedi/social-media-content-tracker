@@ -34,7 +34,7 @@ import {
   isValidUrl, userDepartments, isAvailable, soloCrewFor, soloCrewVerb, loadSummary, crewReason, sameCrew, dateIssues, todayStr, isShootType,
   personLoad, responsibilityTier, staleFlags, orderedCrew,
   isApproved, isQA, isProductionMember, isAssignable, QA_DEPARTMENT,
-  mergeComments, mentionableUsers, mentionSegments, taskAssigneeUids,
+  mergeComments, mentionableUsers, mentionSegments, tokenSegments, taskAssigneeUids,
   withAssigneeUids, computeAssigneeUids, isTaskAssignee, canAdvanceProduction,
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
@@ -1694,8 +1694,13 @@ function Board({ profile, isAdmin }) {
   const addComment = (task, txt, meta = {}) => {
     const mentions = (Array.isArray(meta.mentions) ? meta.mentions : []).slice(0, 20);
     const mentionNames = (Array.isArray(meta.mentionNames) ? meta.mentionNames : []).slice(0, 20);
+    // Rendering-only token positions [start,end,…] in `txt` — so a mention still
+    // highlights after its trailing space is deleted (@Tofunmihey). NEVER an
+    // identity source; the trigger notifies from `mentions`/`mentionAll` only.
+    const mentionRanges = (Array.isArray(meta.mentionRanges) ? meta.mentionRanges : []).slice(0, 42);
     const body = { uid: me.id, who: me.name, txt, tm: serverTimestamp(), mentions };
     if (mentionNames.length) body.mentionNames = mentionNames;   // omit empties → keep legacy docs minimal
+    if (mentionRanges.length) body.mentionRanges = mentionRanges;
     if (meta.mentionAll) body.mentionAll = true;
     return withFeedback(addDoc(collection(db, "tasks", task.id, "comments"), body), "Note posted");
   };
@@ -3439,11 +3444,12 @@ function TrashedContentNotice({ task, onRestore, onClose }) {
 }
 
 // Render a comment body with WhatsApp-style @mention highlighting. Mentions are
-// matched from the stored exact name strings (mentionNames) — so a full name with
-// spaces highlights as ONE unit and survives the mentioned user later renaming — or,
-// for comments from the OLD first-name implementation, the first names of the
-// mentioned users; plus @all/@everyone when the comment carries the group flag.
-// Rendered as SAFE React text nodes (never HTML), preserving whitespace + newlines.
+// Render a comment body with @mention highlighting. PREFERS the stored token
+// positions (mentionRanges) so a mention keeps its exact highlight even when the
+// separator was deleted (@Tofunmihey → @Tofunmi highlighted, hey plain). Falls back
+// to name-based matching for comments WITHOUT ranges (older docs / the old
+// first-name implementation). Rendered as SAFE React text nodes (never HTML),
+// preserving whitespace + newlines; positions are rendering-only, never identity.
 function CommentText({ c, users }) {
   const legacyNames = useMemo(() => {
     if (Array.isArray(c.mentionNames) && c.mentionNames.length) return [];
@@ -3452,9 +3458,15 @@ function CommentText({ c, users }) {
       .map((uid) => { const u = byId.get(uid); return u && u.name ? u.name.split(/\s+/)[0] : null; })
       .filter(Boolean);
   }, [c.mentions, c.mentionNames, users]);
-  const segs = useMemo(
-    () => mentionSegments(c.txt || "", { mentionNames: c.mentionNames, legacyNames, mentionAll: c.mentionAll }),
-    [c.txt, c.mentionNames, c.mentionAll, legacyNames]);
+  const segs = useMemo(() => {
+    const r = c.mentionRanges;
+    if (Array.isArray(r) && r.length >= 2) {
+      const spans = [];
+      for (let i = 0; i + 1 < r.length; i += 2) if (typeof r[i] === "number" && typeof r[i + 1] === "number") spans.push({ start: r[i], end: r[i + 1] });
+      return tokenSegments(c.txt || "", spans);   // exact stored positions
+    }
+    return mentionSegments(c.txt || "", { mentionNames: c.mentionNames, legacyNames, mentionAll: c.mentionAll });
+  }, [c.txt, c.mentionRanges, c.mentionNames, c.mentionAll, legacyNames]);
   return segs.map((s, i) => s.mention
     ? <span key={i} className={"sb-mention-tag" + (s.group ? " grp" : "")}>{s.text}</span>
     : <span key={i}>{s.text}</span>);

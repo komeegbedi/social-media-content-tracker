@@ -20,6 +20,7 @@ const USERS = {
   m1: { name: "Bo", status: "approved" },
   m2: { name: "Cy", status: "approved" },
   pend: { name: "Peg", status: "pending" },
+  dis: { name: "Dana", status: "approved", disabled: true },   // approved BUT disabled
 };
 
 before(async () => { for (const [id, u] of Object.entries(USERS)) await db.collection("users").doc(id).set(u); });
@@ -55,7 +56,7 @@ test("a re-fired comment trigger dedupes to one notification", async () => {
 });
 
 // Mirror onCommentCreate's FULL recipient logic: individual mentions + a group
-// (@all/@everyone) derived from the task's assigneeUids, merged and deduped.
+// (@all) derived from the task's assigneeUids, merged and deduped.
 async function notifyComment(commentId, authorUid, { mentions = [], mentionAll = false }, taskData) {
   const { byUid } = await loadUsers();
   const individual = mentions.length ? resolveMentions(mentions, authorUid, byUid, isActive) : [];
@@ -92,4 +93,17 @@ test("@all falls back to owner + support for a legacy task without assigneeUids"
   await notifyComment("g3", "author", { mentionAll: true }, task);
   assert.equal(await countFor("m1"), 1);
   assert.equal(await countFor("m2"), 1);
+});
+
+test("the shared isActive treats a disabled (but approved) user as inactive", () => {
+  assert.equal(isActive({ status: "approved", disabled: true }), false);
+  assert.equal(isActive({ role: "admin", disabled: true }), false);
+  assert.equal(isActive({ status: "approved" }), true);
+});
+
+test("a DISABLED user is never notified — individually, via @all, or both (real pipeline)", async () => {
+  const task = { assigneeUids: ["author", "m1", "dis"] };
+  await notifyComment("gd", "author", { mentions: ["dis"], mentionAll: true }, task);
+  assert.equal(await countFor("m1"), 1);       // the active assignee
+  assert.equal(await countFor("dis"), 0);      // disabled → nothing, both ways
 });
