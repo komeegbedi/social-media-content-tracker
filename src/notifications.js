@@ -36,41 +36,14 @@ export const NOTIF_META = {
   account_pending:  { icon: UserPlusIcon,               label: "Approval needed",   tint: "tint-primary" },
   leadership:       { icon: ChartBarIcon,               label: "Leadership",        tint: "tint-neutral" },
   weeklyTaskCheck:  { icon: ClockIcon,                  label: "Weekly check-in",   tint: "tint-primary" },
+  admin_delivery_health: { icon: ExclamationTriangleIcon, label: "Delivery alert",  tint: "tint-warning" },
 };
 export const NOTIF_FALLBACK = { icon: BellIcon, label: "Update", tint: "tint-neutral" };
 
-// The per-type toggles a user can control. "Required" messages
-// (account_approved and security notices) always send and aren't listed.
-export const PREF_TYPES = [
-  { key: "assigned",   label: "Assigned to content" },
-  { key: "reminder",   label: "Due-date reminders" },
-  { key: "overdue",    label: "Overdue alerts" },
-  { key: "qa",         label: "Review requests" },
-  { key: "changes",    label: "Changes requested" },
-  { key: "approved",   label: "Content approved" },
-  { key: "ready",      label: "Ready to post" },
-  { key: "mention",    label: "Mentions" },
-  { key: "leadership", label: "Leadership alerts" },
-  { key: "weeklyTaskCheck", label: "Weekly Saturday check-in" },
-];
-
-// Defaults for users who haven't set preferences yet: everything on.
-export function defaultPrefs() {
-  const perType = {};
-  PREF_TYPES.forEach((t) => { perType[t.key] = true; });
-  return { push: true, email: true, perType };
-}
-
-// Merge a user's saved prefs over the defaults (missing = default on).
-export function effectivePrefs(user) {
-  const d = defaultPrefs();
-  const p = (user && user.notifPrefs) || {};
-  return {
-    push: p.push !== undefined ? p.push : d.push,
-    email: p.email !== undefined ? p.email : d.email,
-    perType: { ...d.perType, ...(p.perType || {}) },
-  };
-}
+// The preference DATA + helpers live in the pure, node-testable notificationPolicy
+// module (so the UI and delivery share one source and stay node-unit-testable);
+// re-exported here so app code keeps its single `./notifications` import surface.
+export { NOTIF_SECTIONS, PREF_TYPES, defaultPrefs, effectivePrefs } from "./notificationPolicy.js";
 
 // Human "2h ago" from a Firestore Timestamp | Date | ms.
 // Compact "3d ago" relative time — centralised in the Intl date layer.

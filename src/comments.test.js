@@ -73,3 +73,10 @@ test("mergeComments defaults mention metadata for comments that carry none (lega
   assert.deepEqual(m.mentionNames, []);
   assert.equal(m.mentionAll, false);
 });
+
+test("mergeComments preserves mentionRanges (rendering-position metadata)", () => {
+  const [m] = mergeComments([], [{ who: "A", txt: "@Tofunmihey", tm: { toMillis: () => 9 }, id: "z",
+    mentions: ["tof"], mentionNames: ["Tofunmi"], mentionRanges: [0, 8] }]);
+  assert.deepEqual(m.mentionRanges, [0, 8]);
+  assert.deepEqual(m.mentions, ["tof"]);
+});

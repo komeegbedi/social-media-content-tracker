@@ -481,7 +481,7 @@ service cloud.firestore {
         allow create: if isApproved()
           && parentTaskActive()
           && request.resource.data.uid == request.auth.uid
-          && request.resource.data.keys().hasOnly(['uid', 'who', 'txt', 'tm', 'mentions', 'mentionNames', 'mentionAll'])
+          && request.resource.data.keys().hasOnly(['uid', 'who', 'txt', 'tm', 'mentions', 'mentionNames', 'mentionAll', 'mentionRanges'])
           && request.resource.data.txt is string
           && request.resource.data.txt.size() > 0
           && request.resource.data.txt.size() <= 2000
@@ -494,8 +494,14 @@ service cloud.firestore {
           // for identity — so it is bounded but not otherwise constrained.
           && request.resource.data.get('mentionNames', []) is list
           && request.resource.data.get('mentionNames', []).size() <= 20
-          // mentionAll: the @all/@everyone group token. The TRIGGER derives recipients
-          // from the task's assigneeUids — a client-supplied uid list is never expanded.
+          // mentionRanges: flat [start,end,…] token positions in `txt` — RENDERING ONLY
+          // (so a mention still highlights after its trailing space is deleted). Never an
+          // identity source; the trigger notifies from `mentions`/`mentionAll` alone. ≤ 42
+          // (21 tokens × 2) keeps it bounded.
+          && request.resource.data.get('mentionRanges', []) is list
+          && request.resource.data.get('mentionRanges', []).size() <= 42
+          // mentionAll: the @all group token. The TRIGGER derives recipients from the
+          // task's assigneeUids — a client-supplied uid list is never expanded.
           && request.resource.data.get('mentionAll', false) is bool;
         allow update, delete: if isAdmin() && parentTaskActive();
       }

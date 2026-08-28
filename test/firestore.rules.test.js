@@ -836,13 +836,13 @@ test("a comment must be owned by the caller, well-formed, and size-bounded", asy
   await assertFails(setDoc(doc(as("pending"), "tasks/t9/comments", "c5"), { ...good, uid: "pending" }));
 });
 
-test("comment schema accepts the mention fields (mentionNames, mentionAll) with bounds", async () => {
+test("comment schema accepts the mention fields (mentionNames, mentionAll, mentionRanges) with bounds", async () => {
   await seed("tasks", "tm", baseTask());
-  const base = { uid: "member", who: "Mel Member", txt: "hey @Bo Crew and @everyone", tm: serverTimestamp() };
-  // A full mention payload is accepted.
+  const base = { uid: "member", who: "Mel Member", txt: "hey @Bo Crew and @all", tm: serverTimestamp() };
+  // A full mention payload — including rendering-position ranges — is accepted.
   await assertSucceeds(setDoc(doc(as("member"), "tasks/tm/comments", "ok1"), {
-    ...base, mentions: ["bo"], mentionNames: ["Bo Crew"], mentionAll: true }));
-  // A group-only mention (@everyone) with no individual uids is accepted.
+    ...base, mentions: ["bo"], mentionNames: ["Bo Crew"], mentionRanges: [4, 12], mentionAll: true }));
+  // A group-only @all mention with no individual uids is accepted.
   await assertSucceeds(setDoc(doc(as("member"), "tasks/tm/comments", "ok2"), { ...base, mentionAll: true }));
   // mentionAll must be a BOOL.
   await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad1"), { ...base, mentionAll: "yes" }));
@@ -850,6 +850,10 @@ test("comment schema accepts the mention fields (mentionNames, mentionAll) with 
   await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad2"), { ...base, mentionNames: "Bo" }));
   await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad3"), {
     ...base, mentionNames: Array.from({ length: 21 }, (_, i) => "N" + i) }));
+  // mentionRanges must be a LIST, bounded at 42.
+  await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad5"), { ...base, mentionRanges: "0,8" }));
+  await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad6"), {
+    ...base, mentionRanges: Array.from({ length: 43 }, (_, i) => i) }));
   // An unknown field is STILL rejected — the schema stays strict.
   await assertFails(setDoc(doc(as("member"), "tasks/tm/comments", "bad4"), { ...base, mentionsAll: true }));
 });

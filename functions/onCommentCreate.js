@@ -21,7 +21,7 @@ exports.onCommentCreate = onDocumentCreated(
   async (event) => {
     const c = event.data.data();
     const hasIndividual = Array.isArray(c.mentions) && c.mentions.length > 0;
-    const hasGroup = c.mentionAll === true;   // @all / @everyone group token
+    const hasGroup = c.mentionAll === true;   // @all group token
     if (!hasIndividual && !hasGroup) return;
 
     const { taskId, commentId } = event.params;
@@ -33,7 +33,7 @@ exports.onCommentCreate = onDocumentCreated(
 
     // Validate recipients SERVER-SIDE: real, approved, active users only; author
     // never self-notified; duplicates collapsed. Individual mentions come from the
-    // client's uid list; a group mention (@all/@everyone) is derived from the TASK's
+    // client's uid list; a group mention (@all) is derived from the TASK's
     // assigneeUids — never a client-supplied expansion. The two sets are merged and
     // deduped, so an individual + @all mention notifies each person exactly once.
     const { byUid } = await loadUsers();

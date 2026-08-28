@@ -9,7 +9,9 @@ const byUid = {
   b: { uid: "b", name: "Bo", status: "approved" },
   pend: { uid: "pend", name: "Peg", status: "pending" },
 };
-const isActive = (u) => u && (u.status === "approved" || u.role === "admin");
+// Mirrors the shared server predicate in functions/lib.js: approved-or-admin AND
+// NOT disabled. (The real isActive is exercised end-to-end in the emulator suites.)
+const isActive = (u) => !!u && u.disabled !== true && (u.status === "approved" || u.role === "admin");
 const uids = (list) => list.map((u) => u.uid);
 
 test("duplicate mentions collapse to one recipient", () => {
@@ -44,10 +46,13 @@ const roster = {
 };
 const gUids = (list) => list.map((u) => u.uid).sort();
 
-test("taskAssigneeUids: prefers stored assigneeUids; legacy fallback to owner + support", () => {
+test("taskAssigneeUids: a PRESENT assigneeUids is authoritative; absent falls back to owner+support", () => {
   assert.deepEqual(taskAssigneeUids({ assigneeUids: ["a", "b", "a"] }).sort(), ["a", "b"]);
+  // Absent field → derive from ownerUid + support[].uid.
   assert.deepEqual(taskAssigneeUids({ ownerUid: "o", support: [{ uid: "s1" }, { uid: "s2" }, {}] }).sort(), ["o", "s1", "s2"]);
   assert.deepEqual(taskAssigneeUids({}), []);
+  // A PRESENT empty assigneeUids authorizes NOBODY — never revert to a stale owner uid.
+  assert.deepEqual(taskAssigneeUids({ assigneeUids: [], ownerUid: "stale", support: [{ uid: "ghost" }] }), []);
 });
 
 test("resolveGroupMention: notifies the task's active assignees, excluding the author", () => {
@@ -70,4 +75,30 @@ test("resolveGroupMention: dedupes assignees; a group of >20 is unbounded (no 20
 test("resolveGroupMention: an empty/assignee-less task notifies nobody", () => {
   assert.deepEqual(resolveGroupMention({ assigneeUids: [] }, "author", roster, isActive), []);
   assert.deepEqual(resolveGroupMention({}, "author", roster, isActive), []);
+  // A PRESENT empty assigneeUids means unassigned — @all must NOT reach a stale owner.
+  assert.deepEqual(resolveGroupMention({ assigneeUids: [], ownerUid: "bo", support: [{ uid: "cy" }] }, "author", roster, isActive), []);
+});
+
+/* ---- disabled users are inactive (the shared isActive fix) ---- */
+const disRoster = {
+  ...roster,
+  dis: { uid: "dis", name: "Dana", status: "approved", disabled: true },   // approved BUT disabled
+};
+
+test("a DISABLED user is dropped from an individual mention", () => {
+  assert.deepEqual(resolveMentions(["bo", "dis"], "author", disRoster, isActive).map((u) => u.uid), ["bo"]);
+});
+
+test("a DISABLED assignee is dropped from an @all group mention", () => {
+  const task = { assigneeUids: ["bo", "dis", "cy"] };
+  assert.deepEqual(gUids(resolveGroupMention(task, "author", disRoster, isActive)), ["bo", "cy"]);
+});
+
+test("a DISABLED user named individually AND in @all is still never a recipient", () => {
+  const task = { assigneeUids: ["bo", "dis"] };
+  const individual = resolveMentions(["dis"], "author", disRoster, isActive);
+  const group = resolveGroupMention(task, "author", disRoster, isActive);
+  const ids = new Set([...individual, ...group].map((u) => u.uid));
+  assert.equal(ids.has("dis"), false);
+  assert.deepEqual([...ids].sort(), ["bo"]);
 });

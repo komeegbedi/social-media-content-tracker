@@ -1025,11 +1025,12 @@ export function pendingMatches(user, tasks) {
    boundary never disagree. QA / captions / Admin / override stay SEPARATE.
    ============================================================================ */
 
-// The task's authoritative assignee uid set. Prefers a stored `assigneeUids`
-// (what the rules read); otherwise derives it from ownerUid + support[].uid.
+// The task's authoritative assignee uid set. A PRESENT `assigneeUids` array (what the
+// rules read) wins outright — even when EMPTY it authorizes only its own uids, never
+// reverting to a stale owner/support uid. Only a genuinely ABSENT field derives from
+// ownerUid + support[].uid. Mirrors isTaskAssignee() + the backend helper.
 export const taskAssigneeUids = (task) => {
-  const stored = (task && task.assigneeUids) || [];
-  if (stored.length) return [...new Set(stored.filter(Boolean))];
+  if (task && Array.isArray(task.assigneeUids)) return [...new Set(task.assigneeUids.filter(Boolean))];
   const out = [];
   if (task && task.ownerUid) out.push(task.ownerUid);
   ((task && task.support) || []).forEach((s) => { if (s && s.uid) out.push(s.uid); });
@@ -2039,6 +2040,124 @@ export function mentionSegments(text, opts = {}) {
   return out;
 }
 
+// Mention token spans currently present in `text`, tagged with IDENTITY — derived
+// from the user's SELECTED mentions (+ the @all group when flagged). Each span is
+// { start, end, group, name, uid? } where `end` is the index just after the token
+// (excludes any trailing separator space). The composer uses these to treat every
+// selected mention as an ATOMIC, indivisible token.
+export function selectedMentionSpans(text, selected = [], mentionAll = false) {
+  const names = [], byName = new Map();
+  for (const s of selected || []) {
+    if (s && s.name && s.uid && !byName.has(s.name)) { names.push(s.name); byName.set(s.name, s.uid); }
+  }
+  const t = String(text || "");
+  return findMentionSpans(t, names, mentionAll ? GROUP_MENTION_ALIASES : []).map((sp) => {
+    const name = t.slice(sp.start + 1, sp.end);
+    return sp.group
+      ? { start: sp.start, end: sp.end, group: true, name }
+      : { start: sp.start, end: sp.end, group: false, name, uid: byName.get(name) };
+  });
+}
+
+// Plan an ATOMIC deletion when a Backspace / Delete / selection-edit would touch a
+// mention token: the WHOLE token (plus its one trailing separator space) is removed,
+// never a partial edit, and the caret lands at the former token start. Returns
+// { text, caret, removed:[{name,group,uid}] } or null when the edit touches no token
+// (the field then edits normally). `direction` is "backward" (Backspace) or "forward"
+// (Delete); it is ignored for a non-collapsed selection.
+export function planMentionDeletion(text, selStart, selEnd, direction, spans) {
+  const t = String(text || "");
+  const s = Math.min(selStart, selEnd), e = Math.max(selStart, selEnd);
+  const collapsed = s === e;
+  let touched;
+  if (collapsed) {
+    const idx = direction === "forward" ? s : s - 1;      // the char that would be removed
+    touched = (spans || []).filter((sp) => sp.start <= idx && idx < sp.end);
+  } else {
+    touched = (spans || []).filter((sp) => sp.start < e && sp.end > s);   // range overlaps a token
+  }
+  if (!touched.length) return null;
+  let lo = collapsed ? (direction === "forward" ? s : s - 1) : s;
+  let hi = collapsed ? (direction === "forward" ? s + 1 : s) : e;
+  for (const sp of touched) { lo = Math.min(lo, sp.start); hi = Math.max(hi, sp.end); }
+  if (t[hi] === " ") hi += 1;                              // absorb the token's separator space
+  return {
+    text: t.slice(0, lo) + t.slice(hi),
+    caret: lo,
+    range: [lo, hi],                                       // the EXACT edited range (for applyTokenEdit)
+    removed: touched.map((sp) => ({ name: sp.name, group: !!sp.group, uid: sp.uid })),
+  };
+}
+
+// Re-map tokens for a KNOWN edit that replaced [editStart, editEnd) with `insertLen`
+// characters (the composer's proactive delete/insert paths know their exact range,
+// so they update tokens deterministically instead of diff-guessing — which avoids a
+// coincidental common prefix/suffix wrongly dropping an adjacent token). Tokens the
+// edit intersects are removed; tokens after it shift by the length delta.
+export function applyTokenEdit(tokens, editStart, editEnd, insertLen) {
+  const delta = insertLen - (editEnd - editStart);
+  const out = [];
+  for (const t of tokens || []) {
+    if (!t || typeof t.start !== "number" || !t.name) continue;
+    const tEnd = t.start + 1 + t.name.length;
+    if (editStart < tEnd && editEnd > t.start) continue;    // edit intersects the token → drop it
+    out.push(t.start >= editEnd ? { ...t, start: t.start + delta } : t);
+  }
+  return out;
+}
+
+/* ---- Position-tracked mention tokens (the composer's structured model) ----
+   A typeahead-selected mention is a STRUCTURED token with an explicit position,
+   NOT text that must keep matching a boundary regex. Its identity therefore
+   survives edits immediately before/after it (deleting the trailing space, typing
+   an adjacent letter, adding punctuation) — only an edit that actually intersects
+   the token's own range removes it. Each token: { start, name, uid?, group }. */
+
+// Re-map tokens across a text edit (old -> new) by diffing the changed span:
+// tokens entirely before the change are unchanged, tokens entirely after shift by
+// the length delta, and a token the change INTERSECTS is dropped (demoted to text).
+// A final slice check guarantees each surviving token still reads exactly "@name".
+export function reconcileTokens(tokens, oldText, newText) {
+  const a = String(oldText || ""), b = String(newText || "");
+  if (a === b) return (tokens || []).slice();
+  const n = Math.min(a.length, b.length);
+  let p = 0; while (p < n && a[p] === b[p]) p++;
+  let s = 0; while (s < n - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  const changeStart = p, oldChangeEnd = a.length - s, delta = b.length - a.length;
+  const out = [];
+  for (const tok of tokens || []) {
+    if (!tok || typeof tok.start !== "number" || !tok.name) continue;
+    const tEnd = tok.start + 1 + tok.name.length;
+    if (changeStart < tEnd && oldChangeEnd > tok.start) continue;   // edit intersects the token → drop it
+    const start = tok.start >= oldChangeEnd ? tok.start + delta : tok.start;
+    if (b.slice(start, start + 1 + tok.name.length) === "@" + tok.name) out.push({ ...tok, start });
+  }
+  return out;
+}
+
+// Split `text` into render segments from EXPLICIT token spans (position-based, not
+// name-guessed). `spans`: [{ start, end, group? }] — a range only renders as a
+// mention when it is in-bounds and actually begins with "@". Returns
+// [{ text, mention, group }] — safe React text nodes; used by the composer overlay
+// and the posted-comment renderer (via stored mentionRanges).
+export function tokenSegments(text, spans = []) {
+  const t = String(text || "");
+  const sorted = (spans || [])
+    .filter((sp) => sp && sp.end > sp.start && sp.start >= 0 && sp.end <= t.length && t[sp.start] === "@")
+    .sort((x, y) => x.start - y.start);
+  if (!sorted.length) return [{ text: t, mention: false, group: false }];
+  const out = [];
+  let cur = 0;
+  for (const sp of sorted) {
+    if (sp.start < cur) continue;                                   // ignore overlaps (safety)
+    if (sp.start > cur) out.push({ text: t.slice(cur, sp.start), mention: false, group: false });
+    out.push({ text: t.slice(sp.start, sp.end), mention: true, group: !!sp.group });
+    cur = sp.end;
+  }
+  if (cur < t.length) out.push({ text: t.slice(cur), mention: false, group: false });
+  return out;
+}
+
 // Identity of a comment for dedup: author + text + when. A migrated subcollection
 // doc keeps the original values, so it collides with its embedded twin and the two
 // collapse to one. New subcollection comments (server timestamp) never collide with
@@ -2058,6 +2177,7 @@ export function mergeComments(embedded = [], subDocs = []) {
     ...base,
     mentions: Array.isArray(c.mentions) ? c.mentions : [],
     mentionNames: Array.isArray(c.mentionNames) ? c.mentionNames : [],
+    mentionRanges: Array.isArray(c.mentionRanges) ? c.mentionRanges : [],
     mentionAll: !!c.mentionAll,
   });
   for (const c of embedded || []) {

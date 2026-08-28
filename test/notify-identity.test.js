@@ -17,7 +17,7 @@ process.env.FUNCTIONS_EMULATOR = "true";
 const { db, notifyUsers } = await import("../functions/lib.js");
 const { eventToken, notificationKeyBase } = await import("../functions/eventIdentity.js");
 
-const QA = { uid: "qa1", name: "Quinn", status: "approved", role: "admin" };
+const QA = { uid: "qa1", name: "Quinn", status: "approved", qa: true };
 const A = { uid: "ua", name: "Ada", status: "approved", role: "member" };
 const B = { uid: "ub", name: "Bo", status: "approved", role: "member" };
 const TASK = "t1";
@@ -76,8 +76,10 @@ test("a repeated In Review cycle notifies QA again", async () => {
 });
 
 test("multiple notification types from one task write do not collide", async () => {
-  // One write (one event id) that both assigns QA as owner AND moves to In Review.
-  await fire("evt-multi", "assigned", [QA]);
+  // One write (one event id) that both @mentions QA in the discussion AND moves the
+  // task to In Review — two types QA legitimately receives; the key is namespaced by
+  // type, so they don't collide.
+  await fire("evt-multi", "mention", [QA]);
   await fire("evt-multi", "qa", [QA]);
   assert.equal(await countFor("qa1"), 2); // distinct types → two docs, no collision
 });
