@@ -12,8 +12,10 @@ const { logger } = require("firebase-functions/v2");
 const {
   db, FieldValue, Timestamp, TZ,
   loadUsers, loadSettings, notifyUsers, writeNotification, prefsAllow, emailAllow, isActive,
-  resolveTaskRecipients, relativeDue, localHour, localToday, formatContentTitle,
+  resolveTaskRecipients, relativeDue, localHour, localToday, humanDate, formatContentTitle,
 } = require("./lib");
+const { eligibleAssigneeUids, indexUsersByName } = require("./assignmentIdentity");
+const { recipientEligible } = require("./notificationPolicy");
 const { resendApiKey, sendDigestEmail } = require("./emailService");
 const { enqueueDigestItem, flushDigests } = require("./reminderDigest");
 const quota = require("./emailQuota");
@@ -42,8 +44,14 @@ async function claim(ref, execId, now) {
 
 async function leadershipDigest(users, settings) {
   const roles = settings.leadershipAlertRoles;
+  // Leadership alerts go to leads/admins AND honor the per-type opt-out. This path
+  // writes the in-app doc directly (not via notifyUsers), so BOTH the account+capability
+  // eligibility gate (recipientEligible drops disabled/pending/removed and non-leads)
+  // and the preference are applied here explicitly to match notifyUsers.
   const leaders = users.filter((u) =>
-    (roles.includes("admin") && u.role === "admin") || (roles.includes("lead") && u.lead));
+    ((roles.includes("admin") && u.role === "admin") || (roles.includes("lead") && u.lead))
+    && recipientEligible("leadership", u)
+    && prefsAllow(u, "leadership"));
   if (!leaders.length) return;
 
   const tasks = (await db.collection("tasks").get()).docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -73,6 +81,80 @@ async function leadershipDigest(users, settings) {
     id: `leadership_${l.uid}_${today}`, uid: l.uid, type: "leadership",
     title: "Team follow-up needed", body,
   })));
+}
+
+// Personal OVERDUE alerts — the people who own the NEXT action on a task whose
+// postDate has passed (Winnipeg-local). Recipient ownership follows the workflow so
+// nobody is blamed for work they can't act on:
+//   Planned / In Progress / Changes Requested → active production owner + crew
+//   Approved / Ready to Post                  → active captions/upload users
+//   In Review                                 → nobody (QA + the leadership digest surface it)
+// Admins/leads get the aggregate leadership digest, not per-task spam — they only
+// appear here when they're an actual eligible owner/crew or captions user.
+function overdueRecipients(task, byUid, nameIndex, captionsUsers) {
+  const s = task.status;
+  if (s === "In Review" || s === "Posted") return [];
+  if (s === "Approved" || s === "Ready to Post") return captionsUsers;
+  // Planned / In Progress / Changes Requested → the owner + assigned crew, resolved
+  // via the shared assignment-identity helper (authoritative uids; a genuinely legacy
+  // task falls back to a UNIQUE, production-eligible OWNER-name match only — name-only
+  // crew are not authorized by Firestore and are logged as skipped).
+  return eligibleAssigneeUids(task, { byUid, nameIndex, logger, taskId: task.id })
+    .map((uid) => byUid[uid]).filter(Boolean);
+}
+
+// Daily overdue sweep. Returns accurate counts so the caller can log + retry.
+// A task is only counted as an ALERT when notifyUsers actually created a doc — a task
+// whose every recipient was ineligible or opted out counts as suppressed, not created.
+// Any Firestore failure PROPAGATES (the sweep does not swallow it) so Cloud Scheduler
+// can retry; the deterministic per-recipient idempotency key makes a retry safe.
+async function overdueSweep(users, byUid, { notify = notifyUsers } = {}) {
+  const today = localToday();
+  const tasks = (await db.collection("tasks").get()).docs.map((d) => ({ id: d.id, ...d.data() }));
+  const captionsUsers = users.filter((u) => u.captions === true);   // recipientEligible drops QA/inactive
+  const nameIndex = indexUsersByName(users);
+  const stats = { date: today, tasksOverdue: 0, attempted: 0, created: 0, suppressed: 0, deduped: 0 };
+  for (const t of tasks) {
+    if (t.deletedAt || t.status === "Posted") continue;             // never missing/trashed/Posted
+    if (!t.postDate || !(t.postDate < today)) continue;             // not overdue (missing due date → skip)
+    stats.tasksOverdue++;
+    const recips = overdueRecipients(t, byUid, nameIndex, captionsUsers);
+    if (!recips.length) continue;
+    // Idempotency key = task + DUE-DATE REVISION (postDate) + milestone + recipient
+    // (added by notifyUsers). One alert on first overdue; a later postDate that goes
+    // overdue again yields a new key → a fresh alert. notifyUsers dedups per recipient.
+    const r = await notify(recips, {
+      type: "overdue", taskId: t.id,
+      keyBase: `overdue_${t.id}_${t.postDate}_first`,
+      title: `'${formatContentTitle(t.title)}' is overdue`,
+      body: `This was due ${humanDate(t.postDate)}. Open it to review the next action.`,
+    });
+    // Count only what actually happened. A task whose every recipient was ineligible
+    // or opted out contributes to `suppressed`, never to `created`.
+    stats.attempted += r.considered; stats.created += r.created;
+    stats.suppressed += r.suppressed; stats.deduped += r.deduped;
+  }
+  return stats;
+}
+
+// Run the once-daily stages with STAGE ISOLATION. Both stages are ALWAYS attempted
+// independently: a leadership-digest failure never blocks the overdue sweep, and an
+// overdue failure never erases the record of a leadership failure. BOTH errors are
+// captured and returned (never swallowed as success) so the caller can fail the
+// scheduled function for a safe Cloud Scheduler retry — the deterministic idempotency
+// keys make either stage's retry non-duplicating, and reminder-instance processing
+// already committed above is independent and terminal.
+async function runDailyStages({ leadership, overdue, date, log = logger }) {
+  let leadershipError = null, overdueError = null, stats = null;
+  try { await leadership(); }
+  catch (e) { leadershipError = e; log.error("dispatch daily stage failed", { date, stage: "leadership", error: e.message }); }
+  try {
+    stats = await overdue();
+    log.info("overdue sweep complete", { date, stage: "overdue", ...stats });
+  } catch (e) {
+    overdueError = e; log.error("dispatch daily stage failed", { date, stage: "overdue", error: e.message });
+  }
+  return { leadershipError, overdueError, stats };
 }
 
 async function runDispatch() {
@@ -139,16 +221,34 @@ async function runDispatch() {
   // up here, not lost) idempotently from the durable store.
   const { sent: digests } = await flushDigests({ byUid, send: sendDigestEmail });
 
-  // Morning leadership digest (once per day at the configured local hour).
+  // Once per day at the configured local hour: the leadership digest AND the personal
+  // overdue sweep, with stage isolation. Both are idempotent, so the hourly cron is safe.
+  const dailyDate = localToday();
+  const dailyFail = [];
   if (localHour() === settings.reminderHourLocal) {
-    await leadershipDigest(users, settings);
+    const r = await runDailyStages({
+      leadership: () => leadershipDigest(users, settings),
+      overdue: () => overdueSweep(users, byUid),
+      date: dailyDate,
+    });
+    if (r.leadershipError) dailyFail.push(`leadership: ${r.leadershipError.message}`);
+    if (r.overdueError) dailyFail.push(`overdue: ${r.overdueError.message}`);
   }
 
-  // Release reservations stuck in "unknown" after an uncertain send.
+  // Release reservations stuck in "unknown" after an uncertain send. (Safe cleanup —
+  // runs even when a daily stage failed, BEFORE we surface that failure for retry.)
   let reconciled = 0;
   try { reconciled = await quota.reconcile(); } catch (e) { logger.warn("email reconcile failed", { error: e.message }); }
 
-  logger.info("dispatchReminders complete", { candidates: candidates.length, processed, skipped, failed, digests, reconciled });
+  logger.info("dispatchReminders complete", {
+    candidates: candidates.length, processed, skipped, failed, digests, reconciled,
+    date: dailyDate, dailyStagesFailed: dailyFail,
+  });
+  // If EITHER daily stage failed, the run must NOT count as a success: fail AFTER the
+  // safe cleanup above so Cloud Scheduler retries this Winnipeg-local hour. Both stage
+  // names + messages are preserved in the surfaced error. Reminder instances committed
+  // independently and are not reprocessed (their leases are terminal).
+  if (dailyFail.length) throw new Error(`daily stage(s) failed on ${dailyDate} — surfacing for retry: ${dailyFail.join("; ")}`);
   return { candidates: candidates.length, processed, skipped, failed, digests, reconciled };
 }
 
@@ -158,3 +258,7 @@ exports.dispatchReminders = onSchedule(
 );
 // Exposed for emulator/manual testing without waiting for the scheduler.
 exports.runDispatch = runDispatch;
+exports.leadershipDigest = leadershipDigest; // exposed for emulator tests
+exports.overdueSweep = overdueSweep;         // exposed for emulator tests
+exports.overdueRecipients = overdueRecipients;
+exports.runDailyStages = runDailyStages;     // exposed for unit tests (stage isolation)

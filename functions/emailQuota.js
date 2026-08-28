@@ -18,7 +18,7 @@
    dashboard) are not seen here — that's why the internal cap sits below
    the true 3,000 allowance. This counter is the app's own estimate.
    =================================================================== */
-const { db, FieldValue, loadUsers, writeNotification } = require("./lib");
+const { db, FieldValue, loadUsers, notifyUsers } = require("./lib");
 
 const MONTHLY_LIMIT = Number(process.env.RESEND_MONTHLY_EMAIL_LIMIT) || 2800;
 const DAILY_LIMIT = Number(process.env.RESEND_DAILY_SAFETY_LIMIT) || 250;
@@ -135,25 +135,28 @@ async function settleReservation(deliveryRef, kind, period, extra = {}) {
   });
 }
 
-/* Post-reservation admin alerts (IN-APP only — never rely on email to warn
-   about email). Idempotent: one per threshold per period. */
+/* Post-reservation admin alerts about EMAIL DELIVERY HEALTH. These are a REQUIRED
+   admin type (admin_delivery_health): IN-APP ONLY (never rely on email to warn about
+   email), always on (NOT gated by the Leadership opt-out — a delivery outage must
+   reach admins regardless of preferences), active admins only, deep-linked to the
+   admin console. Routed through notifyUsers so account + capability eligibility (and
+   idempotency: one per threshold per period) are enforced centrally. */
 async function alertAdmins({ monthlyThresholds = [], daily = false, period, usedPct }) {
   if (!monthlyThresholds.length && !daily) return;
   const { list } = await loadUsers();
-  const admins = list.filter((u) => u.role === "admin");
-  const jobs = [];
+  const admins = list.filter((u) => u.role === "admin"); // notifyUsers enforces active + admin capability
+  if (!admins.length) return;
   for (const t of monthlyThresholds) {
     const body = t >= 100
       ? "External email delivery is paused for the rest of this month (internal limit reached). In-app notifications continue."
       : `Email usage has reached ${t}% of the monthly limit.`;
-    admins.forEach((a) => jobs.push(writeNotification({
-      id: `emailquota_${t}_${period.month}_${a.uid}`, uid: a.uid, type: "leadership",
-      title: t >= 100 ? "Email delivery paused (monthly limit)" : `Email usage at ${t}%`, body })));
+    await notifyUsers(admins, {
+      type: "admin_delivery_health", required: true, keyBase: `emailquota_${t}_${period.month}`, route: "/admin",
+      title: t >= 100 ? "Email delivery paused (monthly limit)" : `Email usage at ${t}%`, body });
   }
-  if (daily) admins.forEach((a) => jobs.push(writeNotification({
-    id: `emaildaily_${period.day}_${a.uid}`, uid: a.uid, type: "leadership",
-    title: "Daily email safety limit reached", body: "Email sends are paused for today; in-app notifications continue." })));
-  await Promise.all(jobs);
+  if (daily) await notifyUsers(admins, {
+    type: "admin_delivery_health", required: true, keyBase: `emaildaily_${period.day}`, route: "/admin",
+    title: "Daily email safety limit reached", body: "Email sends are paused for today; in-app notifications continue." });
 }
 
 /* Backstop for deliveries left unresolved past the grace window — a crash with no

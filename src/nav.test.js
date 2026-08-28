@@ -182,9 +182,16 @@ test("notificationDestination deep-links every type to the exact thing it refers
   assert.deepEqual(notificationDestination({ type: "weeklyTaskCheck" }), { pathname: "/my-day", search: "" });
   assert.deepEqual(notificationDestination({ type: "account_approved" }), { pathname: "/", search: "" });
 
+  // Delivery-health warning → the Admin console (diagnostics), NOT Home.
+  assert.deepEqual(notificationDestination({ type: "admin_delivery_health" }), { pathname: "/admin", search: "" });
+  // A stale/arbitrary stored `route` on the doc is IGNORED — the type maps the route.
+  assert.deepEqual(notificationDestination({ type: "admin_delivery_health", route: "/evil" }), { pathname: "/admin", search: "" });
+
   // Never crashes; unknown falls back to Home.
   assert.deepEqual(notificationDestination(null), { pathname: "/", search: "" });
   assert.deepEqual(notificationDestination({ type: "mystery" }), { pathname: "/", search: "" });
+  // A stored `route` on an UNKNOWN type is not trusted either — still Home.
+  assert.deepEqual(notificationDestination({ type: "mystery", route: "/admin" }), { pathname: "/", search: "" });
 });
 
 test("a deep-link with focus/comment parses back into the same intent", () => {

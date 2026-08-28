@@ -46,10 +46,13 @@ const roster = {
 };
 const gUids = (list) => list.map((u) => u.uid).sort();
 
-test("taskAssigneeUids: prefers stored assigneeUids; legacy fallback to owner + support", () => {
+test("taskAssigneeUids: a PRESENT assigneeUids is authoritative; absent falls back to owner+support", () => {
   assert.deepEqual(taskAssigneeUids({ assigneeUids: ["a", "b", "a"] }).sort(), ["a", "b"]);
+  // Absent field → derive from ownerUid + support[].uid.
   assert.deepEqual(taskAssigneeUids({ ownerUid: "o", support: [{ uid: "s1" }, { uid: "s2" }, {}] }).sort(), ["o", "s1", "s2"]);
   assert.deepEqual(taskAssigneeUids({}), []);
+  // A PRESENT empty assigneeUids authorizes NOBODY — never revert to a stale owner uid.
+  assert.deepEqual(taskAssigneeUids({ assigneeUids: [], ownerUid: "stale", support: [{ uid: "ghost" }] }), []);
 });
 
 test("resolveGroupMention: notifies the task's active assignees, excluding the author", () => {
@@ -72,6 +75,8 @@ test("resolveGroupMention: dedupes assignees; a group of >20 is unbounded (no 20
 test("resolveGroupMention: an empty/assignee-less task notifies nobody", () => {
   assert.deepEqual(resolveGroupMention({ assigneeUids: [] }, "author", roster, isActive), []);
   assert.deepEqual(resolveGroupMention({}, "author", roster, isActive), []);
+  // A PRESENT empty assigneeUids means unassigned — @all must NOT reach a stale owner.
+  assert.deepEqual(resolveGroupMention({ assigneeUids: [], ownerUid: "bo", support: [{ uid: "cy" }] }, "author", roster, isActive), []);
 });
 
 /* ---- disabled users are inactive (the shared isActive fix) ---- */

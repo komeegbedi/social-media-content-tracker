@@ -39,7 +39,10 @@ import {
 } from "./data";
 import { upcomingEvents, searchEvents, isoDate, seriesFromDoc, seriesCadenceLabel, nextOccurrences } from "./events";
 import { planTransition, workflowCapability } from "./workflowTransition";
-import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, effectivePrefs, timeAgo } from "./notifications";
+import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, NOTIF_SECTIONS, effectivePrefs, timeAgo } from "./notifications";
+import { NOTIF_PRIMARY, NOTIF_MORE, filterNotifications } from "./notifFilters";
+import { useSaveFlow } from "./useSaveFlow";
+import { applicableNotifTypes, requiredNotices } from "./notificationPolicy";
 import { pushState, enablePush, listenForeground, refreshPushToken } from "./push";
 import { RELEASES, LATEST_RELEASE } from "./releases";
 import {
@@ -50,7 +53,7 @@ import {
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
   InformationCircleIcon, ClipboardIcon, ArrowTopRightOnSquareIcon, CheckIcon, ClipboardDocumentIcon,
   ComputerDesktopIcon, DocumentTextIcon, SignalSlashIcon, TrophyIcon, CheckBadgeIcon,
-  TrashIcon, ArrowUturnLeftIcon,
+  TrashIcon, ArrowUturnLeftIcon, LockClosedIcon,
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
@@ -320,18 +323,7 @@ function FeatureRequestModal({ onClose }) {
   );
 }
 
-const NOTIF_FILTERS = [
-  { id:"all",       label:"All" },
-  { id:"unread",    label:"Unread" },
-  { id:"assigned",  label:"Assignments", types:["assigned"] },
-  { id:"reviews",   label:"Reviews",     types:["qa"] },
-  { id:"reminders", label:"Reminders",   types:["reminder","overdue"] },
-  { id:"changes",   label:"Changes",     types:["changes"],  more:true },
-  { id:"approvals", label:"Approvals",   types:["approved","ready","account_approved"], more:true },
-  { id:"system",    label:"System",      types:["leadership","mention"], more:true },
-];
-const NOTIF_PRIMARY = NOTIF_FILTERS.filter(f=>!f.more);
-const NOTIF_MORE = NOTIF_FILTERS.filter(f=>f.more);
+// Filter catalog + pure filtering live in notifFilters.js (node-testable).
 // Date-group the loaded page of notifications: Today / Yesterday / This week / Earlier.
 function notifGroups(items) {
   const now = new Date(); const day0 = new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
@@ -350,11 +342,8 @@ function NotifCenter({ notif, isAdmin, onClose, onNavigate, onSettings }) {
   const { items, unread, hasMore, loadMore, markRead, markAllRead } = notif;
   const [flt, setFlt] = useState("all");
   const [moreOpen, setMoreOpen] = useState(false);
-  const active = NOTIF_FILTERS.find(f=>f.id===flt) || NOTIF_FILTERS[0];
   const moreActive = NOTIF_MORE.some(f=>f.id===flt);
-  const filtered = flt==="all" ? items
-    : flt==="unread" ? items.filter(n=>!n.read)
-    : items.filter(n=>(active.types||[]).includes(n.type));
+  const filtered = filterNotifications(items, flt);
   const groups = notifGroups(filtered);
   // The drawer chrome + exit-transition hand-off live in the firebase-free
   // NotifPanelShell (see notifShell.jsx). It gives the body the shared `finish`
@@ -596,11 +585,35 @@ function AdminEmailTest() {
   );
 }
 
-/* Per-user notification preferences. In-app is always on; push/email and the
-   per-type toggles are configurable. Writes users/{uid}.notifPrefs (allowed by
-   a scoped security rule). */
+/* Per-user notification preferences. A per-TYPE opt-out suppresses that notification
+   ENTIRELY — in-app included (notifyUsers drops it before writing the doc); the
+   Push/Email channel toggles only limit HOW an allowed notification is delivered.
+   Required (always-on) types bypass the per-type opt-out. Writes users/{uid}.notifPrefs
+   (allowed by a scoped security rule). */
+// Copy for the always-on (required) notices a user still receives regardless of prefs.
+function requiredNoticeCopy(required) {
+  // Admins additionally receive notification-delivery-health alerts (account_pending +
+  // admin_delivery_health are admin-only required types), so their locked note names
+  // approvals + delivery problems explicitly.
+  if (required.includes("admin_delivery_health"))
+    return "Account approvals, security messages, and notification delivery problems are always sent.";
+  return "Account and security messages are always sent.";
+}
+
 function NotifSettings({ me, isAdmin, onSave, onClose }) {
+  // Preserve ALL stored per-type prefs (effectivePrefs merges saved over defaults);
+  // types the user isn't eligible for stay in `p` untouched and are simply not shown
+  // — so a later capability change restores their prior choice, and Save never resets.
   const [p, setP] = useState(effectivePrefs(me));
+  // Only the preference types that can actually reach THIS user (capability-based).
+  const applicable = useMemo(() => new Set(applicableNotifTypes(me)), [me]);
+  const required = useMemo(() => requiredNotices(me), [me]);
+  // Race-safe save flow. Controls LOCK the moment a save starts and stay locked through
+  // the brief "saved" auto-close window (see useSaveFlow) — so a toggle can't change
+  // after the snapshot was captured, or after success before the dialog closes, and be
+  // silently lost. `locked` is surfaced accessibly on each switch (native disabled).
+  const { saveState, locked, save: runSave } = useSaveFlow(onSave, onClose);
+  const save = () => runSave(p);
   // Three distinct concerns with different ownership, so they are separated into
   // their own panels rather than stacked in one continuous scroll: MY prefs, the
   // ORG-WIDE reminder defaults, and workspace EMAIL diagnostics. Non-admins only
@@ -624,24 +637,55 @@ function NotifSettings({ me, isAdmin, onSave, onClose }) {
           {isAdmin && (
             <nav className="sb-seg sb-notifsecnav" aria-label="Notification settings sections">
               {tabs.map(([id,label]) => (
-                <button key={id} aria-current={sec===id?"page":undefined}
+                <button key={id} aria-current={sec===id?"page":undefined} disabled={locked}
                   className={"sb-segbtn"+(sec===id?" on":"")} onClick={()=>setSec(id)}>{label}</button>
               ))}
             </nav>
           )}
 
           {sec==="personal" && <>
-            <div className="sb-sub" style={{marginTop:0}}>How and what <b>you</b> are notified about. In-app notifications are always on.</div>
+            <div className="sb-sub" style={{marginTop:0}}>How and what <b>you</b> are notified about.</div>
             <div className="sb-mlabel">How you're notified</div>
-            <Toggle label="Push notifications" v={p.push} on={()=>setChannel("push")} />
+            <Toggle label="Push notifications" v={p.push} on={()=>setChannel("push")} disabled={locked} describedBy="np-channel-note" />
             {p.push && <PushControls me={me} />}
-            <Toggle label="Email notifications" v={p.email} on={()=>setChannel("email")} />
-            <div className="sb-mlabel">What you're notified about</div>
-            {PREF_TYPES.map(t => (
-              <Toggle key={t.key} label={t.label} v={p.perType[t.key]!==false} on={()=>setType(t.key)} />
-            ))}
-            <div className="sb-sub" style={{fontSize:12}}>Account and security messages are always sent.</div>
-            <button className="sb-btn" style={{marginTop:14}} onClick={()=>{ onSave(p); onClose(); }}>Save preferences</button>
+            <Toggle label="Email notifications" v={p.email} on={()=>setChannel("email")} disabled={locked} describedBy="np-channel-note" />
+            <p id="np-channel-note" className="sb-sub" style={{fontSize:12,marginTop:4}}>
+              Enabled updates appear in the app. Push and email are sent only when that update supports those delivery methods.
+            </p>
+
+            {/* Only the sections/types that can actually reach THIS user (capability-based). */}
+            {NOTIF_SECTIONS.map(section => {
+              const types = PREF_TYPES.filter(t => t.section===section.id && applicable.has(t.key));
+              if (!types.length) return null;
+              return (
+                <section key={section.id} aria-label={section.label}>
+                  <div className="sb-mlabel">{section.label}</div>
+                  {types.map(t => (
+                    <div key={t.key} className="sb-notif-row">
+                      <Toggle label={t.label} v={p.perType[t.key]!==false} on={()=>setType(t.key)} disabled={locked} describedBy={`np-${t.key}-desc`} />
+                      <p id={`np-${t.key}-desc`} className="sb-notif-desc">{t.desc}</p>
+                    </div>
+                  ))}
+                </section>
+              );
+            })}
+
+            {required.length>0 && (
+              <section aria-label="Always on">
+                <div className="sb-mlabel">Always on</div>
+                <div className="sb-notif-locked" role="note">
+                  <LockClosedIcon className="hi hi-sm" aria-hidden="true" />
+                  <span>{requiredNoticeCopy(required)}</span>
+                </div>
+              </section>
+            )}
+
+            <div aria-live="polite" className="sb-sub" style={{minHeight:16,marginTop:10,fontSize:12}}>
+              {saveState==="saved" && <span className="sb-save-ok"><CheckIcon className="hi hi-sm" aria-hidden="true"/> Preferences saved</span>}
+              {saveState==="error" && <span className="sb-save-err">Couldn't save — check your connection and try again.</span>}
+            </div>
+            <button className="sb-btn" style={{marginTop:4}} disabled={locked} onClick={save}>
+              {saveState==="saving" ? "Saving…" : saveState==="saved" ? "Saved" : "Save preferences"}</button>
           </>}
 
           {isAdmin && sec==="defaults" && <>
@@ -1370,8 +1414,8 @@ function Board({ profile, isAdmin }) {
   // releases the inert + scroll-lock naturally. Same pathname, other params kept.
   const openLocalFromPanel = (openFn) => { openFn(); R.dismissPanel(); };
   const saveNotifPrefs = async (prefs) => {
-    try { await updateDoc(doc(db, "users", me.id), { notifPrefs: prefs }); }
-    catch (e) { logIssue({ kind: "error", action: "save notif prefs", message: e.message, code: e.code }); }
+    try { await updateDoc(doc(db, "users", me.id), { notifPrefs: prefs }); return true; }
+    catch (e) { logIssue({ kind: "error", action: "save notif prefs", message: e.message, code: e.code }); return false; }
   };
   // Foreground push → brief toast (the bell also updates live via onSnapshot).
   const [toast, setToast] = useState(null);

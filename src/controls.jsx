@@ -10,12 +10,13 @@ import { EyeIcon, EyeSlashIcon } from "@heroicons/react/24/outline";
 /* A labelled on/off switch. The ENTIRE row is the target (≥44px tall on mobile),
    not just the track — you tap the label too. Exposes role=switch + aria-checked;
    the visible track never grows to meet the target. */
-export function Toggle({ label, v, on, disabled = false }) {
+export function Toggle({ label, v, on, disabled = false, describedBy }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={!!v}
+      aria-describedby={describedBy}
       disabled={disabled}
       onClick={on}
       className={"sb-toggle" + (v ? " on" : "")}

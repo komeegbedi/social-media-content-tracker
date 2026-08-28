@@ -1025,11 +1025,12 @@ export function pendingMatches(user, tasks) {
    boundary never disagree. QA / captions / Admin / override stay SEPARATE.
    ============================================================================ */
 
-// The task's authoritative assignee uid set. Prefers a stored `assigneeUids`
-// (what the rules read); otherwise derives it from ownerUid + support[].uid.
+// The task's authoritative assignee uid set. A PRESENT `assigneeUids` array (what the
+// rules read) wins outright — even when EMPTY it authorizes only its own uids, never
+// reverting to a stale owner/support uid. Only a genuinely ABSENT field derives from
+// ownerUid + support[].uid. Mirrors isTaskAssignee() + the backend helper.
 export const taskAssigneeUids = (task) => {
-  const stored = (task && task.assigneeUids) || [];
-  if (stored.length) return [...new Set(stored.filter(Boolean))];
+  if (task && Array.isArray(task.assigneeUids)) return [...new Set(task.assigneeUids.filter(Boolean))];
   const out = [];
   if (task && task.ownerUid) out.push(task.ownerUid);
   ((task && task.support) || []).forEach((s) => { if (s && s.uid) out.push(s.uid); });

@@ -11,6 +11,7 @@ const { getMessaging } = require("firebase-admin/messaging");
 const { logger } = require("firebase-functions/v2");
 const { DateTime } = require("luxon");
 const { isClaimable, claimChannel, finalizeChannel, skipChannel, rollup, LEASE_MS } = require("./deliveryCore");
+const { recipientEligible, isKnownNotifType, isControllableType } = require("./notificationPolicy");
 const { randomUUID } = require("crypto");
 
 if (!getApps().length) initializeApp();
@@ -301,26 +302,52 @@ const NOTIFY_POLICY = {
   account_pending:  { channels: ["in-app", "push", "email"],  priority: "critical" },
   leadership:       { channels: ["in-app"],                    priority: "standard" },
   weeklyTaskCheck:  { channels: ["in-app", "push"],            priority: "standard" },
+  // Delivery/notification-health for admins — IN-APP ONLY, because the failing
+  // channel may be email/push. Required (always on), never a "Leadership" alert.
+  admin_delivery_health: { channels: ["in-app"],              priority: "critical" },
 };
 const policyFor = (type) => NOTIFY_POLICY[type] || { channels: ["in-app", "push"], priority: "standard" };
 
 async function notifyUsers(recipients, { type, title, body, taskId, eventOccurrenceId, commentId = "", userId = "", keyBase, required = false, channels = null, whenText = "", priority = "", route = "" }) {
+  const stats = { considered: 0, eligible: 0, created: 0, deduped: 0, suppressed: 0 };
+  // A producer must DECLARE its type's eligibility policy (notificationPolicy). An
+  // unregistered type is refused rather than delivered as if it were fine.
+  if (!isKnownNotifType(type)) {
+    logger.error("notifyUsers: unknown notification type — refusing delivery; declare its policy in notificationPolicy", { type });
+    return stats;
+  }
+  // Requiredness comes from the POLICY CATALOG, never the caller. A user-controllable
+  // type ALWAYS honors the per-type opt-out; a catalog-required type ALWAYS bypasses
+  // it. A caller-supplied `required` that contradicts the catalog is IGNORED (and
+  // logged) so a producer can't sneak a controllable type past a user's preference.
+  const controllable = isControllableType(type);
+  if (required && controllable) logger.warn("notifyUsers: ignoring required override — a user-controllable type always honors preferences", { type });
   const pol = policyFor(type);
   const chans = channels || pol.channels;              // explicit override wins
   const pri = priority || pol.priority;
   const seen = new Set();
   await Promise.all(recipients.filter(Boolean).map(async (u) => {
-    if (seen.has(u.uid)) return; seen.add(u.uid);
-    // A per-TYPE opt-out suppresses the whole notification (no in-app either);
-    // per-CHANNEL prefs are handled downstream in deliverToUser.
-    if (!required && !prefsAllow(u, type)) return;
+    if (!u.uid || seen.has(u.uid)) return; seen.add(u.uid);
+    stats.considered++;
+    // AUTHORITATIVE eligibility: account active + approved AND the recipient's
+    // capability matches this type (mirrors the settings UI). Pending/removed/
+    // disabled, and capability mismatches (e.g. QA for a production type) are dropped
+    // here even if a producer passed them in.
+    if (!recipientEligible(type, u)) { stats.suppressed++; return; }
+    // A per-TYPE opt-out suppresses user-controllable notifications entirely (no
+    // in-app either); required (non-controllable) types bypass it. Per-CHANNEL prefs
+    // run in deliverToUser.
+    if (controllable && !prefsAllow(u, type)) { stats.suppressed++; return; }
+    stats.eligible++;
     const id = `${keyBase}_${u.uid}`;
     // Ensure the doc + seed delivery state (idempotent), then attempt each
     // external channel INDEPENDENTLY of whether the in-app doc already existed —
     // so a crash/failure between channels is retried, not swallowed.
-    const { ref } = await ensureNotification({ id, uid: u.uid, type, title, body, taskId, eventOccurrenceId, commentId, userId, channels: chans, whenText, priority: pri, route });
+    const { ref, created } = await ensureNotification({ id, uid: u.uid, type, title, body, taskId, eventOccurrenceId, commentId, userId, channels: chans, whenText, priority: pri, route });
+    if (created) stats.created++; else stats.deduped++;
     await deliverToUser(ref, u);
   }));
+  return stats;
 }
 
 /* ---- recipient resolution (role tags → users) ---- */
@@ -364,6 +391,11 @@ function relativeDue(postDateISO) {
 
 const localHour = () => DateTime.now().setZone(TZ).hour;
 const localToday = () => DateTime.now().setZone(TZ).toISODate();
+// A due date rendered human-readably (Winnipeg-local), e.g. "August 15, 2026".
+const humanDate = (iso) => {
+  const d = iso && DateTime.fromISO(iso, { zone: TZ });
+  return d && d.isValid ? d.toFormat("LLLL d, yyyy") : String(iso || "");
+};
 
 /* Content-title Title Case — mirror of src/data.js formatContentTitle(). Used
    when generating notification/push/email text so titles read correctly there
@@ -401,5 +433,5 @@ module.exports = {
   db, FieldValue, Timestamp, TZ, DEFAULT_REMINDERS,
   loadUsers, loadSettings, prefsAllow, pushAllow, emailAllow, isActive, sendPush,
   writeNotification, ensureNotification, deliverToUser, notifyUsers, emailOutcome, seedDelivery,
-  resolveTaskRecipients, crewRoleLabel, computeFireAt, relativeDue, localHour, localToday, formatContentTitle,
+  resolveTaskRecipients, crewRoleLabel, computeFireAt, relativeDue, localHour, localToday, humanDate, formatContentTitle,
 };

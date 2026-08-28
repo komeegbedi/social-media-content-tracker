@@ -213,7 +213,12 @@ export function overlayClose({ search, canGoBack }) {
      changes/mention       → the content, scrolled to Discussion (+ comment id)
      leadership (summary)  → Workflow filtered to everything needing follow-up
      weeklyTaskCheck       → My Day (what's due for Sunday)
-     account_approved      → Home (the welcome — this one IS about Home) */
+     admin_delivery_health → Admin (the delivery/email diagnostics live there)
+     account_approved      → Home (the welcome — this one IS about Home)
+
+   Destinations are derived ONLY from the notification's structured type + ids and
+   mapped to KNOWN internal routes here — a stored `route` string on the doc is never
+   trusted for client navigation (it could be stale or arbitrary). */
 export function notificationDestination(n) {
   if (!n) return { pathname: "/", search: "" };
   const type = n.type;
@@ -243,6 +248,9 @@ export function notificationDestination(n) {
       search: withParams("", { [PARAM.section]: n.adminSection || "people", [PARAM.user]: n.userId || null }),
     };
   }
+
+  // Notification-delivery / email-health warnings → the Admin console (diagnostics).
+  if (type === "admin_delivery_health") return { pathname: "/admin", search: "" };
 
   // Follow-up DIGEST (a production summary) → the exact items behind it.
   if (type === "leadership")
