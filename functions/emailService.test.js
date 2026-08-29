@@ -2,7 +2,16 @@
    error classification. Run with: node --test functions/emailService.test.js */
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { normalizeEmail, validEmail, classifyResend } = require("./emailService");
+const { normalizeEmail, validEmail, classifyResend, quotaUnits } = require("./emailService");
+
+test("quotaUnits counts every to/cc/bcc address (string or array); ignores absent", () => {
+  assert.equal(quotaUnits({ to: "a@x" }), 1);
+  assert.equal(quotaUnits({ to: ["a@x", "b@x"] }), 2);
+  assert.equal(quotaUnits({ to: "a@x", cc: "c@x", bcc: ["d@x", "e@x"] }), 4);
+  assert.equal(quotaUnits({ to: ["a@x", "", null] }), 1);   // blanks ignored
+  assert.equal(quotaUnits({}), 0);
+  assert.equal(quotaUnits(null), 0);
+});
 
 test("normalizeEmail trims and lowercases the (case-insensitive) domain", () => {
   assert.equal(normalizeEmail("  Name@Example.COM "), "Name@example.com");

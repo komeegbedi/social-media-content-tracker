@@ -17,7 +17,11 @@
 const { defineSecret } = require("firebase-functions/params");
 const { logger } = require("firebase-functions/v2");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
-const { Resend } = require("resend");
+const { createHash } = require("crypto");
+
+// Non-sensitive short identifier for a delivery, for correlating log stages without
+// exposing the notificationId (which, while not secret, we still avoid logging raw).
+const hashId = (id) => createHash("sha256").update(String(id || "")).digest("hex").slice(0, 12);
 
 // Bound to functions via `secrets: [resendApiKey]`. Exported for that binding.
 const resendApiKey = defineSecret("RESEND_API_KEY");
@@ -151,7 +155,8 @@ async function retryOrGiveUp(ref, quota, period, attemptCount, transientStatus, 
 }
 
 function getKey() {
-  try { const k = resendApiKey.value(); return k || ""; } catch { return ""; }
+  try { const k = resendApiKey.value(); if (k) return k; } catch { /* unbound in some contexts */ }
+  return process.env.RESEND_API_KEY || "";
 }
 
 // Digest email listing several reminders as ONE message (counts as one send).
@@ -181,7 +186,9 @@ function buildDigestEmail({ recipientName, items, url }) {
 async function _deliver({ notificationId, to, type, priority, subject, html, text, meta }) {
   const quota = require("./emailQuota");
   const db = getFirestore();
-  if (IN_EMULATOR) { logger.debug("email skipped (emulator)", { notificationId, type }); return { status: "skipped", reason: "emulator" }; }
+  // Skip real Resend calls in the emulator (dev/seed/tests) — EXCEPT when an
+  // integration test explicitly forces the send path with a stubbed global fetch.
+  if (IN_EMULATOR && process.env.EMAIL_FORCE_SEND !== "true") { logger.debug("email skipped (emulator)", { notificationId, type }); return { status: "skipped", reason: "emulator" }; }
   const key = getKey();
   if (!key) { logger.warn("email skipped: RESEND_API_KEY not available", { notificationId }); return { status: "skipped", reason: "no-secret" }; }
 
@@ -193,7 +200,10 @@ async function _deliver({ notificationId, to, type, priority, subject, html, tex
   if (claim.status !== "claimed") {
     if (claim.status === "sent") return { status: "already-sent" };
     if (claim.status === "in-progress") return { status: "in-progress" };
-    return { status: "failed", permanent: true };            // already-settled terminal (failed/suppressed)
+    // A quota-suppressed delivery is TERMINAL — re-invoking it must consistently return
+    // suppressed (never retried, never re-sent), without calling Resend.
+    if (String(claim.status).startsWith("suppressed")) return { status: "suppressed", reason: claim.status };
+    return { status: "failed", permanent: true };            // other already-settled terminal
   }
 
   // Reserve budget EXACTLY ONCE (atomic with the doc flag; a retry reuses it).
@@ -203,24 +213,48 @@ async function _deliver({ notificationId, to, type, priority, subject, html, tex
       logger.warn("email suppressed by quota", { notificationId, type, reason: res.reason, usedPct: res.usedPct });
       return { status: "suppressed", reason: res.reason };
     }
-    if ((res.newThresholds && res.newThresholds.length) || res.dailyAlert) {
-      try { await quota.alertAdmins({ monthlyThresholds: res.newThresholds || [], daily: !!res.dailyAlert, period, usedPct: res.usedPct }); }
-      catch (e) { logger.warn("quota alert failed", { error: e.message }); }
+    // MONTHLY usage alerts are now driven by AUTHORITATIVE Resend account usage (see
+    // resendUsage.js), not this app's internal counter — so only the app's own DAILY
+    // safety-cap alert is raised from the send path here.
+    if (res.dailyAlert) {
+      try { await quota.alertAdmins({ monthlyThresholds: [], daily: true, period, usedPct: res.usedPct }); }
+      catch (e) { logger.warn("quota daily-cap alert failed", { error: e.message }); }
     }
   }
 
   const payload = { from: SENDER, to, subject, html, text };
   if (REPLY_TO) payload.reply_to = REPLY_TO;
-  let response;
-  try { response = await new Resend(key).emails.send(payload, { idempotencyKey: notificationId }); }
-  catch (e) {
+  const sent = await resendPostSend(key, payload, notificationId);
+  if (sent.transport) {
     // Uncertain (network/timeout): keep the reservation and re-attempt later with
     // the SAME idempotency key (Resend dedupes → never a double-send).
-    return retryOrGiveUp(ref, quota, period, claim.attemptCount, "unknown", "network", (e && e.message) || "", notificationId);
+    return retryOrGiveUp(ref, quota, period, claim.attemptCount, "unknown", "network", (sent.transport.message) || "", notificationId);
   }
-  const { data, error } = response;
+  const { data, error } = sent;
   if (error) {
-    if (isPermanent({ statusCode: error.statusCode })) {
+    const c = classifyProviderError(error.statusCode, error.name);
+    // Provider QUOTA exhaustion (429 daily/monthly_quota_exceeded) is NOT a request-rate
+    // failure: don't retry it. Release the reservation, suppress the period, and alert.
+    if (c.kind === "quota") {
+      // Release the reservation (no email went out) and record a TERMINAL
+      // suppressed_quota_limit status — this is quota exhaustion, not a generic failure.
+      await quota.settleReservation(ref, "release", period, {
+        status: "suppressed_quota_limit", failedAt: FieldValue.serverTimestamp(),
+        errorCode: String(error.name || "quota_exceeded"), errorMessage: String(error.message || "").slice(0, 300),
+      });
+      if (c.scope === "daily") {
+        try { await quota.markDailyExhausted(period.day); } catch (e) { logger.warn("markDailyExhausted failed", { error: e.message }); }
+        try { await quota.alertAdmins({ monthlyThresholds: [], daily: true, period, usedPct: 100 }); } catch (e) { logger.warn("daily-quota alert failed", { error: e.message }); }
+      } else {
+        try { await quota.markMonthlyExhausted(period.month); } catch (e) { logger.warn("markMonthlyExhausted failed", { error: e.message }); }
+        try { await quota.alertAdmins({ monthlyThresholds: [100], daily: false, period, usedPct: 100 }); } catch (e) { logger.warn("monthly-quota alert failed", { error: e.message }); }
+      }
+      logger.warn("email suppressed: resend quota exceeded", { notificationId, scope: c.scope });
+      // TERMINAL suppression — NOT a failure. emailOutcome maps this to skip:true (no
+      // retry) and flushDigests marks the digest done. Never retried end-to-end.
+      return { status: "suppressed", reason: `${c.scope}_quota_exceeded` };
+    }
+    if (c.kind === "permanent") {
       await quota.settleReservation(ref, "failed", period, {
         status: "failed", failedAt: FieldValue.serverTimestamp(),
         errorCode: String(error.statusCode || ""), errorMessage: String(error.message || "").slice(0, 300),
@@ -228,14 +262,20 @@ async function _deliver({ notificationId, to, type, priority, subject, html, tex
       logger.error("email send failed (permanent)", { notificationId, code: error.statusCode });
       return { status: "failed", permanent: true };
     }
+    // request-rate 429 (rate_limit_exceeded) OR other transient → retry, same key.
     return retryOrGiveUp(ref, quota, period, claim.attemptCount, "pending", String(error.statusCode || ""), error.message, notificationId);
   }
-  await quota.settleReservation(ref, "sent", period, {
+  const settle = await quota.settleReservation(ref, "sent", period, {
     status: "sent", providerMessageId: (data && data.id) || "", sentAt: FieldValue.serverTimestamp(),
     errorCode: "", errorMessage: "",
   });
-  logger.info("email sent", { notificationId, type, providerMessageId: (data && data.id) || "" });
-  return { status: "sent", providerMessageId: (data && data.id) || "" };
+  // Sanitized settlement stage — pairs with the "email send stage" log via the delivery
+  // hash so a stuck panel can be traced to record-failure vs settle-failure.
+  logger.info("email settle stage", {
+    delivery: hashId(notificationId), type, settled: !!(settle && settle.settled),
+    usageRecorded: !sent.usageRecordError, usageRecordError: sent.usageRecordError || undefined,
+  });
+  return { status: "sent", providerMessageId: (data && data.id) || "", usageRecordError: sent.usageRecordError || null };
 }
 
 /* One notification email. Idempotent per `notificationId`. */
@@ -270,6 +310,122 @@ function normalizeEmail(raw) {
 
 // Classify a Resend error into a stable, non-sensitive code the callable maps to
 // a user-facing message. The raw provider message is logged, never returned.
+const parseIntHeader = (v) => { if (v == null) return null; const s = String(v).trim(); return /^\d+$/.test(s) ? Number(s) : null; };
+
+// The quota UNITS a payload consumes: every address across to/cc/bcc (Resend counts
+// each recipient separately). Each field may be a string (one address) or an array;
+// absent fields are ignored. Pure. For notification/digest/test sends this is normally 1.
+function quotaUnits(payload) {
+  const count = (v) => (v == null ? 0 : Array.isArray(v) ? v.filter((x) => x != null && String(x).trim()).length : (String(v).trim() ? 1 : 0));
+  const p = payload || {};
+  return count(p.to) + count(p.cc) + count(p.bcc);
+}
+
+// Response headers safe to log for PROVING quota semantics. We deliberately MATCH broadly
+// on quota/usage/rate names (so an as-yet-unknown header that reveals the true model is
+// still captured), but hard-EXCLUDE anything sensitive (auth, cookies, keys, addresses) so
+// the diagnostic can never leak a secret or recipient. Pure + exported so the secrecy
+// property is unit-tested. Accepts a Headers-like object (forEach(v,k)) or a plain map.
+const DIAG_INCLUDE_RE = /quota|usage|used|remaining|reset|limit|rate|throttle/i;
+const DIAG_EXCLUDE_RE = /authorization|cookie|token|secret|api[-_]?key|\bkey\b|signature|bearer|email|recipient|\bto\b|\bfrom\b|\bcc\b|\bbcc\b|address/i;
+function pickDiagnosticHeaders(headers) {
+  const out = {};
+  const consider = (v, k) => {
+    const key = String(k).toLowerCase();
+    if (DIAG_INCLUDE_RE.test(key) && !DIAG_EXCLUDE_RE.test(key)) out[key] = String(v);
+  };
+  if (headers && typeof headers.forEach === "function") headers.forEach(consider);
+  else if (headers && typeof headers === "object") for (const [k, v] of Object.entries(headers)) consider(v, k);
+  return out;
+}
+
+const RESEND_SEND_TIMEOUT_MS = Number(process.env.RESEND_SEND_TIMEOUT_MS) || 10000;
+
+/* THE Resend send — a raw POST /emails so we can observe response HEADERS (the SDK
+   hides them). Resend returns the account quota (x-resend-monthly-quota / -daily-quota)
+   on SEND, not on GET, so we record the latest "last observed" usage on any response
+   that carries it — including a 429 quota-exceeded (best-effort; a failed record never
+   fails the send). Hardened: AbortController timeout + explicit User-Agent, preserving
+   Authorization / Content-Type / Idempotency-Key. Returns the { data, error } contract
+   the callers expect; `transport` is set on a timeout/network error (uncertain → retry
+   with the SAME idempotency key). `fetchImpl`/`record` are injectable for tests. */
+async function resendPostSend(key, payload, idempotencyKey, { fetchImpl = globalThis.fetch, record, timeoutMs = RESEND_SEND_TIMEOUT_MS } = {}) {
+  const recordUsage = record || ((obs) => require("./resendUsage").recordObservedUsage(obs));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetchImpl("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+        "User-Agent": "IFC-Creatives-Board/1.0",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    return { transport: e, timedOut: !!(e && e.name === "AbortError") };
+  } finally { clearTimeout(timer); }
+
+  let body = null;
+  try { body = await res.json(); } catch { body = null; } // malformed / non-JSON
+
+  // DIAGNOSTIC (server-only, non-sensitive): log the quota/limit/rate header NAMES+VALUES
+  // so the true semantics can be proven from a real invocation. Never a key/recipient/body.
+  try {
+    const diag = pickDiagnosticHeaders(res.headers);
+    logger.info("resend response headers (diagnostic)", { delivery: hashId(idempotencyKey), status: res.status, headers: diag });
+  } catch { /* header iteration not supported → skip */ }
+
+  // The quota headers are treated as PRE-SEND used values, but their semantics proved
+  // unreliable (a value == plan capacity was returned) — recordObservedUsage now VALIDATES
+  // before persisting. Only a SUCCESSFUL send counts; never on a rejection/timeout/uncertain.
+  const monthlyUsedBeforeSend = parseIntHeader(res.headers.get("x-resend-monthly-quota"));
+  const dailyUsedBeforeSend = parseIntHeader(res.headers.get("x-resend-daily-quota"));
+  const headersValid = res.ok && monthlyUsedBeforeSend != null;
+  const units = quotaUnits(payload);
+  let usageRecordError = null;
+  if (headersValid) {
+    try {
+      await recordUsage({ monthlyUsedBeforeSend, dailyUsedBeforeSend, acceptedUnits: units, deliveryId: idempotencyKey });
+    } catch (e) {
+      // A usage-recording failure AFTER a successful send must NOT be silently swallowed
+      // as success — surface it (returned + logged) so a stuck panel is diagnosable.
+      usageRecordError = String((e && e.code) || (e && e.name) || "record-failed").slice(0, 40);
+      logger.error("email usage: observation record FAILED after successful send", { delivery: hashId(idempotencyKey), code: usageRecordError });
+    }
+  }
+  // Sanitized stage log — no key/recipient/headers, just the accounting stages.
+  logger.info("email send stage", {
+    delivery: hashId(idempotencyKey), accepted: res.ok, units,
+    quotaHeaders: res.ok ? (monthlyUsedBeforeSend != null ? "valid" : "missing") : "n/a",
+    recorded: headersValid && !usageRecordError, recordError: usageRecordError || undefined,
+  });
+  const error = res.ok ? null
+    : { statusCode: res.status, name: body && body.name, message: (body && body.message) || `provider ${res.status}` };
+  return { ok: res.ok, status: res.status, data: res.ok ? body : null, error, usageRecordError };
+}
+
+/* Decide how to handle a provider error. 429 is NOT always a request-rate failure —
+   Resend uses it for quota exhaustion too, which must NOT be retried as transient:
+     daily_quota_exceeded / monthly_quota_exceeded → { kind:"quota", scope }
+     rate_limit_exceeded (or unnamed 429)          → { kind:"rate-limit" }  (retry)
+     4xx (non-429)                                 → { kind:"permanent" }
+     5xx / other                                   → { kind:"transient" }   (retry) */
+function classifyProviderError(statusCode, name) {
+  const code = Number(statusCode) || 0;
+  if (code === 429) {
+    if (name === "daily_quota_exceeded") return { kind: "quota", scope: "daily" };
+    if (name === "monthly_quota_exceeded") return { kind: "quota", scope: "monthly" };
+    return { kind: "rate-limit" };
+  }
+  if (isPermanent({ statusCode: code })) return { kind: "permanent" };
+  return { kind: "transient" };
+}
+
 function classifyResend(error) {
   const code = Number(error && (error.statusCode || error.status)) || 0;
   const msg = String((error && (error.message || error.name)) || "").toLowerCase();
@@ -288,46 +444,46 @@ function classifiedError(emailCode, message) {
   return e;
 }
 
-/* Admin-only test send. Returns { messageId }. Throws an error carrying a safe
-   `.emailCode` — the caller maps it to a user message; details stay in logs. */
+// Map a _deliver() result to the test-send outcome. A suppressed send yields the
+// appropriate admin-facing quota message; success returns the provider message id.
+function testOutcome(res) {
+  if (res.status === "sent") return { messageId: res.providerMessageId || "" };
+  if (res.status === "already-sent") return { messageId: "" };
+  if (res.status === "suppressed") {
+    const r = String(res.reason || "");
+    if (/month|account/.test(r)) throw classifiedError("monthly-quota", r);
+    if (/dai/.test(r)) throw classifiedError("daily-quota", r);
+    throw classifiedError("rate-limit", r);          // priority-based quota denies (85/95%)
+  }
+  if (res.status === "skipped") {
+    if (res.reason === "no-config") throw classifiedError("no-config", "RESEND_API_KEY not available");
+    // The local emulator intentionally skips real Resend sends → nothing is sent or
+    // recorded. Report it as a benign SKIP (not a failure) so the panel doesn't chase a
+    // usage observation that will never arrive in dev.
+    if (res.reason === "emulator") return { messageId: "", skipped: true, reason: "emulator" };
+    throw classifiedError("temporary", res.reason || "skipped");
+  }
+  if (res.status === "failed" && res.permanent) throw classifiedError("provider-rejected", "permanent failure");
+  throw classifiedError("temporary", res.status || "failed"); // pending / unknown / error / transient failed
+}
+
+/* Admin-only test send. Routes through the SAME lifecycle as every other email —
+   claim → reserve → POST /emails → record post-send usage → settle sent — so a test
+   counts toward the app's safety caps, respects exhausted-period markers, is idempotent,
+   and updates both provider + internal usage. _deliver owns the delivery doc (no second
+   record). Returns { messageId }; throws a classified `.emailCode` the caller maps. */
 async function sendTest(rawTo) {
   const to = normalizeEmail(rawTo);
   if (!validEmail(to)) throw classifiedError("invalid-email", "invalid recipient");
-  const key = getKey();
-  if (!key) throw classifiedError("no-config", "RESEND_API_KEY not available to the function");
-  const notificationId = `test_${Date.now()}`;
+  const notificationId = `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const { subject, html, text } = buildEmail({
     type: "test", title: "Your email notifications are working",
     body: "Your IFC Creatives Board email notification system is working correctly.",
     recipientName: to.split("@")[0], url: APP_URL,
   });
-  const payload = { from: SENDER, to, subject, html, text };
-  if (REPLY_TO) payload.reply_to = REPLY_TO;
-
-  let response;
-  try { response = await new Resend(key).emails.send(payload, { idempotencyKey: notificationId }); }
-  catch (e) {
-    // Network / timeout talking to Resend — temporary.
-    logger.error("test email: transport error", { message: String((e && e.message) || e).slice(0, 300) });
-    throw classifiedError("temporary", "email provider transport error");
-  }
-  const { data, error } = response;
-  if (error) {
-    // Full provider detail stays in the logs; only a safe code leaves the server.
-    logger.error("test email: provider rejected", {
-      statusCode: error.statusCode, name: error.name,
-      message: String(error.message || "").slice(0, 300),
-    });
-    throw classifiedError(classifyResend(error), error.message || "provider rejected");
-  }
-  const messageId = (data && data.id) || "";
-  await getFirestore().collection("emailDeliveries").doc(notificationId).set({
-    notificationId, notificationType: "test", recipientEmail: to, provider: "resend",
-    providerMessageId: messageId, idempotencyKey: notificationId, status: "sent",
-    attemptCount: 1, createdAt: FieldValue.serverTimestamp(), sentAt: FieldValue.serverTimestamp(),
-  });
-  logger.info("test email sent", { messageId, to });
-  return { messageId, to };
+  const meta = { notificationId, notificationType: "test", recipientEmail: to, provider: "resend", idempotencyKey: notificationId };
+  const res = await _deliver({ notificationId, to, type: "test", priority: "standard", subject, html, text, meta });
+  return testOutcome(res);
 }
 
-module.exports = { resendApiKey, SENDER, sendNotificationEmail, sendDigestEmail, sendTest, validEmail, normalizeEmail, classifyResend };
+module.exports = { resendApiKey, SENDER, sendNotificationEmail, sendDigestEmail, sendTest, validEmail, normalizeEmail, classifyResend, resendPostSend, classifyProviderError, parseIntHeader, quotaUnits, pickDiagnosticHeaders };

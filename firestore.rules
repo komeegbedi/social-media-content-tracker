@@ -408,6 +408,15 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Sanitized real-time email-usage snapshot for the admin panel — server-authored
+    // (in the same transaction as the internal cache). Admins READ it for the live
+    // dashboard; NO client may create, update, or delete it. The server Admin SDK
+    // bypasses rules, so its writes still succeed.
+    match /adminDiagnostics/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     // Admin-managed recurring event series: everyone approved can read the
     // active series (Home renders occurrences); only admins create/edit.
     match /eventSeries/{id} {

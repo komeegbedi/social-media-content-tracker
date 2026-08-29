@@ -19,9 +19,74 @@
    the true 3,000 allowance. This counter is the app's own estimate.
    =================================================================== */
 const { db, FieldValue, loadUsers, notifyUsers } = require("./lib");
+const { logger } = require("firebase-functions/v2");
 
-const MONTHLY_LIMIT = Number(process.env.RESEND_MONTHLY_EMAIL_LIMIT) || 2800;
-const DAILY_LIMIT = Number(process.env.RESEND_DAILY_SAFETY_LIMIT) || 250;
+const posInt = (v, dflt) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : dflt; };
+
+// The provider's ACTUAL plan limits (account-level, incl. out-of-band usage) — used for
+// the account-aware deny below, kept SEPARATE from the app's safety caps. Defaults match
+// this Free account (3,000/mo, 100/day); override via env.
+const RESEND_PLAN_MONTHLY_LIMIT = posInt(process.env.RESEND_MONTHLY_LIMIT, 3000);
+const RESEND_PLAN_DAILY_LIMIT = posInt(process.env.RESEND_DAILY_LIMIT, 100);
+
+// The app's CONSERVATIVE sending safety caps (local, atomic) — deliberately below the
+// provider plan so app-initiated sends alone can't exhaust the account. The DAILY cap
+// defaults to 90 (ten below the 100/day Free plan, leaving headroom for out-of-band
+// activity). GUARD: the safety cap can never exceed the plan limit — if misconfigured
+// higher, it's clamped to the plan limit and a warning is logged at startup.
+const MONTHLY_LIMIT = Math.min(posInt(process.env.RESEND_MONTHLY_EMAIL_LIMIT, 2800), RESEND_PLAN_MONTHLY_LIMIT);
+const RAW_DAILY_SAFETY = posInt(process.env.RESEND_DAILY_SAFETY_LIMIT, 90);
+const DAILY_LIMIT = Math.min(RAW_DAILY_SAFETY, RESEND_PLAN_DAILY_LIMIT);
+if (RAW_DAILY_SAFETY > RESEND_PLAN_DAILY_LIMIT)
+  logger.warn("RESEND_DAILY_SAFETY_LIMIT exceeds the plan daily limit — clamping to the plan limit",
+    { requested: RAW_DAILY_SAFETY, planDaily: RESEND_PLAN_DAILY_LIMIT, applied: DAILY_LIMIT });
+
+const RESEND_QUOTA_DOC = "systemUsage/resendQuota";        // written by resendUsage.js
+const DIAGNOSTICS_DOC = "adminDiagnostics/emailUsage";     // sanitized real-time panel doc
+const RESEND_GATE_MAX_AGE_MS = posInt(process.env.RESEND_GATE_MAX_AGE_MS, 15 * 60 * 1000);
+
+// The latest Resend account state, read OUTSIDE the reservation transaction (eventually
+// consistent; avoids contention with the usage writer). Returns the monthly-used (when
+// recent) and whether the current UTC MONTH/DAY are marked exhausted by a provider
+// quota_exceeded. The exhaustion MARKERS are NOT gated by snapshot age — a monthly
+// marker suppresses for the remainder of that month regardless of observation freshness;
+// a marker from a previous period never blocks. Null/absent → local safety cap governs.
+async function readResendGate(period) {
+  // CONTAINMENT: while header semantics are unproven, provider header-derived usage must
+  // NOT drive send suppression at all (a value in [0, plan] is not proven to be "used").
+  // The local safety cap alone governs projected volume. Real 429 exhaustion markers
+  // (below) are provider FACTS, not header interpretations, so they still apply.
+  const { HEADER_SEMANTICS_PROVEN } = require("./resendUsage");
+  try {
+    const s = await db.doc(RESEND_QUOTA_DOC).get();
+    if (!s.exists) return { monthlyUsed: null, monthlyExhausted: false, dailyExhausted: false };
+    const x = s.data();
+    const fresh = x.observedAt && (Date.now() - Date.parse(x.observedAt)) < RESEND_GATE_MAX_AGE_MS;
+    const headerUsable = HEADER_SEMANTICS_PROVEN && fresh
+      && Number.isInteger(x.monthlyUsed) && x.monthlyUsed >= 0 && x.monthlyUsed <= RESEND_PLAN_MONTHLY_LIMIT;
+    return {
+      // Unproven semantics OR a structurally invalid value (poisoned 3001) → ignore it and
+      // fall back to the local cap; never let the provider header block email.
+      monthlyUsed: headerUsable ? x.monthlyUsed : null,
+      monthlyExhausted: !!(period && period.month) && x.monthlyExhaustedMonth === period.month,
+      dailyExhausted: !!(period && period.day) && x.dailyExhaustedDay === period.day,
+    };
+  } catch { return { monthlyUsed: null, monthlyExhausted: false, dailyExhausted: false }; }
+}
+
+// Mark the current UTC day exhausted (provider daily_quota_exceeded) → the reserve gate
+// suppresses further app sends until the day rolls over. Best-effort.
+async function markDailyExhausted(periodDay) {
+  try { await db.doc(RESEND_QUOTA_DOC).set({ dailyExhaustedDay: periodDay, dailyExhaustedAt: FieldValue.serverTimestamp() }, { merge: true }); }
+  catch (e) { logger.warn("markDailyExhausted failed", { error: String(e && e.message).slice(0, 150) }); }
+}
+
+// Mark the current UTC month exhausted (provider monthly_quota_exceeded) → the reserve
+// gate suppresses for the rest of that month, regardless of snapshot age. Best-effort.
+async function markMonthlyExhausted(periodMonth) {
+  try { await db.doc(RESEND_QUOTA_DOC).set({ monthlyExhaustedMonth: periodMonth, monthlyExhaustedAt: FieldValue.serverTimestamp() }, { merge: true }); }
+  catch (e) { logger.warn("markMonthlyExhausted failed", { error: String(e && e.message).slice(0, 150) }); }
+}
 
 // Priority by notification type (callers may override, e.g. new-signup alerts).
 const PRIORITY = {
@@ -55,6 +120,11 @@ const dayDefaults = (period) => ({ provider: "resend", period, dailyLimit: DAILY
 async function reserve({ type, priority, period, deliveryRef }) {
   const pr = priorityOf(type, priority);
   const mRef = monthRef(period.month), dRef = dayRef(period.day);
+  // Authoritative account usage (Resend), read before the tx. Combined with local
+  // in-flight reservations below to stop a send that would push the ACCOUNT over its
+  // plan limit — even from out-of-band usage the local counters can't see.
+  const gate = await readResendGate(period);
+  const accountUsed = gate.monthlyUsed;
   return db.runTransaction(async (tx) => {
     // Reads first. A reservation already held for this delivery → reuse it.
     const dvSnap = deliveryRef ? await tx.get(deliveryRef) : null;
@@ -69,9 +139,15 @@ async function reserve({ type, priority, period, deliveryRef }) {
     const dUsed = (d.sentCount || 0) + (d.reservedCount || 0);
     const usedPct = Math.round((mUsed / mLimit) * 100);
 
-    // Gating (most restrictive first).
+    // Gating (most restrictive first). The account-aware check uses Resend usage +
+    // this-app's in-flight reservations (not yet reflected by Resend) vs the plan limit;
+    // it only applies when a recent snapshot exists (else the safety cap alone governs).
+    const accountProjected = accountUsed != null ? accountUsed + (m.reservedCount || 0) + 1 : null;
     let deny = null;
-    if (mUsed >= mLimit) deny = "monthly_limit";
+    if (gate.monthlyExhausted) deny = "resend_monthly_exhausted";      // provider said monthly_quota_exceeded this month
+    else if (mUsed >= mLimit) deny = "monthly_limit";
+    else if (accountProjected != null && accountProjected > RESEND_PLAN_MONTHLY_LIMIT) deny = "resend_account_limit";
+    else if (gate.dailyExhausted) deny = "resend_daily_exhausted";     // provider said daily_quota_exceeded today
     else if (dUsed >= dLimit) deny = "daily_limit";
     else if (usedPct >= 95 && pr !== "critical") deny = "quota_95_noncritical";
     else if (usedPct >= 85 && pr === "low") deny = "quota_85_low";
@@ -131,6 +207,25 @@ async function settleReservation(deliveryRef, kind, period, extra = {}) {
     tx.set(dRef, { reservedCount: Math.max(0, (day.reservedCount || 0) + adj.rD),
       sentCount: (day.sentCount || 0) + (adj.sD || 0), lastUpdatedAt: FieldValue.serverTimestamp() }, { merge: true });
     tx.update(deliveryRef, { reserved: false, settled: true, ...extra });
+    // On a SUCCESSFUL send, publish the app's internal safety usage to the real-time
+    // panel doc (merge → preserves the sanitized provider fields). Concurrent settlements
+    // serialize on the monthly doc, so appInitiatedThisMonth advances monotonically. No
+    // recipient/delivery data is written. Failed/released sends never increment sentCount.
+    if (kind === "sent") {
+      const appInitiatedThisMonth = (m.sentCount || 0) + 1;
+      const pub = { internalTelemetry: { appInitiatedThisMonth, appSafetyCap: m.monthlyLimit || MONTHLY_LIMIT } };
+      // COMPATIBILITY SIGNAL (containment): while header semantics are unproven, actively
+      // NEUTRALIZE any provider usage fields in the sanitized panel doc on each successful
+      // send. This overwrites a poisoned value (e.g. 3001) so that even an ALREADY-LOADED
+      // old frontend bundle (a tab left open across the deploy, whose listener predates the
+      // providerUsageProven gate) stops rendering it. New clients read providerUsageProven.
+      const { HEADER_SEMANTICS_PROVEN } = require("./resendUsage");
+      if (!HEADER_SEMANTICS_PROVEN) {
+        pub.monthly = null; pub.daily = null; pub.dailyReason = null;
+        pub.providerUsageProven = false; pub.providerError = { code: "provider-usage-unverified" };
+      }
+      tx.set(db.doc(DIAGNOSTICS_DOC), pub, { merge: true });
+    }
     return { settled: true };
   });
 }
@@ -190,6 +285,6 @@ async function snapshot() {
 }
 
 module.exports = {
-  MONTHLY_LIMIT, DAILY_LIMIT, priorityOf, periods,
-  reserve, settleReservation, alertAdmins, reconcile, snapshot,
+  MONTHLY_LIMIT, DAILY_LIMIT, RESEND_PLAN_DAILY_LIMIT, priorityOf, periods,
+  reserve, settleReservation, alertAdmins, reconcile, snapshot, markDailyExhausted, markMonthlyExhausted,
 };

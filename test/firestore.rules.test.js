@@ -909,3 +909,24 @@ test("non-admins cannot read the issue log", async () => {
   await assertFails(getDoc(doc(as("member"), "issues", "i1")));
   await assertSucceeds(getDoc(doc(as("admin"), "issues", "i1")));
 });
+
+/* ---- adminDiagnostics/emailUsage (sanitized real-time email usage) ---- */
+test("adminDiagnostics/emailUsage: admins read; non-admin/unauth denied; clients cannot write", async () => {
+  await seed("adminDiagnostics", "emailUsage", {
+    monthly: { used: 40, limit: 3000, percent: 1.3 }, daily: { used: 0, limit: 100, percent: 0 },
+    periodMonth: "2026-08", periodDay: "2026-08-28", observedAt: "2026-08-28T12:00:00.000Z", source: "resend",
+  });
+  const ref = (fs) => doc(fs, "adminDiagnostics", "emailUsage");
+  // Reads
+  await assertSucceeds(getDoc(ref(as("admin"))));                                 // admin
+  await assertSucceeds(getDoc(ref(as("adminqa"))));                               // admin (+ qa)
+  await assertFails(getDoc(ref(as("member"))));                                   // non-admin
+  await assertFails(getDoc(ref(as("pending"))));                                  // pending
+  await assertFails(getDoc(ref(as("exadmin"))));                                  // removed/disabled admin
+  await assertFails(getDoc(ref(env.unauthenticatedContext().firestore())));       // unauthenticated
+  // Writes always fail — even for an admin (server Admin SDK bypasses rules).
+  await assertFails(setDoc(ref(as("admin")), { monthly: { used: 0, limit: 3000, percent: 0 } }));
+  await assertFails(updateDoc(ref(as("admin")), { source: "spoof" }));
+  await assertFails(deleteDoc(ref(as("admin"))));
+  await assertFails(setDoc(ref(env.unauthenticatedContext().firestore()), { x: 1 }));
+});
