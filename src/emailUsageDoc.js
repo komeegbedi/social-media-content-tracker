@@ -12,6 +12,36 @@ export function periodKeys(nowMs) {
   return { month: iso.slice(0, 7), day: iso.slice(0, 10) };
 }
 
+// TRUST BOUNDARY for the admin callable (getEmailUsage) result. The callable returns a
+// view-model, but an OLD (pre-fix) callable — or any callable during a mixed-version
+// rollout — can report providerAvailable:true with an unproven/poisoned monthly (e.g. a
+// latched 3001, or even a plausible-looking 44). A bounded number is NOT proof. Provider
+// totals are trusted ONLY when the server stamped providerUsageProven===true AND the
+// numbers are structurally valid (finite non-negative integer ≤ plan limit) with the
+// required source metadata. Otherwise provider usage is Unavailable; independently valid
+// internalTelemetry is preserved. This enforces the SAME providerUsageProven===true rule as
+// presentEmailUsageDoc, so the callable path can never bypass the snapshot's trust boundary.
+// (Period-awareness is applied server-side before the result is returned.)
+export function normalizeCallableUsage(data) {
+  const tele = (data && data.internalTelemetry) || null;
+  const unavailable = (code) => ({
+    providerAvailable: false, source: "internal-fallback", monthly: null, daily: null,
+    dailyReason: null, lastSyncedAt: (data && data.lastSyncedAt) || null, observedVia: null,
+    stale: true, internalTelemetry: tele, providerError: { code },
+  });
+  if (!data) return unavailable("call-failed");
+  if (data.providerUsageProven !== true) {
+    return unavailable((data.providerError && data.providerError.code) || "provider-usage-unverified");
+  }
+  const intOk = (n) => Number.isInteger(n) && n >= 0;
+  const blockOk = (b) => !b || (intOk(b.used) && (!Number.isInteger(b.limit) || b.used <= b.limit));
+  const m = data.monthly;
+  if (!m || !intOk(m.used) || (Number.isInteger(m.limit) && m.used > m.limit) || !blockOk(data.daily) || !data.source || !data.lastSyncedAt) {
+    return unavailable("invalid-provider-observation");
+  }
+  return { ...data, internalTelemetry: tele };
+}
+
 export function presentEmailUsageDoc(doc, nowMs = Date.now()) {
   // internalTelemetry (app-initiated count + safety cap) is published by settleReservation
   // in the same doc — surface it (may be absent) so the panel's app-safety row updates live.

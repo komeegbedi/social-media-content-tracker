@@ -136,6 +136,11 @@ function result({ providerAvailable, source, monthly, daily, dailyReason, lastSy
     monthly, daily, dailyReason: dailyReason || null,          // null when unavailable
     lastSyncedAt: lastSyncedAt || null,                        // last SEND that reported usage
     observedVia: providerAvailable ? "send" : null,            // usage advances on send, not refresh
+    // CLIENT TRUST STAMP: only a genuinely proven provider observation carries this. It is
+    // reachable only when HEADER_SEMANTICS_PROVEN is true (the containment path returns
+    // providerAvailable:false), so providerAvailable ⟺ proven. The client trusts callable
+    // provider totals ONLY when this is true — an old/mixed-version callable omits it.
+    providerUsageProven: !!providerAvailable,
     stale: !!stale,
     internalTelemetry: telemetry || { appInitiatedThisMonth: null },
     providerError: providerErrorCode ? { code: providerErrorCode } : null,

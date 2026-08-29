@@ -13,7 +13,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { onSnapshot, doc } from "firebase/firestore";
 import { ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import { callFunction, db } from "./firebase";
-import { presentEmailUsageDoc } from "./emailUsageDoc.js";
+import { presentEmailUsageDoc, normalizeCallableUsage } from "./emailUsageDoc.js";
 
 const RESEND_DASHBOARD = "https://resend.com/emails";
 const DEFAULT_TELE = { appInitiatedThisMonth: null, appSafetyCap: null };
@@ -69,12 +69,16 @@ export function EmailUsage({ refreshToken = 0 }) {
   }, []);
 
   // Initial load + manual Refresh + post-test re-read. Reads the cache via the callable
-  // (never contacts Resend). Snapshot ordering is handled by applyNewer.
+  // (never contacts Resend). The callable result is passed through the SAME trust boundary
+  // as the listener (normalizeCallableUsage → providerUsageProven===true) so an old/mixed-
+  // version callable can never make the panel render unproven provider totals (e.g. 3001).
+  // Snapshot ordering is handled by applyNewer.
   const load = useCallback(async () => {
     setBusy(true);
     try {
       const { data } = await callFunction("getEmailUsage", {});
-      applyNewer(data, data);
+      const norm = normalizeCallableUsage(data);
+      applyNewer(norm, norm);
     } catch (e) {
       setUsage((prev) => prev || { providerAvailable: false, source: "internal-fallback", monthly: null, daily: null,
         dailyReason: null, lastSyncedAt: null, stale: true, internalTelemetry: DEFAULT_TELE, providerError: { code: "call-failed" } });

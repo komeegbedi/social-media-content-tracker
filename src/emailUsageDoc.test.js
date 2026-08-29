@@ -2,7 +2,7 @@
    Run: node --test src/emailUsageDoc.test.js */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { presentEmailUsageDoc } from "./emailUsageDoc.js";
+import { presentEmailUsageDoc, normalizeCallableUsage } from "./emailUsageDoc.js";
 
 const AUG = Date.parse("2026-08-28T12:00:00.000Z"); // month 2026-08, day 2026-08-28
 // providerUsageProven:true represents the FUTURE proven-model doc — the server only stamps
@@ -86,6 +86,46 @@ test("a structurally impossible reading (3001/3000) is NOT shown as valid → in
 test("used exactly at the limit is still valid (3000/3000)", () => {
   const v = presentEmailUsageDoc(docOf({ monthly: { used: 3000, limit: 3000, percent: 100 } }), AUG);
   assert.equal(v.providerAvailable, true);
+});
+
+/* ---- normalizeCallableUsage: the callable path enforces the SAME trust boundary ---- */
+const TELE = { appInitiatedThisMonth: 114, appSafetyCap: 2800 };
+test("callable trust: OLD callable (providerAvailable:true, 3001, NO proof stamp) → Unavailable, telemetry kept", () => {
+  const v = normalizeCallableUsage({ providerAvailable: true, source: "resend", monthly: { used: 3001, limit: 3000, percent: 100 },
+    daily: { used: 4, limit: 100, percent: 4 }, lastSyncedAt: "2026-08-29T14:49:05Z", internalTelemetry: TELE });
+  assert.equal(v.providerAvailable, false);
+  assert.equal(v.monthly, null);
+  assert.equal(v.providerError.code, "provider-usage-unverified");
+  assert.deepEqual(v.internalTelemetry, TELE);
+});
+test("callable trust: a BOUNDED but unproven value (44/3000, no stamp) is still Unavailable (bounded ≠ proof)", () => {
+  const v = normalizeCallableUsage({ providerAvailable: true, source: "resend", monthly: { used: 44, limit: 3000, percent: 1.5 },
+    lastSyncedAt: "2026-08-29T10:00:00Z", internalTelemetry: TELE });
+  assert.equal(v.providerAvailable, false);
+  assert.equal(v.providerError.code, "provider-usage-unverified");
+});
+test("callable trust: providerUsageProven:false → Unavailable", () => {
+  const v = normalizeCallableUsage({ providerAvailable: false, providerUsageProven: false, monthly: null,
+    providerError: { code: "provider-usage-unverified" }, internalTelemetry: TELE });
+  assert.equal(v.providerAvailable, false);
+  assert.equal(v.providerError.code, "provider-usage-unverified");
+  assert.deepEqual(v.internalTelemetry, TELE);
+});
+test("callable trust: a PROVEN, bounded, period-correct observation renders (44/3000)", () => {
+  const v = normalizeCallableUsage({ providerAvailable: true, providerUsageProven: true, source: "resend",
+    monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: { used: 3, limit: 100, percent: 3 },
+    lastSyncedAt: "2026-08-29T10:00:00Z", internalTelemetry: TELE });
+  assert.equal(v.providerAvailable, true);
+  assert.deepEqual(v.monthly, { used: 44, limit: 3000, percent: 1.5 });
+});
+test("callable trust: a PROVEN but structurally invalid value (3001) is rejected even with the stamp", () => {
+  const v = normalizeCallableUsage({ providerAvailable: true, providerUsageProven: true, source: "resend",
+    monthly: { used: 3001, limit: 3000, percent: 100 }, lastSyncedAt: "2026-08-29T10:00:00Z", internalTelemetry: TELE });
+  assert.equal(v.providerAvailable, false);
+  assert.equal(v.providerError.code, "invalid-provider-observation");
+});
+test("callable trust: null/absent data → call-failed, no throw", () => {
+  assert.equal(normalizeCallableUsage(null).providerError.code, "call-failed");
 });
 
 test("surfaces internalTelemetry (app safety usage) from the doc when present", () => {

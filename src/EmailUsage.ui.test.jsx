@@ -18,8 +18,10 @@ const { periodKeys } = await import("./emailUsageDoc.js");
 
 const NOW = Date.now();
 const CUR = periodKeys(NOW);
+// A PROVEN callable result (server stamps providerUsageProven only in proven mode). The
+// client's trust boundary (normalizeCallableUsage) renders provider totals only with it.
 const OBSERVED = {
-  providerAvailable: true, source: "resend", stale: false, observedVia: "send",
+  providerAvailable: true, providerUsageProven: true, source: "resend", stale: false, observedVia: "send",
   monthly: { used: 40, limit: 3000, percent: 1.3 }, daily: { used: 0, limit: 100, percent: 0 }, dailyReason: null,
   lastSyncedAt: new Date(NOW - 60000).toISOString(),
   internalTelemetry: { appInitiatedThisMonth: 12, appSafetyCap: 2800 }, providerError: null,
@@ -142,6 +144,73 @@ describe("real-time listener", () => {
 
   test("no listener is attached when the panel is not rendered", () => {
     expect(onSnapshot).toHaveBeenCalledTimes(0);
+  });
+});
+
+describe("rollout trust boundary (mixed-version)", () => {
+  const noProviderBar = () => expect(screen.queryAllByRole("progressbar").some((b) => b.getAttribute("aria-valuenow") === "100")).toBe(false);
+  const noPoison = () => {
+    expect(screen.queryByText("3,001 / 3,000")).not.toBeInTheDocument();
+    expect(screen.queryByText("Observed on send")).not.toBeInTheDocument();
+    noProviderBar();
+  };
+
+  test("new UI + OLD callable (3001/4, no proof stamp) → Unavailable; no 3001/bar; telemetry kept", async () => {
+    await renderResolved({ providerAvailable: true, source: "resend", monthly: { used: 3001, limit: 3000, percent: 100 },
+      daily: { used: 4, limit: 100, percent: 4 }, lastSyncedAt: new Date(NOW - 60000).toISOString(),
+      internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 } });
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    noPoison();
+    expect(screen.getByText("114 / 2,800")).toBeInTheDocument();
+  });
+
+  test("new UI + OLD callable with a BOUNDED value (44/3000, no stamp) → still Unavailable (bounded ≠ proof)", async () => {
+    await renderResolved({ providerAvailable: true, source: "resend", monthly: { used: 44, limit: 3000, percent: 1.5 },
+      lastSyncedAt: new Date(NOW - 60000).toISOString(), internalTelemetry: { appInitiatedThisMonth: 12, appSafetyCap: 2800 } });
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
+  });
+
+  test("new UI + callable providerUsageProven:false → Unavailable", async () => {
+    await renderResolved({ providerAvailable: false, providerUsageProven: false, monthly: null, daily: null,
+      providerError: { code: "provider-usage-unverified" }, internalTelemetry: { appInitiatedThisMonth: 5, appSafetyCap: 2800 } });
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.getByText("5 / 2,800")).toBeInTheDocument();
+  });
+
+  test("new UI + poisoned Firestore snapshot without the proof stamp → Unavailable", async () => {
+    await renderResolved({ providerAvailable: false, providerUsageProven: false, monthly: null,
+      providerError: { code: "provider-usage-unverified" }, internalTelemetry: { appInitiatedThisMonth: 7, appSafetyCap: 2800 } });
+    await deliverSnap(snapDoc({ providerUsageProven: false, monthly: { used: 3001, limit: 3000, percent: 100 }, observedAt: new Date(NOW).toISOString() }));
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    noPoison();
+  });
+
+  test("unproven callable → then a VALID PROVEN snapshot becomes visible", async () => {
+    await renderResolved({ providerAvailable: true, source: "resend", monthly: { used: 3001, limit: 3000, percent: 100 },
+      lastSyncedAt: new Date(NOW - 60000).toISOString(), internalTelemetry: { appInitiatedThisMonth: 12, appSafetyCap: 2800 } });
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    await deliverSnap(snapDoc()); // providerUsageProven:true, 41/3000, observedAt NOW (newer)
+    expect(screen.getByText("41 / 3,000")).toBeInTheDocument();
+    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
+  });
+
+  test("PROVEN callable → then an OLDER unproven snapshot must NOT replace trusted data", async () => {
+    await renderResolved({ ...OBSERVED, lastSyncedAt: new Date(NOW).toISOString() }); // proven 40/3000, newest
+    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();
+    await deliverSnap(snapDoc({ providerUsageProven: false, monthly: { used: 3001, limit: 3000, percent: 100 }, observedAt: new Date(NOW - 120000).toISOString() }));
+    expect(screen.getByText("40 / 3,000")).toBeInTheDocument(); // trusted data retained (correctly still "Observed on send")
+    expect(screen.queryByText("3,001 / 3,000")).not.toBeInTheDocument();
+    noProviderBar();
+  });
+
+  test("manual Refresh receiving an OLD unproven callable must NOT restore poisoned values", async () => {
+    await renderResolved({ ...OBSERVED, lastSyncedAt: new Date(NOW - 60000).toISOString() }); // proven 40/3000
+    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();
+    callFunction.mockResolvedValue({ data: { providerAvailable: true, source: "resend", monthly: { used: 3001, limit: 3000, percent: 100 },
+      lastSyncedAt: new Date(NOW).toISOString(), internalTelemetry: { appInitiatedThisMonth: 12, appSafetyCap: 2800 } } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /refresh/i })); });
+    noPoison(); // 3001 never rendered via the callable path
   });
 });
 
