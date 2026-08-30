@@ -79,38 +79,87 @@ panel shows Resend account usage as **Unavailable**.
   (Our existing logs are inconclusive: no pre-midnight Aug-29 header exists to compare against the
   Aug-30 `daily=0`.)
 
+### Proven vs unproven (corrected flag semantics)
+Separate the header MEANING from the reset PERIOD:
+- `QUOTA_HEADER_MODEL_PROVEN = true` — the quota headers are USED counters, observed BEFORE the
+  accepted send is added (Model A, confirmed by the controlled observation).
+- `MONTHLY_PERIOD_PROVEN = false` — the monthly reset boundary is unknown.
+- `DAILY_PERIOD_PROVEN = false` — the daily reset boundary is unknown.
+- `PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED = false` — no reset-dependent provider logic is active.
+
+Production may temporarily retain `HEADER_SEMANTICS_PROVEN = false` as a containment/deployment gate,
+but that single flag name now CONFLATES a proven header meaning with unproven reset periods. Do not
+flip or rename the production code in this task; the four booleans above are the accurate model.
+
 ### Resulting engineering constraints (enforced)
-1. `HEADER_SEMANTICS_PROVEN` stays **false** in the deployed/production configuration; Stage A.1 is
-   production behavior. (The Stage D WIP branch, unmerged and undeployed, records the proven header
-   meaning but keeps `PROVIDER_MONTHLY_PERIOD_PROVEN`/`PROVIDER_DAILY_PERIOD_PROVEN` **false**, so
-   ALL provider accounting is gated OFF there too — it must not merge or deploy while the reset
-   boundary is unknown.)
-2. Provider account usage is displayed as **Unavailable** (client rejects every provider model).
-3. **Do not assume UTC periods for Resend.** The internal `email-YYYY-MM` / `emailDaily-YYYY-MM-DD`
-   documents are **application-owned**, UTC-labelled, and are **not** claimed to align with Resend's
-   period.
-4. **No durable monthly or daily provider-exhaustion markers** that depend on an unverified reset
-   boundary. (The existing UTC-month `monthlyExhaustedMonth` self-clears at the UTC month boundary
-   and is treated as advisory only; the daily marker + the 90/day internal limit are the operative
-   guard.)
-5. A real quota **429** may terminate the **current delivery**; any **longer** suppression must have
-   a **verified expiration** or require an **explicitly authorized probe** — never silent repeated
-   probes, never a marker that can only self-clear by an observation the marker itself blocks.
-6. Internal telemetry is honestly labelled: "App email activity · UTC calendar month /
-   N successful deliveries / Internal telemetry; not the Resend monthly quota." and "Daily app
-   limit · UTC day / X / 90 / Internal enforcement. Resend's daily reset window is still being
-   verified." — application-owned enforcement, never presented as the authoritative Resend period.
+1. Production keeps `HEADER_SEMANTICS_PROVEN = false` (Stage A.1). The Stage D WIP branch is gated
+   OFF (`PROVIDER_*_PERIOD_PROVEN = false`) and must not merge or deploy while the boundary is
+   unknown.
+2. Resend account usage displays **Unavailable** (client rejects every provider model).
+3. **No UTC assumption for Resend.** Internal `email-YYYY-MM` / `emailDaily-YYYY-MM-DD` are
+   application-owned, UTC-labelled, and are NOT claimed to align with Resend's period.
+4. **Provider-derived exhaustion policy (corrected):** the app-owned **90-recipient-per-UTC-day**
+   limit and the app-owned monthly counter are preserved. A real Resend `daily_quota_exceeded` /
+   `monthly_quota_exceeded` (429) **terminates the current delivery** (`suppressed_quota_limit`,
+   reservation released). It **must NOT** create or enforce a durable provider-derived exhaustion
+   marker whose expiration depends on an unverified reset boundary. Any longer suppression must
+   have a **verified expiration** (a stored expiry timestamp) or require an **explicitly authorized
+   probe** — never a UTC-period marker, never silent repeated probes.
+5. A provider marker that `reserve()` uses to DENY sends is **enforcement, not "advisory"** — it
+   must be described and bounded as such. (The prior "advisory" wording was wrong; see the audit.)
 
-### Exact information still required from human Resend Support (before any Stage D work)
-- The **monthly** quota reset rule for the Free transactional plan: calendar month, signup
-  anniversary, billing-cycle anniversary, or other — with the exact reset instant and timezone.
-- The **daily** quota reset rule: fixed clock reset (and which timezone, e.g. UTC midnight) vs a
-  rolling 24-hour window.
-- Whether a **quota-exceeded (429)** response (or any API surface) can return the **next reset /
+### Reserve-gate audit — every condition touched by provider quota markers
+`reserve()` deny order (functions/emailQuota.js) and the source of each condition:
+
+| # | Condition | Source | Provider-derived? | Effect | Violates current-delivery-only? |
+|---|---|---|---|---|---|
+| 1 | `resend_monthly_exhausted` (`gate.monthlyExhausted`) | `markMonthlyExhausted` on a 429 → `monthlyExhaustedMonth == <UTC month>` | **Yes** | denies **all** sends for the **rest of the UTC month** | **YES** |
+| 2 | `monthly_limit` (`mUsed >= mLimit`) | app `sentCount+reservedCount` vs 2,800 (UTC month) | No (app-owned) | denies at the app monthly cap | No |
+| 3 | `resend_account_limit` (`accountProjected > plan`) | `gate.monthlyUsed` (provider header) | Yes, but **inert in production** — `monthlyUsed` is null unless `HEADER_SEMANTICS_PROVEN && PROVIDER_PERIOD_PROVEN` | never fires in prod | No (inert) |
+| 4 | `resend_daily_exhausted` (`gate.dailyExhausted`) | `markDailyExhausted` on a 429 → `dailyExhaustedDay == <UTC day>` | **Yes** | denies **all** sends for the **rest of the UTC day** | **YES** |
+| 5 | `daily_limit` (`dUsed >= dLimit`) | app `sentCount+reservedCount` vs 90 (UTC day) | No (app-owned) | denies at the app daily cap | No |
+| 6 | `quota_95_noncritical` / `quota_85_low` | `usedPct = mUsed/mLimit` (app monthly) | No (app-owned) | priority gating on the app monthly % | No |
+
+`readResendGate` returns `monthlyExhausted`/`dailyExhausted` **unconditionally** (only `monthlyUsed`
+is gated by the accounting flags), so conditions **1 and 4 are enforced even in production**, where
+provider accounting is otherwise disabled.
+
+### Does current production code violate the current-delivery-only policy?
+**Yes (latent).** A single real 429 `daily_quota_exceeded` sets `dailyExhaustedDay = <today UTC>`,
+and every subsequent `reserve()` that UTC day is denied `resend_daily_exhausted` until UTC midnight
+— an **unverified** boundary. The monthly case suppresses for the rest of the UTC month. No such
+marker is currently set in production (`systemUsage/resendQuota` has neither field), so nothing is
+being suppressed **right now**, but the code path would create the violation on the next real
+quota 429. The prior report calling the UTC-month marker "advisory" was therefore incorrect.
+
+### Proposed code-only remediation (NOT implemented; no deploy)
+1. Replace the UTC-period markers with a **bounded, verified-expiration backoff**:
+   `markDailyExhausted`/`markMonthlyExhausted` write `providerBackoffUntil = now + BACKOFF_MS`
+   (a conservative explicit constant, e.g. 60 min) with the scope + reason — **not** a UTC-period
+   key. `readResendGate` returns `providerBackoff = providerBackoffUntil != null && now < providerBackoffUntil`.
+2. In `reserve()`, replace conditions **1 and 4** with a single `gate.providerBackoff` deny
+   (`resend_quota_backoff`), which suppresses only until the explicit expiry, then permits **one**
+   probe. This satisfies "verified expiration" and "no silent repeated probes," and is independent
+   of the unverified reset boundary.
+3. Keep conditions **2, 5, 6** (app-owned UTC caps) unchanged; keep the 429 → `suppressed_quota_limit`
+   current-delivery termination unchanged. Leave condition **3** (inert in production) as-is.
+4. Update telemetry/wording: describe the backoff as a bounded, verified-expiration suppression on a
+   real provider 429 — never "advisory."
+5. Tests: 429 terminates only the current delivery; a marker suppresses only until `providerBackoffUntil`
+   then allows exactly one probe; no UTC-period key is written; app-owned 90/day and monthly caps
+   unchanged. (Alternative to auto-probe: require an explicitly authorized re-enable — safer against
+   repeated probing but can block critical notifications; the bounded backoff is the recommended default.)
+
+### Exact information still required from human Resend Support (corrected)
+- The **monthly** quota reset rule (calendar month / signup anniversary / billing-cycle anniversary /
+  other) with the exact reset instant and timezone.
+- The **daily** quota reset rule: fixed clock reset (which timezone, e.g. UTC midnight) vs rolling 24h.
+- Whether a **quota-exceeded (429)** response — or any API surface — can return the **next reset /
   retry timestamp** for the monthly and daily quotas.
-- Confirmation of how usage is attributed across account **API-key changes** within the same team
-  (to close the residual 119-vs-49 reconciliation), and whether inbound/received email is included
-  in the dashboard usage figure.
+- Can **API-key rotation** ever create a new quota bucket within the same team?
+- Does the **Usage dashboard aggregate all sent and received activity across every API key** in the team?
+- Can Support identify **why our application recorded 119 successful deliveries while the dashboard
+  showed 49**, including the exact period boundaries applied to each counter?
 
-Until these are answered by human Support, provider monthly/daily accounting stays **Unavailable**
-and no reset-dependent logic is implemented or deployed.
+Until human Support answers these, provider monthly/daily accounting stays Unavailable, no
+reset-dependent enforcement is active, and the exhaustion-marker remediation above is not implemented.
