@@ -160,7 +160,7 @@ export function EmailUsage({ refreshToken = 0 }) {
         <>
           {badge && (
             <div className="sb-usage-badgerow">
-              <span className="sb-mlabel" style={{ margin: 0, fontWeight: 600 }}>Resend account · last observed</span>
+              <span className="sb-mlabel" style={{ margin: 0, fontWeight: 600 }}>Resend account usage</span>
               <span className={"sb-usage-badge " + badge.cls}>{badge.label}</span>
             </div>
           )}
@@ -176,7 +176,7 @@ export function EmailUsage({ refreshToken = 0 }) {
               {(() => {
                 const code = usage.providerError && usage.providerError.code;
                 if (code === "call-failed") return "Couldn't load usage just now. Try again.";
-                if (code === "provider-usage-unverified") return "Resend account usage is unavailable while we verify how Resend reports quota. App safety usage below is unaffected. Use “View in Resend” for the authoritative figure.";
+                if (code === "provider-usage-unverified") return "Resend usage is temporarily unavailable while we verify when its quota counters reset.";
                 if (code === "invalid-provider-observation") return "Resend account usage couldn't be verified (an invalid reading was ignored). App safety usage below is unaffected.";
                 if (code === "not-observed-this-month") return "No Resend usage observed this month yet. It appears after the app sends an email this month.";
                 return "No Resend usage observed yet. Account usage appears here after the app sends an email (Resend only reports quota on send).";
@@ -208,7 +208,7 @@ export function EmailUsage({ refreshToken = 0 }) {
 
           <div className="sb-usage-foot">
             <span className="sb-sub" style={{ fontSize: 12 }}>
-              {usage.providerAvailable && synced ? `Last observed ${synced}${usage.stale ? " · stale" : ""}` : "Not observed yet"}
+              {usage.providerAvailable && synced ? `Last observed ${synced}${usage.stale ? " · stale" : ""}` : ""}
             </span>
             <button type="button" className="sb-usage-refresh" onClick={() => load()} disabled={busy}
               title="Re-reads the latest observation. Does not contact Resend.">
@@ -222,7 +222,7 @@ export function EmailUsage({ refreshToken = 0 }) {
               Resend reports account usage only on SEND, so this advances when THIS app sends email
               (notifications, digests, test emails). Out-of-band Resend activity is reflected on the
               next successful app send. Refresh re-reads the latest observation and does not contact Resend.<br />
-              {!usage.providerAvailable && synced ? <>Historical unverified observation: <b>{synced}</b> (not shown as current).<br /></> : null}
+              {!usage.providerAvailable && synced ? <>Historical unverified observation: <b>{synced}</b>. Not shown as current usage.<br /></> : null}
               Data source: <b>{usage.source}</b>{usage.providerError ? <> · {usage.providerError.code}</> : null}
             </div>
           </details>

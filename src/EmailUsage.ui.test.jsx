@@ -43,6 +43,24 @@ test("rollback safety: a valid Stage D CALLABLE result renders Unavailable, no t
   expect(screen.getByRole("link", { name: /view in resend/i })).toBeInTheDocument();
 });
 
+test("unverified provider state: Unavailable badge + reset-window message; no 'Not observed yet'; historical time only under Technical details", async () => {
+  await renderResolved(stageDCallable()); // carries lastSyncedAt → a historical observation exists
+  expect(screen.getByText("Resend account usage")).toBeInTheDocument();          // section title
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();                    // badge
+  expect(screen.getByText(/Resend usage is temporarily unavailable while we verify when its quota counters reset/i)).toBeInTheDocument();
+  // Must NOT imply nothing was ever observed, and must NOT show the historical time in the primary.
+  expect(screen.queryByText("Not observed yet")).not.toBeInTheDocument();
+  expect(screen.queryByText(/^Last observed/)).not.toBeInTheDocument();
+  // No provider totals or bars.
+  expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
+  expect(screen.queryAllByRole("progressbar").length).toBe(0);
+  // Historical time appears ONLY inside the (collapsed) Technical details.
+  const hist = screen.getByText(/Historical unverified observation/i);
+  expect(hist.closest("details")).not.toBeNull();
+  expect(screen.getByText(/Not shown as current usage/i)).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /view in resend/i })).toBeInTheDocument();
+});
+
 test("internal-period wording is honest — neither UTC period claims to be the authoritative Resend period", async () => {
   await renderResolved({ ...stageDCallable(), internalTelemetry: { appInitiatedThisMonth: 119, appSafetyCap: 2800, appDailyThisDay: 5, appDailyLimit: 90 } });
   expect(screen.getByText(/App email activity · UTC calendar month/i)).toBeInTheDocument();
