@@ -132,23 +132,76 @@ marker is currently set in production (`systemUsage/resendQuota` has neither fie
 being suppressed **right now**, but the code path would create the violation on the next real
 quota 429. The prior report calling the UTC-month marker "advisory" was therefore incorrect.
 
-### Proposed code-only remediation (NOT implemented; no deploy)
-1. Replace the UTC-period markers with a **bounded, verified-expiration backoff**:
-   `markDailyExhausted`/`markMonthlyExhausted` write `providerBackoffUntil = now + BACKOFF_MS`
-   (a conservative explicit constant, e.g. 60 min) with the scope + reason — **not** a UTC-period
-   key. `readResendGate` returns `providerBackoff = providerBackoffUntil != null && now < providerBackoffUntil`.
-2. In `reserve()`, replace conditions **1 and 4** with a single `gate.providerBackoff` deny
-   (`resend_quota_backoff`), which suppresses only until the explicit expiry, then permits **one**
-   probe. This satisfies "verified expiration" and "no silent repeated probes," and is independent
-   of the unverified reset boundary.
-3. Keep conditions **2, 5, 6** (app-owned UTC caps) unchanged; keep the 429 → `suppressed_quota_limit`
-   current-delivery termination unchanged. Leave condition **3** (inert in production) as-is.
-4. Update telemetry/wording: describe the backoff as a bounded, verified-expiration suppression on a
-   real provider 429 — never "advisory."
-5. Tests: 429 terminates only the current delivery; a marker suppresses only until `providerBackoffUntil`
-   then allows exactly one probe; no UTC-period key is written; app-owned 90/day and monthly caps
-   unchanged. (Alternative to auto-probe: require an explicitly authorized re-enable — safer against
-   repeated probing but can block critical notifications; the bounded backoff is the recommended default.)
+### Remediation — Option A (RECOMMENDED, strict current-delivery-only; code-only, NOT implemented)
+On a real `daily_quota_exceeded` / `monthly_quota_exceeded` (429): release the reservation, settle
+the current delivery as `suppressed_quota_limit` (terminal, no retry — already the behavior), emit
+the existing deduplicated operational alert — and **do NOT write a provider-derived daily/monthly
+exhaustion marker**. While `PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED = false`, `reserve()` **ignores**
+all legacy provider exhaustion markers **without deleting** them. App-owned monthly cap (2,800/UTC
+month), 90-per-UTC-day cap, and priority gates are preserved. Later normal deliveries may
+INDEPENDENTLY hit another quota 429 — these are organic sends, **not probes**; there are no retries
+for the same quota-rejected delivery.
+
+**Files / functions affected (Option A):**
+- `functions/emailService.js` — in the `_deliver` quota-429 branch, REMOVE the `markDailyExhausted`
+  / `markMonthlyExhausted` calls. Keep the reservation release, the `suppressed_quota_limit` settle,
+  and `alertAdmins` (daily / monthly-100%). No retry (unchanged).
+- `functions/emailQuota.js` — `readResendGate`: gate `monthlyExhausted` / `dailyExhausted` on
+  `PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED` so both return `false` while enforcement is disabled
+  (legacy `monthlyExhaustedMonth` / `dailyExhaustedDay` fields are IGNORED, never deleted). The
+  `reserve()` deny conditions #1/#4 then never fire. `markDaily/MonthlyExhausted` become unused —
+  keep as documented legacy no-callers, or remove them + their exports.
+- Tests: `test/quota-suppression.test.js`, `test/email-quota.test.js` (+ any that assert marker
+  writes/denials).
+
+**Compatibility for legacy markers:** any pre-existing `monthlyExhaustedMonth` / `dailyExhaustedDay`
+in `systemUsage/resendQuota` is **ignored** (not read into a deny) and **not deleted** — a passive,
+non-destructive migration. (Production currently has neither field set, so this is a no-op there.)
+
+**Alert & delivery-state behavior:** delivery → released + `suppressed_quota_limit` (terminal, no
+retry). Alert → the existing per-UTC-period deduped `admin_delivery_health` alert (daily / monthly
+100%) still fires for operational visibility (this is an alert dedupe, NOT an enforcement marker).
+No provider exhaustion marker is written; nothing suppresses subsequent deliveries.
+
+**Tests required (Option A):**
+- 429 daily → current delivery `suppressed_quota_limit` + released; **no** `dailyExhaustedDay` written;
+  deduped daily alert fired; returns suppressed (no retry). Same for monthly (+ monthly-100% alert).
+- `reserve()` with a pre-existing legacy `dailyExhaustedDay` / `monthlyExhaustedMonth` present while
+  enforcement disabled → **allowed** (marker ignored); the marker fields are **not** deleted.
+- **Concurrent reservations** after a 429: N deliveries each governed only by the app caps (90/day,
+  2,800/month) — none blocked by a provider marker; a later organic send that itself hits 429 is
+  suppressed on its own (not labelled a probe); concurrency near the app cap still cannot overshoot.
+- App-owned caps + priority gates unchanged.
+
+### Remediation — Option B (design ONLY; do NOT implement/recommend without explicit authorization)
+An explicitly-authorized **circuit breaker** for provider quota exhaustion. Requires the user to
+authorize automatic or administrator-controlled probing before any implementation.
+- **State machine:** `closed → open → half-open → closed | open`, persisted on a Firestore doc,
+  mutated only inside a **transaction**.
+- **open:** entered on a quota 429; stores an **"application cooldown"** timestamp (labelled exactly
+  that — never "verified expiration" or "provider reset").
+- **half-open:** after the cooldown, exactly **one** delivery atomically claims a **probe lease** in a
+  transaction (state=open ∧ now≥cooldown ∧ no active lease → set half-open, `leaseOwner=deliveryId`,
+  `leaseUntil`). Only the lease owner may send; **all other concurrent deliveries remain denied**
+  while the lease is active.
+- **Probe outcomes:** success (2xx) → `closed`; quota 429 → `open` with a new application cooldown;
+  request-rate 429 (`rate_limit_exceeded`) → NOT a quota signal → release lease, remain `open`, retry
+  rate-limit via the existing path, do not reset the breaker; timeout / uncertain network → keep the
+  SAME idempotency key (Resend dedupes), treat as uncertain → do not reset; the lease self-releases at
+  `leaseUntil`; crashed lease owner / lease expiration → `leaseUntil` frees the lease (reconcile
+  backstop) → back to `open` for the next cooldown. One probe per cooldown, never concurrent probes.
+- Same delivery **idempotency key** throughout. Application cooldown is always labelled "application
+  cooldown."
+
+### Recommendation — Option A vs. waiting for Resend Support
+**Prepare Option A now** (pending your authorization to change code + a Hosting/Functions deploy).
+Option A removes the latent violation, does **not** depend on the unknown reset boundary, keeps
+app-owned enforcement + operational alerts, and never suppresses on an unverified boundary. The
+violation is currently **latent** (no marker set in production; it would only trigger on the next
+real quota 429), so this is not an emergency — but Option A is the correct, boundary-independent
+code fix and should not wait on Support. **Defer Option B** until Resend Support provides the reset
+boundary AND you explicitly authorize probing; until then, Option A's strict current-delivery-only
+containment is the honest behavior.
 
 ### Exact information still required from human Resend Support (corrected)
 - The **monthly** quota reset rule (calendar month / signup anniversary / billing-cycle anniversary /
