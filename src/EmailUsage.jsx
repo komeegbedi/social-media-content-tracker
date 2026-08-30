@@ -129,9 +129,9 @@ export function EmailUsage({ refreshToken = 0 }) {
   }, [usage, note]);
 
   const tele = (usage && usage.internalTelemetry) || {};
-  const appSent = tele.appInitiatedThisMonth;
-  const appCap = tele.appSafetyCap || 2800;
-  const appBlock = appSent == null ? null : { used: appSent, limit: appCap, percent: appCap > 0 ? Math.round((appSent / appCap) * 1000) / 10 : 0 };
+  const appSent = tele.appInitiatedThisMonth;                       // UTC-calendar-month telemetry (NOT a provider cap)
+  const appDaily = typeof tele.appDailyThisDay === "number" ? tele.appDailyThisDay : null;
+  const appDailyLimit = tele.appDailyLimit || 90;                   // the REAL enforced daily guard
   const synced = usage && usage.lastSyncedAt ? fmtSync(usage.lastSyncedAt) : null;
 
   const errCode = usage && usage.providerError && usage.providerError.code;
@@ -189,11 +189,25 @@ export function EmailUsage({ refreshToken = 0 }) {
           {listenerError && note !== "not-saved" && <div className="sb-usage-quiet" role="status">Live usage updates are unavailable right now (check your admin access). Use Refresh to re-read.</div>}
 
           {/* The app's OWN safety cap — clearly separate from the Resend account limit. */}
-          <UsageRow label="App safety cap (this app only)" block={appBlock} note="internal limit, not Resend" />
+          {/* Internal app telemetry — NOT the Resend monthly quota. The monthly count is
+              scoped to the UTC CALENDAR MONTH, which is not aligned with Resend's (unknown)
+              provider reset boundary, so it is telemetry only, never a provider safety cap.
+              The DAILY app limit below is the real enforced guard. */}
+          <div className="sb-usagerow">
+            <div className="sb-usagerow-head"><span>App email activity · UTC calendar month</span>
+              <b>{appSent == null ? "—" : `${appSent.toLocaleString()} successful deliveries`}</b></div>
+            <div className="sb-usagerow-foot">Internal telemetry; not the Resend monthly quota.</div>
+          </div>
+          {appDaily != null && (
+            <div className="sb-usagerow">
+              <div className="sb-usagerow-head"><span>Daily app limit</span><b>{appDaily.toLocaleString()} / {appDailyLimit.toLocaleString()}</b></div>
+              <div className="sb-usagerow-foot">Internal daily enforcement.</div>
+            </div>
+          )}
 
           <div className="sb-usage-foot">
             <span className="sb-sub" style={{ fontSize: 12 }}>
-              {synced ? `Last observed ${synced}` : "Not observed yet"}{usage.stale && usage.providerAvailable ? " · stale" : ""}
+              {usage.providerAvailable && synced ? `Last observed ${synced}${usage.stale ? " · stale" : ""}` : "Not observed yet"}
             </span>
             <button type="button" className="sb-usage-refresh" onClick={() => load()} disabled={busy}
               title="Re-reads the latest observation. Does not contact Resend.">
@@ -207,6 +221,7 @@ export function EmailUsage({ refreshToken = 0 }) {
               Resend reports account usage only on SEND, so this advances when THIS app sends email
               (notifications, digests, test emails). Out-of-band Resend activity is reflected on the
               next successful app send. Refresh re-reads the latest observation and does not contact Resend.<br />
+              {!usage.providerAvailable && synced ? <>Historical unverified observation: <b>{synced}</b> (not shown as current).<br /></> : null}
               Data source: <b>{usage.source}</b>{usage.providerError ? <> · {usage.providerError.code}</> : null}
             </div>
           </details>

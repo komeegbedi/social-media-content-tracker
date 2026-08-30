@@ -39,7 +39,7 @@ test("rollback safety: a valid Stage D CALLABLE result renders Unavailable, no t
   expect(screen.getByText("Unavailable")).toBeInTheDocument();
   expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
   expect(screen.queryByText("Observed on send")).not.toBeInTheDocument();
-  expect(screen.getByText("114 / 2,800")).toBeInTheDocument();
+  expect(screen.getByText("114 successful deliveries")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: /view in resend/i })).toBeInTheDocument();
 });
 
@@ -48,7 +48,7 @@ test("rollback safety: a valid Stage D DOCUMENT via the listener renders Unavail
   await deliverSnap(stageDDoc({ internalTelemetry: { appInitiatedThisMonth: 120, appSafetyCap: 2800 } }));
   expect(screen.getByText("Unavailable")).toBeInTheDocument();
   expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
-  expect(screen.getByText("120 / 2,800")).toBeInTheDocument(); // app-safety telemetry still live
+  expect(screen.getByText("120 successful deliveries")).toBeInTheDocument(); // app-safety telemetry still live
 });
 
 test("Refresh does not restore provider totals (accounting disabled)", async () => {

@@ -212,8 +212,12 @@ async function settleReservation(deliveryRef, kind, period, extra = {}) {
     // serialize on the monthly doc, so appInitiatedThisMonth advances monotonically. No
     // recipient/delivery data is written. Failed/released sends never increment sentCount.
     if (kind === "sent") {
+      // Internal telemetry: monthly is UTC-CALENDAR-MONTH scoped (NOT the Resend provider
+      // period) → telemetry only, not a provider safety cap. Daily is the real enforced guard.
       const appInitiatedThisMonth = (m.sentCount || 0) + 1;
-      const pub = { internalTelemetry: { appInitiatedThisMonth, appSafetyCap: m.monthlyLimit || MONTHLY_LIMIT } };
+      const appDailyThisDay = (day.sentCount || 0) + 1;
+      const pub = { internalTelemetry: { appInitiatedThisMonth, appSafetyCap: m.monthlyLimit || MONTHLY_LIMIT,
+        appDailyThisDay, appDailyLimit: day.dailyLimit || DAILY_LIMIT } };
       // COMPATIBILITY SIGNAL (containment): while header semantics are unproven, actively
       // NEUTRALIZE any provider usage fields in the sanitized panel doc on each successful
       // send. This overwrites a poisoned value (e.g. 3001) so that even an ALREADY-LOADED
