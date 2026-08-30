@@ -7,6 +7,17 @@
 
 const STALE_MS = 12 * 60 * 60 * 1000; // an observation older than this is flagged stale
 
+// ROLLBACK-SAFETY: this is the Stage A (containment) build — provider account accounting is
+// DISABLED here. The client rejects EVERY provider model, so if a rollback to this build
+// happens while a valid Stage D document (providerUsageProven:true, a known model) is still
+// in Firestore, the panel shows Unavailable IMMEDIATELY — no wait for another send, no
+// Firestore cleanup. (The Stage D build flips this to true and additionally checks the
+// model version.)
+export const PROVIDER_ACCOUNTING_ENABLED = false;
+export const SUPPORTED_PROVIDER_MODELS = [];
+const providerTrusted = (d) =>
+  PROVIDER_ACCOUNTING_ENABLED && d && d.providerUsageProven === true && SUPPORTED_PROVIDER_MODELS.includes(d.providerUsageModel);
+
 export function periodKeys(nowMs) {
   const iso = new Date(nowMs).toISOString();
   return { month: iso.slice(0, 7), day: iso.slice(0, 10) };
@@ -30,7 +41,8 @@ export function normalizeCallableUsage(data) {
     stale: true, internalTelemetry: tele, providerError: { code },
   });
   if (!data) return unavailable("call-failed");
-  if (data.providerUsageProven !== true) {
+  // Stage A build: accounting disabled → reject ALL provider data (any model, proven or not).
+  if (!providerTrusted(data)) {
     return unavailable((data.providerError && data.providerError.code) || "provider-usage-unverified");
   }
   const intOk = (n) => Number.isInteger(n) && n >= 0;
@@ -56,7 +68,9 @@ export function presentEmailUsageDoc(doc, nowMs = Date.now()) {
   // proven + correct accounting live). Until then — including any stale/pre-fix doc that
   // still carries provider fields — report Unavailable and keep app-safety telemetry.
   // Mirrors resendUsage.getResendQuotaUsage so the listener and callable can't disagree.
-  if (!doc.providerUsageProven) {
+  // Stage A build: accounting disabled → reject ALL provider docs, including a valid Stage D
+  // document left in Firestore after a rollback (fails closed → Unavailable immediately).
+  if (!providerTrusted(doc)) {
     return { providerAvailable: false, source: "internal-fallback", monthly: null, daily: null,
       dailyReason: null, lastSyncedAt: doc.observedAt || null, observedVia: null, stale: true, internalTelemetry: tele, providerError: { code: "provider-usage-unverified" } };
   }

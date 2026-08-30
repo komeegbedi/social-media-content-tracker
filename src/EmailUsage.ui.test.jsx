@@ -1,310 +1,78 @@
-/* EmailUsage diagnostics (rendered) — last-observed model + real-time listener.
-   Proves: states (observed / stale / not-observed / period boundaries / loading),
-   live snapshot updates, out-of-order snapshot ignored, unsubscribe on unmount, no
-   listener while closed, deterministic post-test re-read, and no secret/debug leakage.
+/* EmailUsage (rendered) — STAGE A build (provider accounting DISABLED for rollback safety).
+   Provider totals are never rendered; a valid Stage D document/callable reads as
+   Unavailable. App-safety telemetry stays visible and live. Scoped failures never block.
+   The full provider-rendering behaviour is covered on the Stage D branch.
    Run: npm run test:ui */
-import { describe, test, expect, vi, beforeEach } from "vitest";
-import { render, screen, act, fireEvent, within } from "@testing-library/react";
+import { test, expect, vi, beforeEach } from "vitest";
+import { render, screen, act } from "@testing-library/react";
 
 const callFunction = vi.fn();
-let snapshotCb = null;
-let snapshotErrCb = null;
-let unsubCount = 0;
+let snapshotCb = null, snapshotErrCb = null, unsubCount = 0;
 const onSnapshot = vi.fn((_ref, next, err) => { snapshotCb = next; snapshotErrCb = err; return () => { unsubCount++; }; });
 vi.mock("./firebase", () => ({ callFunction: (...a) => callFunction(...a), db: {} }));
 vi.mock("firebase/firestore", () => ({ onSnapshot: (...a) => onSnapshot(...a), doc: () => ({}) }));
 
 const { EmailUsage } = await import("./EmailUsage.jsx");
 const { periodKeys } = await import("./emailUsageDoc.js");
-
 const NOW = Date.now();
 const CUR = periodKeys(NOW);
-// A PROVEN callable result (server stamps providerUsageProven only in proven mode). The
-// client's trust boundary (normalizeCallableUsage) renders provider totals only with it.
-const OBSERVED = {
-  providerAvailable: true, providerUsageProven: true, source: "resend", stale: false, observedVia: "send",
-  monthly: { used: 40, limit: 3000, percent: 1.3 }, daily: { used: 0, limit: 100, percent: 0 }, dailyReason: null,
-  lastSyncedAt: new Date(NOW - 60000).toISOString(),
-  internalTelemetry: { appInitiatedThisMonth: 12, appSafetyCap: 2800 }, providerError: null,
-};
-const snapDoc = (over = {}) => ({
-  monthly: { used: 41, limit: 3000, percent: 1.4 }, daily: { used: 1, limit: 100, percent: 1 }, dailyReason: null,
-  periodMonth: CUR.month, periodDay: CUR.day, observedAt: new Date(NOW).toISOString(), observedVia: "send", source: "resend",
-  providerUsageProven: true, ...over, // proven-model doc; the server stamps this only once semantics are proven
+
+// A fully-valid Stage D callable result / document (proven + known model + bounded totals).
+const stageDCallable = (over = {}) => ({
+  providerAvailable: true, providerUsageProven: true, providerUsageModel: "resend-pre-send-used-v1", source: "resend",
+  monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: { used: 5, limit: 100, percent: 5 }, dailyReason: null,
+  lastSyncedAt: new Date(NOW).toISOString(), internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 }, ...over,
+});
+const stageDDoc = (over = {}) => ({
+  monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: { used: 5, limit: 100, percent: 5 }, dailyReason: null,
+  periodMonth: CUR.month, periodDay: CUR.day, observedAt: new Date(NOW).toISOString(), observedVia: "send",
+  source: "resend", providerUsageProven: true, providerUsageModel: "resend-pre-send-used-v1",
+  internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 }, ...over,
 });
 const deliverSnap = async (data) => { await act(async () => { snapshotCb({ exists: () => true, data: () => data }); }); };
+async function renderResolved(data) { callFunction.mockResolvedValue({ data }); return act(async () => render(<EmailUsage />)); }
 
 beforeEach(() => { callFunction.mockReset(); onSnapshot.mockClear(); snapshotCb = null; snapshotErrCb = null; unsubCount = 0; });
 
-describe("scoped failure (Email Usage never blocks the app)", () => {
-  test("a callable rejection is contained — inline error, no throw", async () => {
-    callFunction.mockRejectedValue(new Error("network"));
-    await act(async () => render(<EmailUsage />));          // must not throw
-    expect(screen.getByText(/couldn't load usage just now/i)).toBeInTheDocument();
-  });
-
-  test("a Firestore listener error is contained — scoped status, no throw", async () => {
-    callFunction.mockResolvedValue({ data: OBSERVED });
-    await act(async () => render(<EmailUsage />));
-    await act(async () => { snapshotErrCb(new Error("permission-denied")); }); // listener fails
-    expect(screen.getByText(/live usage updates are unavailable right now/i)).toBeInTheDocument();
-    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();                 // panel still functional
-  });
+test("rollback safety: a valid Stage D CALLABLE result renders Unavailable, no totals, app-safety shown", async () => {
+  await renderResolved(stageDCallable());
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
+  expect(screen.queryByText("Observed on send")).not.toBeInTheDocument();
+  expect(screen.getByText("114 / 2,800")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /view in resend/i })).toBeInTheDocument();
 });
 
-async function renderResolved(data) {
-  callFunction.mockResolvedValue({ data });
-  const utils = await act(async () => render(<EmailUsage />));
-  return utils;
-}
-
-describe("states", () => {
-  test("loading → message before the callable resolves", async () => {
-    let resolve; callFunction.mockReturnValue(new Promise((r) => (resolve = r)));
-    render(<EmailUsage />);
-    expect(screen.getByText(/loading email usage/i)).toBeInTheDocument();
-    await act(async () => { resolve({ data: OBSERVED }); });
-    expect(screen.queryByText(/loading email usage/i)).not.toBeInTheDocument();
-  });
-
-  test("observed → 40 / 3,000, 1.3% used, 0 / 100, 'Observed on send', View in Resend link", async () => {
-    await renderResolved(OBSERVED);
-    expect(screen.getByText("Observed on send")).toBeInTheDocument();
-    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();
-    expect(screen.getByText("1.3% used")).toBeInTheDocument();
-    expect(screen.getByText("0 / 100")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /view in resend/i })).toHaveAttribute("href", "https://resend.com/emails");
-  });
-
-  test("app safety cap shown separately, never as a Resend limit", async () => {
-    await renderResolved(OBSERVED);
-    expect(screen.getByText(/app safety cap \(this app only\)/i)).toBeInTheDocument();
-    expect(screen.getByText("12 / 2,800")).toBeInTheDocument();
-    expect(screen.queryByText("40 / 2,800")).not.toBeInTheDocument();
-  });
-
-  test("not-observed-this-month → distinct note, no current monthly number", async () => {
-    await renderResolved({ providerAvailable: false, source: "resend", stale: true, monthly: null, daily: null, dailyReason: null,
-      lastSyncedAt: "2026-08-31T12:00:00.000Z", internalTelemetry: { appInitiatedThisMonth: 5, appSafetyCap: 2800 }, providerError: { code: "not-observed-this-month" } });
-    expect(screen.getByText(/no resend usage observed this month yet/i)).toBeInTheDocument();
-    expect(screen.queryByText(/3,000/)).not.toBeInTheDocument();
-  });
-
-  test("midnight rollover (not-observed-today) → 'No send yet today', monthly kept", async () => {
-    await renderResolved({ ...OBSERVED, daily: null, dailyReason: "not-observed-today" });
-    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();
-    expect(screen.getByText("No send yet today")).toBeInTheDocument();
-  });
-
-  test("paid plan (not-provided) → 'Not provided by Resend'", async () => {
-    await renderResolved({ ...OBSERVED, daily: null, dailyReason: "not-provided" });
-    expect(screen.getByText("Not provided by Resend")).toBeInTheDocument();
-  });
-
-  test("invalid provider data → 'Unavailable' badge, no numbers/bar, app safety still shown", async () => {
-    await renderResolved({
-      providerAvailable: false, source: "internal-fallback", monthly: null, daily: null, dailyReason: null,
-      lastSyncedAt: "2026-08-29T09:49:00.000Z", internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 },
-      providerError: { code: "invalid-provider-observation" },
-    });
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
-    expect(screen.queryByText("Observed on send")).not.toBeInTheDocument();
-    expect(screen.getByText(/couldn't be verified/i)).toBeInTheDocument();
-    expect(screen.queryByText("3,001 / 3,000")).not.toBeInTheDocument();
-    // No 100% bar from the invalid provider data (the only bar is the ~4% app-safety row).
-    const bars = screen.queryAllByRole("progressbar");
-    expect(bars.some((b) => b.getAttribute("aria-valuenow") === "100")).toBe(false);
-    expect(screen.getByText("114 / 2,800")).toBeInTheDocument();        // app safety still shown
-    expect(screen.getByRole("link", { name: /view in resend/i })).toBeInTheDocument();
-  });
+test("rollback safety: a valid Stage D DOCUMENT via the listener renders Unavailable; telemetry still advances", async () => {
+  await renderResolved(stageDCallable());
+  await deliverSnap(stageDDoc({ internalTelemetry: { appInitiatedThisMonth: 120, appSafetyCap: 2800 } }));
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
+  expect(screen.getByText("120 / 2,800")).toBeInTheDocument(); // app-safety telemetry still live
 });
 
-describe("real-time listener", () => {
-  test("a mounted panel attaches a listener and updates on a newer snapshot (no Refresh)", async () => {
-    await renderResolved(OBSERVED);
-    expect(onSnapshot).toHaveBeenCalledTimes(1);         // attached while open
-    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();
-    await deliverSnap(snapDoc());                        // observedAt = NOW > OBSERVED.lastSyncedAt
-    expect(screen.getByText("41 / 3,000")).toBeInTheDocument();
-    expect(screen.getByText("1 / 100")).toBeInTheDocument();
-  });
-
-  test("a snapshot carrying internalTelemetry advances the app safety usage row automatically", async () => {
-    await renderResolved(OBSERVED);                       // app safety = 12 / 2,800 initially
-    expect(screen.getByText("12 / 2,800")).toBeInTheDocument();
-    await deliverSnap(snapDoc({ internalTelemetry: { appInitiatedThisMonth: 13, appSafetyCap: 2800 } }));
-    expect(screen.getByText("13 / 2,800")).toBeInTheDocument();
-    expect(screen.getByText("41 / 3,000")).toBeInTheDocument(); // provider also updated
-  });
-
-  test("containment: a snapshot WITHOUT providerUsageProven → Unavailable, but app safety still advances", async () => {
-    await renderResolved(OBSERVED);
-    await deliverSnap(snapDoc({ providerUsageProven: false, internalTelemetry: { appInitiatedThisMonth: 20, appSafetyCap: 2800 } }));
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
-    expect(screen.queryByText("41 / 3,000")).not.toBeInTheDocument(); // provider usage not shown
-    expect(screen.getByText("20 / 2,800")).toBeInTheDocument();       // app-safety telemetry still live
-  });
-
-  test("an OLDER (out-of-order) snapshot is ignored — the UI does not regress", async () => {
-    await renderResolved(OBSERVED);
-    await deliverSnap(snapDoc({ monthly: { used: 5, limit: 3000, percent: 0.2 }, observedAt: new Date(NOW - 120000).toISOString() }));
-    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();
-    expect(screen.queryByText("5 / 3,000")).not.toBeInTheDocument();
-  });
-
-  test("the listener unsubscribes on unmount (no listener while the panel is closed)", async () => {
-    const { unmount } = await renderResolved(OBSERVED);
-    expect(onSnapshot).toHaveBeenCalledTimes(1);
-    unmount();
-    expect(unsubCount).toBe(1);
-  });
-
-  test("no listener is attached when the panel is not rendered", () => {
-    expect(onSnapshot).toHaveBeenCalledTimes(0);
-  });
+test("Refresh does not restore provider totals (accounting disabled)", async () => {
+  await renderResolved(stageDCallable());
+  callFunction.mockResolvedValue({ data: stageDCallable({ monthly: { used: 45, limit: 3000, percent: 1.5 } }) });
+  await act(async () => { screen.getByRole("button", { name: /refresh/i }).click(); });
+  expect(screen.queryByText("45 / 3,000")).not.toBeInTheDocument();
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
 });
 
-describe("rollout trust boundary (mixed-version)", () => {
-  const noProviderBar = () => expect(screen.queryAllByRole("progressbar").some((b) => b.getAttribute("aria-valuenow") === "100")).toBe(false);
-  const noPoison = () => {
-    expect(screen.queryByText("3,001 / 3,000")).not.toBeInTheDocument();
-    expect(screen.queryByText("Observed on send")).not.toBeInTheDocument();
-    noProviderBar();
-  };
-
-  test("new UI + OLD callable (3001/4, no proof stamp) → Unavailable; no 3001/bar; telemetry kept", async () => {
-    await renderResolved({ providerAvailable: true, source: "resend", monthly: { used: 3001, limit: 3000, percent: 100 },
-      daily: { used: 4, limit: 100, percent: 4 }, lastSyncedAt: new Date(NOW - 60000).toISOString(),
-      internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 } });
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
-    noPoison();
-    expect(screen.getByText("114 / 2,800")).toBeInTheDocument();
-  });
-
-  test("new UI + OLD callable with a BOUNDED value (44/3000, no stamp) → still Unavailable (bounded ≠ proof)", async () => {
-    await renderResolved({ providerAvailable: true, source: "resend", monthly: { used: 44, limit: 3000, percent: 1.5 },
-      lastSyncedAt: new Date(NOW - 60000).toISOString(), internalTelemetry: { appInitiatedThisMonth: 12, appSafetyCap: 2800 } });
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
-    expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
-  });
-
-  test("new UI + callable providerUsageProven:false → Unavailable", async () => {
-    await renderResolved({ providerAvailable: false, providerUsageProven: false, monthly: null, daily: null,
-      providerError: { code: "provider-usage-unverified" }, internalTelemetry: { appInitiatedThisMonth: 5, appSafetyCap: 2800 } });
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
-    expect(screen.getByText("5 / 2,800")).toBeInTheDocument();
-  });
-
-  test("new UI + poisoned Firestore snapshot without the proof stamp → Unavailable", async () => {
-    await renderResolved({ providerAvailable: false, providerUsageProven: false, monthly: null,
-      providerError: { code: "provider-usage-unverified" }, internalTelemetry: { appInitiatedThisMonth: 7, appSafetyCap: 2800 } });
-    await deliverSnap(snapDoc({ providerUsageProven: false, monthly: { used: 3001, limit: 3000, percent: 100 }, observedAt: new Date(NOW).toISOString() }));
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
-    noPoison();
-  });
-
-  test("unproven callable → then a VALID PROVEN snapshot becomes visible", async () => {
-    await renderResolved({ providerAvailable: true, source: "resend", monthly: { used: 3001, limit: 3000, percent: 100 },
-      lastSyncedAt: new Date(NOW - 60000).toISOString(), internalTelemetry: { appInitiatedThisMonth: 12, appSafetyCap: 2800 } });
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
-    await deliverSnap(snapDoc()); // providerUsageProven:true, 41/3000, observedAt NOW (newer)
-    expect(screen.getByText("41 / 3,000")).toBeInTheDocument();
-    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
-  });
-
-  test("PROVEN callable → then an OLDER unproven snapshot must NOT replace trusted data", async () => {
-    await renderResolved({ ...OBSERVED, lastSyncedAt: new Date(NOW).toISOString() }); // proven 40/3000, newest
-    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();
-    await deliverSnap(snapDoc({ providerUsageProven: false, monthly: { used: 3001, limit: 3000, percent: 100 }, observedAt: new Date(NOW - 120000).toISOString() }));
-    expect(screen.getByText("40 / 3,000")).toBeInTheDocument(); // trusted data retained (correctly still "Observed on send")
-    expect(screen.queryByText("3,001 / 3,000")).not.toBeInTheDocument();
-    noProviderBar();
-  });
-
-  test("manual Refresh receiving an OLD unproven callable must NOT restore poisoned values", async () => {
-    await renderResolved({ ...OBSERVED, lastSyncedAt: new Date(NOW - 60000).toISOString() }); // proven 40/3000
-    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();
-    callFunction.mockResolvedValue({ data: { providerAvailable: true, source: "resend", monthly: { used: 3001, limit: 3000, percent: 100 },
-      lastSyncedAt: new Date(NOW).toISOString(), internalTelemetry: { appInitiatedThisMonth: 12, appSafetyCap: 2800 } } });
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /refresh/i })); });
-    noPoison(); // 3001 never rendered via the callable path
-  });
+test("a callable rejection is contained — inline error, no throw", async () => {
+  callFunction.mockRejectedValue(new Error("network"));
+  await act(async () => render(<EmailUsage />));
+  expect(screen.getByText(/couldn't load usage just now/i)).toBeInTheDocument();
 });
 
-describe("post-test re-read + feedback", () => {
-  test("bumping refreshToken re-reads via the callable; when usage advances the note clears", async () => {
-    callFunction.mockResolvedValue({ data: OBSERVED });
-    const { rerender } = await act(async () => render(<EmailUsage refreshToken={0} />));
-    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();
-    callFunction.mockResolvedValue({ data: { ...OBSERVED, monthly: { used: 44, limit: 3000, percent: 1.5 }, lastSyncedAt: new Date(NOW + 5000).toISOString() } });
-    await act(async () => { rerender(<EmailUsage refreshToken={1} />); });
-    expect(screen.getByText("44 / 3,000")).toBeInTheDocument();
-    expect(screen.queryByText(/updating usage/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/could not be saved/i)).not.toBeInTheDocument();
-  });
-
-  test("a telemetry-only advance (same provider timestamp) clears the updating note", async () => {
-    callFunction.mockResolvedValue({ data: OBSERVED }); // appInitiatedThisMonth 12
-    const { rerender } = await act(async () => render(<EmailUsage refreshToken={0} />));
-    // Callable returns same provider timestamp, but app safety usage advanced 12 → 13.
-    callFunction.mockResolvedValue({ data: { ...OBSERVED, internalTelemetry: { appInitiatedThisMonth: 13, appSafetyCap: 2800 } } });
-    await act(async () => { rerender(<EmailUsage refreshToken={1} />); });
-    expect(screen.getByText("13 / 2,800")).toBeInTheDocument();
-    expect(screen.queryByText(/updating usage/i)).not.toBeInTheDocument();
-  });
-
-  test("if nothing advances → 'Updating usage…' then, on timeout, an actionable warning", async () => {
-    vi.useFakeTimers();
-    try {
-      callFunction.mockResolvedValue({ data: OBSERVED });
-      const { rerender } = await act(async () => render(<EmailUsage refreshToken={0} />));
-      callFunction.mockResolvedValue({ data: OBSERVED });                 // unchanged → not advanced
-      await act(async () => { rerender(<EmailUsage refreshToken={1} />); });
-      expect(screen.getByText(/updating usage/i)).toBeInTheDocument();
-      await act(async () => { vi.advanceTimersByTime(8000); });
-      expect(screen.getByText(/could not be saved/i)).toBeInTheDocument();
-    } finally { vi.useRealTimers(); }
-  });
-
-  test("a later snapshot advance clears the timeout warning", async () => {
-    vi.useFakeTimers();
-    try {
-      callFunction.mockResolvedValue({ data: OBSERVED });
-      const { rerender } = await act(async () => render(<EmailUsage refreshToken={0} />));
-      callFunction.mockResolvedValue({ data: OBSERVED });
-      await act(async () => { rerender(<EmailUsage refreshToken={1} />); });
-      await act(async () => { vi.advanceTimersByTime(8000); });
-      expect(screen.getByText(/could not be saved/i)).toBeInTheDocument();
-      // a provider observation finally arrives → warning clears
-      await deliverSnap(snapDoc());
-      expect(screen.queryByText(/could not be saved/i)).not.toBeInTheDocument();
-    } finally { vi.useRealTimers(); }
-  });
+test("a Firestore listener error is contained — scoped status, no throw", async () => {
+  await renderResolved(stageDCallable());
+  await act(async () => { snapshotErrCb(new Error("permission-denied")); });
+  expect(screen.getByText(/live usage updates are unavailable right now/i)).toBeInTheDocument();
 });
 
-describe("listener errors", () => {
-  test("a listener permission/read error is surfaced (distinct from 'waiting for usage')", async () => {
-    // Make onSnapshot invoke the error callback instead of a data callback.
-    onSnapshot.mockImplementationOnce((_ref, _next, err) => { err(new Error("permission-denied")); return () => {}; });
-    await renderResolved(OBSERVED);
-    expect(screen.getByText(/live usage updates are unavailable/i)).toBeInTheDocument();
-  });
-});
-
-test("no API key, authorization, or debug data appears in the rendered DOM", async () => {
-  await renderResolved(OBSERVED);
-  await deliverSnap(snapDoc());
-  const html = document.body.innerHTML.toLowerCase();
-  expect(html.includes("authorization")).toBe(false);
-  expect(html.includes("bearer ")).toBe(false);
-  expect(html.includes("re_")).toBe(false);
-  expect(html.includes("_debug")).toBe(false);
-});
-
-test("technical details discloses the app-initiated telemetry + on-send limitation", async () => {
-  await renderResolved(OBSERVED);
-  const tech = screen.getByText("Technical details");
-  expect(tech.tagName.toLowerCase()).toBe("summary");
-  expect(within(tech.closest("details")).getByText(/app-initiated sends this month/i)).toBeInTheDocument();
-  expect(within(tech.closest("details")).getByText(/out-of-band resend activity/i)).toBeInTheDocument();
+test("the listener unsubscribes on unmount", async () => {
+  const { unmount } = await renderResolved(stageDCallable());
+  unmount();
+  expect(unsubCount).toBe(1);
 });

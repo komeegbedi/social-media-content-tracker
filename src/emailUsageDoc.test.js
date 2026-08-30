@@ -1,28 +1,48 @@
-/* Sanitized email-usage doc → view model (pure). Mirrors the server's period logic.
+/* Sanitized email-usage doc → view model (pure) — STAGE A build (provider accounting
+   DISABLED at the client level for rollback safety). Provider totals are NEVER rendered
+   here: every provider document/callable — including a valid Stage D document left in
+   Firestore after a rollback — reads as Unavailable, immediately, with no Firestore
+   cleanup. Independently valid app-safety telemetry is preserved.
    Run: node --test src/emailUsageDoc.test.js */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { presentEmailUsageDoc, normalizeCallableUsage } from "./emailUsageDoc.js";
+import { presentEmailUsageDoc, normalizeCallableUsage, PROVIDER_ACCOUNTING_ENABLED } from "./emailUsageDoc.js";
 
-const AUG = Date.parse("2026-08-28T12:00:00.000Z"); // month 2026-08, day 2026-08-28
-// providerUsageProven:true represents the FUTURE proven-model doc — the server only stamps
-// it once header semantics are proven. The interim (containment) default is unproven.
-const docOf = (over = {}) => ({
-  monthly: { used: 40, limit: 3000, percent: 1.3 },
-  daily: { used: 0, limit: 100, percent: 0 },
-  dailyReason: null, periodMonth: "2026-08", periodDay: "2026-08-28",
-  observedAt: "2026-08-28T12:00:00.000Z", observedVia: "send", source: "resend",
-  providerUsageProven: true, ...over,
+const AUG = Date.parse("2026-08-28T12:00:00.000Z");
+const TELE = { appInitiatedThisMonth: 114, appSafetyCap: 2800 };
+// A fully-valid Stage D document (proven + known model + current period + bounded totals).
+const stageD = (over = {}) => ({
+  monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: { used: 5, limit: 100, percent: 5 }, dailyReason: null,
+  periodMonth: "2026-08", periodDay: "2026-08-28", observedAt: "2026-08-28T12:00:00.000Z", observedVia: "send",
+  source: "resend", providerUsageProven: true, providerUsageModel: "resend-pre-send-used-v1",
+  internalTelemetry: TELE, ...over,
 });
 
-test("current-period doc → observed view (monthly + daily), not stale", () => {
-  const v = presentEmailUsageDoc(docOf(), AUG);
-  assert.equal(v.providerAvailable, true);
-  assert.equal(v.source, "resend");
-  assert.deepEqual(v.monthly, { used: 40, limit: 3000, percent: 1.3 });
-  assert.deepEqual(v.daily, { used: 0, limit: 100, percent: 0 });
-  assert.equal(v.stale, false);
-  assert.equal(v.observedVia, "send");
+test("this build has provider accounting DISABLED", () => {
+  assert.equal(PROVIDER_ACCOUNTING_ENABLED, false);
+});
+
+test("rollback safety: a valid Stage D DOCUMENT → Unavailable, telemetry kept", () => {
+  const v = presentEmailUsageDoc(stageD(), AUG);
+  assert.equal(v.providerAvailable, false);
+  assert.equal(v.monthly, null);
+  assert.equal(v.providerError.code, "provider-usage-unverified");
+  assert.deepEqual(v.internalTelemetry, TELE);
+});
+
+test("rollback safety: a valid Stage D CALLABLE result → Unavailable, telemetry kept", () => {
+  const v = normalizeCallableUsage({ providerAvailable: true, providerUsageProven: true, providerUsageModel: "resend-pre-send-used-v1",
+    source: "resend", monthly: { used: 44, limit: 3000, percent: 1.5 }, lastSyncedAt: "2026-08-28T12:00:00Z", internalTelemetry: TELE });
+  assert.equal(v.providerAvailable, false);
+  assert.deepEqual(v.internalTelemetry, TELE);
+});
+
+test("a poisoned/unversioned doc (no proof, no model) → Unavailable", () => {
+  const v = presentEmailUsageDoc({ monthly: { used: 3001, limit: 3000, percent: 100 }, periodMonth: "2026-08", periodDay: "2026-08-28",
+    observedAt: "2026-08-28T12:00:00.000Z", internalTelemetry: TELE }, AUG);
+  assert.equal(v.providerAvailable, false);
+  assert.equal(v.monthly, null);
+  assert.deepEqual(v.internalTelemetry, TELE);
 });
 
 test("empty/absent doc → not-observed, no fabricated numbers", () => {
@@ -32,105 +52,11 @@ test("empty/absent doc → not-observed, no fabricated numbers", () => {
   assert.equal(v.providerError.code, "not-observed");
 });
 
-test("containment: a doc WITHOUT providerUsageProven → provider-usage-unverified, telemetry kept", () => {
-  // A stale/pre-fix doc that still carries provider numbers must NOT be shown as valid.
-  const v = presentEmailUsageDoc({ monthly: { used: 40, limit: 3000, percent: 1.3 }, periodMonth: "2026-08", periodDay: "2026-08-28",
-    observedAt: "2026-08-28T12:00:00.000Z", internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 } }, AUG);
-  assert.equal(v.providerAvailable, false);
-  assert.equal(v.monthly, null);
-  assert.equal(v.providerError.code, "provider-usage-unverified");
-  assert.deepEqual(v.internalTelemetry, { appInitiatedThisMonth: 114, appSafetyCap: 2800 });
-});
-
-test("prior month → monthly null, not-observed-this-month, old timestamp kept", () => {
-  const v = presentEmailUsageDoc(docOf({ periodMonth: "2026-08", periodDay: "2026-08-31" }), Date.parse("2026-09-02T10:00:00Z"));
-  assert.equal(v.providerAvailable, false);
-  assert.equal(v.monthly, null);
-  assert.equal(v.providerError.code, "not-observed-this-month");
-  assert.equal(v.lastSyncedAt, "2026-08-28T12:00:00.000Z");
-});
-
-test("legacy doc without period keys → not shown as current", () => {
-  const v = presentEmailUsageDoc({ monthly: { used: 40, limit: 3000, percent: 1.3 }, observedAt: "2026-08-28T12:00:00.000Z", providerUsageProven: true }, AUG);
-  assert.equal(v.providerAvailable, false);
-  assert.equal(v.providerError.code, "not-observed-this-month");
-});
-
-test("new day (same month) → keep monthly; daily null with not-observed-today", () => {
-  const v = presentEmailUsageDoc(docOf({ periodDay: "2026-08-28", daily: { used: 7, limit: 100, percent: 7 } }), Date.parse("2026-08-29T00:30:00Z"));
-  assert.equal(v.providerAvailable, true);
-  assert.deepEqual(v.monthly, { used: 40, limit: 3000, percent: 1.3 });
-  assert.equal(v.daily, null);
-  assert.equal(v.dailyReason, "not-observed-today");
-});
-
-test("paid plan (no daily header, same day) → not-provided", () => {
-  const v = presentEmailUsageDoc(docOf({ daily: null, dailyReason: "not-provided" }), AUG);
-  assert.equal(v.daily, null);
-  assert.equal(v.dailyReason, "not-provided");
-});
-
-test("old observation (same month) is flagged stale but still shown", () => {
-  const v = presentEmailUsageDoc(docOf({ observedAt: "2026-08-27T00:00:00.000Z" }), AUG); // >12h old
-  assert.equal(v.providerAvailable, true);
-  assert.equal(v.stale, true);
-});
-
-test("a structurally impossible reading (3001/3000) is NOT shown as valid → invalid-provider-observation", () => {
-  const v = presentEmailUsageDoc(docOf({ monthly: { used: 3001, limit: 3000, percent: 100 }, internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 } }), AUG);
-  assert.equal(v.providerAvailable, false);
-  assert.equal(v.monthly, null);
-  assert.equal(v.providerError.code, "invalid-provider-observation");
-  assert.deepEqual(v.internalTelemetry, { appInitiatedThisMonth: 114, appSafetyCap: 2800 }); // app safety still shown
-});
-test("used exactly at the limit is still valid (3000/3000)", () => {
-  const v = presentEmailUsageDoc(docOf({ monthly: { used: 3000, limit: 3000, percent: 100 } }), AUG);
-  assert.equal(v.providerAvailable, true);
-});
-
-/* ---- normalizeCallableUsage: the callable path enforces the SAME trust boundary ---- */
-const TELE = { appInitiatedThisMonth: 114, appSafetyCap: 2800 };
-test("callable trust: OLD callable (providerAvailable:true, 3001, NO proof stamp) → Unavailable, telemetry kept", () => {
-  const v = normalizeCallableUsage({ providerAvailable: true, source: "resend", monthly: { used: 3001, limit: 3000, percent: 100 },
-    daily: { used: 4, limit: 100, percent: 4 }, lastSyncedAt: "2026-08-29T14:49:05Z", internalTelemetry: TELE });
-  assert.equal(v.providerAvailable, false);
-  assert.equal(v.monthly, null);
-  assert.equal(v.providerError.code, "provider-usage-unverified");
-  assert.deepEqual(v.internalTelemetry, TELE);
-});
-test("callable trust: a BOUNDED but unproven value (44/3000, no stamp) is still Unavailable (bounded ≠ proof)", () => {
-  const v = normalizeCallableUsage({ providerAvailable: true, source: "resend", monthly: { used: 44, limit: 3000, percent: 1.5 },
-    lastSyncedAt: "2026-08-29T10:00:00Z", internalTelemetry: TELE });
-  assert.equal(v.providerAvailable, false);
-  assert.equal(v.providerError.code, "provider-usage-unverified");
-});
-test("callable trust: providerUsageProven:false → Unavailable", () => {
-  const v = normalizeCallableUsage({ providerAvailable: false, providerUsageProven: false, monthly: null,
-    providerError: { code: "provider-usage-unverified" }, internalTelemetry: TELE });
-  assert.equal(v.providerAvailable, false);
-  assert.equal(v.providerError.code, "provider-usage-unverified");
-  assert.deepEqual(v.internalTelemetry, TELE);
-});
-test("callable trust: a PROVEN, bounded, period-correct observation renders (44/3000)", () => {
-  const v = normalizeCallableUsage({ providerAvailable: true, providerUsageProven: true, source: "resend",
-    monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: { used: 3, limit: 100, percent: 3 },
-    lastSyncedAt: "2026-08-29T10:00:00Z", internalTelemetry: TELE });
-  assert.equal(v.providerAvailable, true);
-  assert.deepEqual(v.monthly, { used: 44, limit: 3000, percent: 1.5 });
-});
-test("callable trust: a PROVEN but structurally invalid value (3001) is rejected even with the stamp", () => {
-  const v = normalizeCallableUsage({ providerAvailable: true, providerUsageProven: true, source: "resend",
-    monthly: { used: 3001, limit: 3000, percent: 100 }, lastSyncedAt: "2026-08-29T10:00:00Z", internalTelemetry: TELE });
-  assert.equal(v.providerAvailable, false);
-  assert.equal(v.providerError.code, "invalid-provider-observation");
-});
-test("callable trust: null/absent data → call-failed, no throw", () => {
+test("null callable → call-failed, no throw", () => {
   assert.equal(normalizeCallableUsage(null).providerError.code, "call-failed");
 });
 
 test("surfaces internalTelemetry (app safety usage) from the doc when present", () => {
-  const v = presentEmailUsageDoc(docOf({ internalTelemetry: { appInitiatedThisMonth: 3, appSafetyCap: 2800 } }), AUG);
+  const v = presentEmailUsageDoc(stageD({ internalTelemetry: { appInitiatedThisMonth: 3, appSafetyCap: 2800 } }), AUG);
   assert.deepEqual(v.internalTelemetry, { appInitiatedThisMonth: 3, appSafetyCap: 2800 });
-  const none = presentEmailUsageDoc(docOf(), AUG);
-  assert.equal(none.internalTelemetry, null); // absent → null (component keeps the callable's value)
 });
