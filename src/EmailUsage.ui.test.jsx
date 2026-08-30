@@ -8,8 +8,9 @@ import { render, screen, act, fireEvent, within } from "@testing-library/react";
 
 const callFunction = vi.fn();
 let snapshotCb = null;
+let snapshotErrCb = null;
 let unsubCount = 0;
-const onSnapshot = vi.fn((_ref, next) => { snapshotCb = next; return () => { unsubCount++; }; });
+const onSnapshot = vi.fn((_ref, next, err) => { snapshotCb = next; snapshotErrCb = err; return () => { unsubCount++; }; });
 vi.mock("./firebase", () => ({ callFunction: (...a) => callFunction(...a), db: {} }));
 vi.mock("firebase/firestore", () => ({ onSnapshot: (...a) => onSnapshot(...a), doc: () => ({}) }));
 
@@ -33,7 +34,23 @@ const snapDoc = (over = {}) => ({
 });
 const deliverSnap = async (data) => { await act(async () => { snapshotCb({ exists: () => true, data: () => data }); }); };
 
-beforeEach(() => { callFunction.mockReset(); onSnapshot.mockClear(); snapshotCb = null; unsubCount = 0; });
+beforeEach(() => { callFunction.mockReset(); onSnapshot.mockClear(); snapshotCb = null; snapshotErrCb = null; unsubCount = 0; });
+
+describe("scoped failure (Email Usage never blocks the app)", () => {
+  test("a callable rejection is contained — inline error, no throw", async () => {
+    callFunction.mockRejectedValue(new Error("network"));
+    await act(async () => render(<EmailUsage />));          // must not throw
+    expect(screen.getByText(/couldn't load usage just now/i)).toBeInTheDocument();
+  });
+
+  test("a Firestore listener error is contained — scoped status, no throw", async () => {
+    callFunction.mockResolvedValue({ data: OBSERVED });
+    await act(async () => render(<EmailUsage />));
+    await act(async () => { snapshotErrCb(new Error("permission-denied")); }); // listener fails
+    expect(screen.getByText(/live usage updates are unavailable right now/i)).toBeInTheDocument();
+    expect(screen.getByText("40 / 3,000")).toBeInTheDocument();                 // panel still functional
+  });
+});
 
 async function renderResolved(data) {
   callFunction.mockResolvedValue({ data });
