@@ -45,6 +45,18 @@ const RESEND_QUOTA_DOC = "systemUsage/resendQuota";        // written by resendU
 const DIAGNOSTICS_DOC = "adminDiagnostics/emailUsage";     // sanitized real-time panel doc
 const RESEND_GATE_MAX_AGE_MS = posInt(process.env.RESEND_GATE_MAX_AGE_MS, 15 * 60 * 1000);
 
+// AUTHORITATIVE server-side switch for provider-PERIOD-based enforcement (denying a
+// reservation because the provider's own daily/monthly quota window is believed exhausted).
+// It is FALSE, and hard-coded off — NOT env-overridable — because Resend's reset boundaries
+// are unproven (QUOTA_HEADER_MODEL_PROVEN=true, but MONTHLY_PERIOD_PROVEN=DAILY_PERIOD_PROVEN
+// =false). While this is false, reserve() must never deny on a provider period marker: the
+// app's own caps (2,800/UTC-month, 90/UTC-day) and priority gates are the only enforcement.
+// See docs/incident-resend-usage.md (Option A). Do NOT flip this to re-use the legacy
+// dailyExhaustedDay/monthlyExhaustedMonth fields — those are an INCOMPATIBLE legacy schema
+// keyed on an UNVERIFIED UTC boundary; any future enforcement must use NEW versioned
+// provider-period fields (or an explicit, reviewed migration), not these.
+const PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED = false;
+
 // The latest Resend account state, read OUTSIDE the reservation transaction (eventually
 // consistent; avoids contention with the usage writer). Returns the monthly-used (when
 // recent) and whether the current UTC MONTH/DAY are marked exhausted by a provider
@@ -54,8 +66,8 @@ const RESEND_GATE_MAX_AGE_MS = posInt(process.env.RESEND_GATE_MAX_AGE_MS, 15 * 6
 async function readResendGate(period) {
   // CONTAINMENT: while header semantics are unproven, provider header-derived usage must
   // NOT drive send suppression at all (a value in [0, plan] is not proven to be "used").
-  // The local safety cap alone governs projected volume. Real 429 exhaustion markers
-  // (below) are provider FACTS, not header interpretations, so they still apply.
+  // The local safety cap alone governs projected volume. Provider PERIOD exhaustion markers
+  // are ALSO ignored here (their reset boundary is unproven) — see the return block below.
   const { HEADER_SEMANTICS_PROVEN } = require("./resendUsage");
   try {
     const s = await db.doc(RESEND_QUOTA_DOC).get();
@@ -68,25 +80,26 @@ async function readResendGate(period) {
       // Unproven semantics OR a structurally invalid value (poisoned 3001) → ignore it and
       // fall back to the local cap; never let the provider header block email.
       monthlyUsed: headerUsable ? x.monthlyUsed : null,
-      monthlyExhausted: !!(period && period.month) && x.monthlyExhaustedMonth === period.month,
-      dailyExhausted: !!(period && period.day) && x.dailyExhaustedDay === period.day,
+      // PROVIDER-PERIOD ENFORCEMENT IS DISABLED (unproven reset boundaries): the legacy
+      // exhaustion markers (x.monthlyExhaustedMonth / x.dailyExhaustedDay) are READ but
+      // deliberately IGNORED — both flags resolve to false while the switch is off, so
+      // reserve() can never deny on them. The fields are left untouched in Firestore (a
+      // passive, non-destructive read); they are an incompatible legacy schema and are NOT
+      // to be revived by flipping the switch. This is the single authoritative choke point.
+      monthlyExhausted: PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED
+        && !!(period && period.month) && x.monthlyExhaustedMonth === period.month,
+      dailyExhausted: PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED
+        && !!(period && period.day) && x.dailyExhaustedDay === period.day,
     };
   } catch { return { monthlyUsed: null, monthlyExhausted: false, dailyExhausted: false }; }
 }
 
-// Mark the current UTC day exhausted (provider daily_quota_exceeded) → the reserve gate
-// suppresses further app sends until the day rolls over. Best-effort.
-async function markDailyExhausted(periodDay) {
-  try { await db.doc(RESEND_QUOTA_DOC).set({ dailyExhaustedDay: periodDay, dailyExhaustedAt: FieldValue.serverTimestamp() }, { merge: true }); }
-  catch (e) { logger.warn("markDailyExhausted failed", { error: String(e && e.message).slice(0, 150) }); }
-}
-
-// Mark the current UTC month exhausted (provider monthly_quota_exceeded) → the reserve
-// gate suppresses for the rest of that month, regardless of snapshot age. Best-effort.
-async function markMonthlyExhausted(periodMonth) {
-  try { await db.doc(RESEND_QUOTA_DOC).set({ monthlyExhaustedMonth: periodMonth, monthlyExhaustedAt: FieldValue.serverTimestamp() }, { merge: true }); }
-  catch (e) { logger.warn("markMonthlyExhausted failed", { error: String(e && e.message).slice(0, 150) }); }
-}
+// NOTE: the former markDailyExhausted / markMonthlyExhausted writers were REMOVED (Option A).
+// On a real quota 429 the current delivery is settled suppressed_quota_limit and an alert is
+// raised, but NO provider period exhaustion marker is written — provider-period enforcement is
+// disabled (unproven reset boundaries; PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED=false). Any
+// pre-existing dailyExhaustedDay/monthlyExhaustedMonth fields are ignored by readResendGate and
+// left untouched. See docs/incident-resend-usage.md (Option A).
 
 // Priority by notification type (callers may override, e.g. new-signup alerts).
 const PRIORITY = {
@@ -144,11 +157,15 @@ async function reserve({ type, priority, period, deliveryRef }) {
     // it only applies when a recent snapshot exists (else the safety cap alone governs).
     const accountProjected = accountUsed != null ? accountUsed + (m.reservedCount || 0) + 1 : null;
     let deny = null;
-    if (gate.monthlyExhausted) deny = "resend_monthly_exhausted";      // provider said monthly_quota_exceeded this month
-    else if (mUsed >= mLimit) deny = "monthly_limit";
-    else if (accountProjected != null && accountProjected > RESEND_PLAN_MONTHLY_LIMIT) deny = "resend_account_limit";
-    else if (gate.dailyExhausted) deny = "resend_daily_exhausted";     // provider said daily_quota_exceeded today
-    else if (dUsed >= dLimit) deny = "daily_limit";
+    // gate.monthlyExhausted / gate.dailyExhausted are forced false by readResendGate while
+    // PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED is off, so these two provider-period branches
+    // are INERT (never fire). They are retained only as the wiring a future, reviewed
+    // provider-period design would re-enable through that single switch — see readResendGate.
+    if (gate.monthlyExhausted) deny = "resend_monthly_exhausted";      // inert (provider-period enforcement disabled)
+    else if (mUsed >= mLimit) deny = "monthly_limit";                  // APP-owned monthly safety cap (2,800/UTC month)
+    else if (accountProjected != null && accountProjected > RESEND_PLAN_MONTHLY_LIMIT) deny = "resend_account_limit"; // inert: accountUsed is null while header semantics unproven
+    else if (gate.dailyExhausted) deny = "resend_daily_exhausted";     // inert (provider-period enforcement disabled)
+    else if (dUsed >= dLimit) deny = "daily_limit";                    // APP-owned daily safety cap (90/UTC day)
     else if (usedPct >= 95 && pr !== "critical") deny = "quota_95_noncritical";
     else if (usedPct >= 85 && pr === "low") deny = "quota_85_low";
 
@@ -290,5 +307,5 @@ async function snapshot() {
 
 module.exports = {
   MONTHLY_LIMIT, DAILY_LIMIT, RESEND_PLAN_DAILY_LIMIT, priorityOf, periods,
-  reserve, settleReservation, alertAdmins, reconcile, snapshot, markDailyExhausted, markMonthlyExhausted,
+  reserve, settleReservation, alertAdmins, reconcile, snapshot,
 };

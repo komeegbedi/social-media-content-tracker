@@ -234,7 +234,11 @@ async function _deliver({ notificationId, to, type, priority, subject, html, tex
   if (error) {
     const c = classifyProviderError(error.statusCode, error.name);
     // Provider QUOTA exhaustion (429 daily/monthly_quota_exceeded) is NOT a request-rate
-    // failure: don't retry it. Release the reservation, suppress the period, and alert.
+    // failure: don't retry it. Release the reservation, suppress ONLY this delivery, and
+    // alert. Option A (strict current-delivery-only): we deliberately do NOT write any
+    // provider period exhaustion marker — Resend's reset boundary is unproven, so nothing
+    // here may suppress SUBSEQUENT deliveries; a later organic send that also hits a quota
+    // 429 settles the same way on its own (it is not a probe). See docs/incident-resend-usage.md.
     if (c.kind === "quota") {
       // Release the reservation (no email went out) and record a TERMINAL
       // suppressed_quota_limit status — this is quota exhaustion, not a generic failure.
@@ -242,11 +246,11 @@ async function _deliver({ notificationId, to, type, priority, subject, html, tex
         status: "suppressed_quota_limit", failedAt: FieldValue.serverTimestamp(),
         errorCode: String(error.name || "quota_exceeded"), errorMessage: String(error.message || "").slice(0, 300),
       });
+      // Operational alert only (deduped per UTC period — an application notification bucket,
+      // NOT a provider reset window, and it never influences reserve() or delivery eligibility).
       if (c.scope === "daily") {
-        try { await quota.markDailyExhausted(period.day); } catch (e) { logger.warn("markDailyExhausted failed", { error: e.message }); }
         try { await quota.alertAdmins({ monthlyThresholds: [], daily: true, period, usedPct: 100 }); } catch (e) { logger.warn("daily-quota alert failed", { error: e.message }); }
       } else {
-        try { await quota.markMonthlyExhausted(period.month); } catch (e) { logger.warn("markMonthlyExhausted failed", { error: e.message }); }
         try { await quota.alertAdmins({ monthlyThresholds: [100], daily: false, period, usedPct: 100 }); } catch (e) { logger.warn("monthly-quota alert failed", { error: e.message }); }
       }
       logger.warn("email suppressed: resend quota exceeded", { notificationId, scope: c.scope });

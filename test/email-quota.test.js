@@ -148,7 +148,7 @@ test("concurrent reservations near the local safety cap never overshoot it", asy
   assert.ok((m.sentCount + m.reservedCount) <= 2800, "never overshoots the safety cap");
 });
 
-/* ---- daily safety cap (default 90) + provider daily-exhausted gate ---- */
+/* ---- app-owned daily safety cap (default 90) ---- */
 test("the 91st app send is suppressed when the daily safety cap is 90", async () => {
   // No explicit dailyLimit on the day doc → the reserve gate uses DAILY_LIMIT (90).
   await dRef().set({ provider: "resend", period: period.day, dailyLimit: 90, sentCount: 90, reservedCount: 0 });
@@ -158,42 +158,44 @@ test("the 91st app send is suppressed when the daily safety cap is 90", async ()
   assert.equal(r.reason, "daily_limit", "91st send blocked at the 90/day safety cap");
 });
 
-test("a provider daily_quota_exceeded marks the day exhausted → further sends suppressed", async () => {
-  await rqRef().set({ dailyExhaustedDay: period.day, observedAt: new Date().toISOString() });
-  await seedDelivery("dex");
-  const r = await quota.reserve({ type: "assigned", priority: "critical", period, deliveryRef: del("dex") });
-  assert.equal(r.allowed, false);
-  assert.equal(r.reason, "resend_daily_exhausted");
+/* ---- Option A: legacy provider PERIOD exhaustion markers are IGNORED and left untouched ----
+   PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED is false (Resend reset boundaries unproven), so a
+   legacy dailyExhaustedDay / monthlyExhaustedMonth must NOT deny a reservation, and the fields
+   must remain in Firestore (passive, non-destructive — an incompatible legacy schema). */
+test("a legacy CURRENT-day exhausted marker does NOT block, and the field is left untouched", async () => {
+  await rqRef().set({ dailyExhaustedDay: period.day, dailyExhaustedAt: new Date().toISOString() });
+  await seedDelivery("legacy-d");
+  const r = await quota.reserve({ type: "assigned", priority: "critical", period, deliveryRef: del("legacy-d") });
+  assert.equal(r.allowed, true, "legacy daily marker ignored (provider-period enforcement disabled)");
+  assert.equal((await rqRef().get()).data().dailyExhaustedDay, period.day, "legacy field NOT deleted");
 });
 
-test("a stale/other-day exhausted marker does not block today", async () => {
-  await rqRef().set({ dailyExhaustedDay: "2000-01-01", observedAt: new Date().toISOString() });
-  await seedDelivery("dok");
-  const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("dok") });
-  assert.equal(r.allowed, true);
-});
-
-/* ---- provider MONTHLY exhaustion (persistent, age-independent) ---- */
-test("a current-month exhausted marker blocks sends even when no fresh observation exists", async () => {
-  // Marker only — NO observedAt (snapshot 'stale'/absent). Must still block.
+test("a legacy CURRENT-month exhausted marker does NOT block, and the field is left untouched", async () => {
   await rqRef().set({ monthlyExhaustedMonth: period.month });
-  await seedDelivery("mex");
-  const r = await quota.reserve({ type: "assigned", priority: "critical", period, deliveryRef: del("mex") });
-  assert.equal(r.allowed, false);
-  assert.equal(r.reason, "resend_monthly_exhausted");
+  await seedDelivery("legacy-m");
+  const r = await quota.reserve({ type: "assigned", priority: "critical", period, deliveryRef: del("legacy-m") });
+  assert.equal(r.allowed, true, "legacy monthly marker ignored (provider-period enforcement disabled)");
+  assert.equal((await rqRef().get()).data().monthlyExhaustedMonth, period.month, "legacy field NOT deleted");
 });
 
-test("a PREVIOUS-month exhausted marker does not block the current month", async () => {
-  await rqRef().set({ monthlyExhaustedMonth: "2000-01" });
-  await seedDelivery("mok");
-  const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("mok") });
-  assert.equal(r.allowed, true);
-});
-
-test("markMonthlyExhausted persists the marker for the current month", async () => {
-  await quota.markMonthlyExhausted(period.month);
-  const doc = (await rqRef().get()).data();
-  assert.equal(doc.monthlyExhaustedMonth, period.month);
+test("concurrent reservations with a legacy marker present are governed ONLY by the app caps (no provider-marker denial)", async () => {
+  // Both legacy markers set for the current period; 5 concurrent reservations well under the
+  // app caps must ALL be allowed — none denied by a provider marker.
+  await rqRef().set({ dailyExhaustedDay: period.day, monthlyExhaustedMonth: period.month });
+  const ids = ["k1", "k2", "k3", "k4", "k5"];
+  await Promise.all(ids.map((i) => seedDelivery(i)));
+  const rs = await Promise.all(ids.map((i) => quota.reserve({ type: "reminder", period, deliveryRef: del(i) })));
+  for (const r of rs) {
+    assert.equal(r.allowed, true, "governed only by app caps");
+    assert.notEqual(r.reason, "resend_daily_exhausted");
+    assert.notEqual(r.reason, "resend_monthly_exhausted");
+  }
+  const u = await usage();
+  assert.equal(u.m.reservedCount, ids.length, "each reserved exactly once under the app cap");
+  // Legacy fields still present, untouched.
+  const g = (await rqRef().get()).data();
+  assert.equal(g.dailyExhaustedDay, period.day);
+  assert.equal(g.monthlyExhaustedMonth, period.month);
 });
 
 /* ---- a structurally invalid provider observation must NOT block email ---- */
