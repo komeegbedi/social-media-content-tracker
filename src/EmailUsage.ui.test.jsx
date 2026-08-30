@@ -43,6 +43,18 @@ test("rollback safety: a valid Stage D CALLABLE result renders Unavailable, no t
   expect(screen.getByRole("link", { name: /view in resend/i })).toBeInTheDocument();
 });
 
+test("internal-period wording is honest — neither UTC period claims to be the authoritative Resend period", async () => {
+  await renderResolved({ ...stageDCallable(), internalTelemetry: { appInitiatedThisMonth: 119, appSafetyCap: 2800, appDailyThisDay: 5, appDailyLimit: 90 } });
+  expect(screen.getByText(/App email activity · UTC calendar month/i)).toBeInTheDocument();
+  expect(screen.getByText("119 successful deliveries")).toBeInTheDocument();
+  expect(screen.getByText(/Internal telemetry; not the Resend monthly quota/i)).toBeInTheDocument();
+  expect(screen.getByText(/Daily app limit · UTC day/i)).toBeInTheDocument();
+  expect(screen.getByText("5 / 90")).toBeInTheDocument();
+  expect(screen.getByText(/Resend.s daily reset window is still being verified/i)).toBeInTheDocument();
+  // Never claims to be the authoritative Resend period / a guaranteed provider guard.
+  for (const bad of [/safety cap/i, /real guard/i, /guarantee/i]) expect(screen.queryByText(bad)).not.toBeInTheDocument();
+});
+
 test("rollback safety: a valid Stage D DOCUMENT via the listener renders Unavailable; telemetry still advances", async () => {
   await renderResolved(stageDCallable());
   await deliverSnap(stageDDoc({ internalTelemetry: { appInitiatedThisMonth: 120, appSafetyCap: 2800 } }));

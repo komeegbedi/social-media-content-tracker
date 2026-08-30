@@ -192,7 +192,8 @@ export function EmailUsage({ refreshToken = 0 }) {
           {/* Internal app telemetry — NOT the Resend monthly quota. The monthly count is
               scoped to the UTC CALENDAR MONTH, which is not aligned with Resend's (unknown)
               provider reset boundary, so it is telemetry only, never a provider safety cap.
-              The DAILY app limit below is the real enforced guard. */}
+              The daily app limit below is UTC-day scoped; Resend's daily reset window is
+              still unverified, so it is internal enforcement, not a guaranteed provider guard. */}
           <div className="sb-usagerow">
             <div className="sb-usagerow-head"><span>App email activity · UTC calendar month</span>
               <b>{appSent == null ? "—" : `${appSent.toLocaleString()} successful deliveries`}</b></div>
@@ -200,8 +201,8 @@ export function EmailUsage({ refreshToken = 0 }) {
           </div>
           {appDaily != null && (
             <div className="sb-usagerow">
-              <div className="sb-usagerow-head"><span>Daily app limit</span><b>{appDaily.toLocaleString()} / {appDailyLimit.toLocaleString()}</b></div>
-              <div className="sb-usagerow-foot">Internal daily enforcement.</div>
+              <div className="sb-usagerow-head"><span>Daily app limit · UTC day</span><b>{appDaily.toLocaleString()} / {appDailyLimit.toLocaleString()}</b></div>
+              <div className="sb-usagerow-foot">Internal enforcement. Resend’s daily reset window is still being verified.</div>
             </div>
           )}
 
