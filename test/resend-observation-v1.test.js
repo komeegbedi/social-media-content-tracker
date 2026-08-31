@@ -114,6 +114,25 @@ test("older delayed response cannot overwrite a newer snapshot", async () => {
   assert.equal((await del("dOld").get()).data().usageV1Applied, true, "older delivery still marked applied (not reprocessed)");
 });
 
+test("SAME responseReceivedAt: greater monthly wins, both receipts applied (42 then 43 → 43)", async () => {
+  await seedDelivery("t1"); await seedDelivery("t2");
+  const AT = "2026-08-30T10:00:00.000Z";
+  await recordObservationV1(obs({ deliveryId: "t1", monthlyUsedBeforeSend: 41, responseReceivedAt: AT })); // 42
+  await recordObservationV1(obs({ deliveryId: "t2", monthlyUsedBeforeSend: 42, responseReceivedAt: AT })); // 43
+  assert.equal((await pub()).monthly.used, 43);
+  assert.equal((await del("t1").get()).data().usageV1Applied, true);
+  assert.equal((await del("t2").get()).data().usageV1Applied, true);
+});
+
+test("SAME responseReceivedAt in the other order stays at the greater value (43 then 42 → 43)", async () => {
+  await seedDelivery("t1"); await seedDelivery("t2");
+  const AT = "2026-08-30T10:00:00.000Z";
+  await recordObservationV1(obs({ deliveryId: "t1", monthlyUsedBeforeSend: 42, responseReceivedAt: AT })); // 43
+  await recordObservationV1(obs({ deliveryId: "t2", monthlyUsedBeforeSend: 41, responseReceivedAt: AT })); // 42
+  assert.equal((await pub()).monthly.used, 43);
+  assert.equal((await del("t2").get()).data().usageV1Applied, true, "loser still marked applied");
+});
+
 test("a LOWER but NEWER valid observation is accepted (no reset label, no high-water)", async () => {
   await seedDelivery("dA"); await seedDelivery("dB");
   await recordObservationV1(obs({ deliveryId: "dA", monthlyUsedBeforeSend: 500, responseReceivedAt: AT(1) }));

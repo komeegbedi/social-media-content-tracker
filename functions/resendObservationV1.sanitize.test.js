@@ -162,7 +162,7 @@ test("recordObservationV1 rejects non-canonical incoming timestamps with NO writ
 });
 test("recordObservationV1 accepts a canonical timestamp and writes the exact-limit block", async () => {
   let wrote = null, applied = false;
-  const runTransaction = (fn) => fn({ deliveryExists: true, alreadyApplied: false, prevObservedAt: null,
+  const runTransaction = (fn) => fn({ deliveryExists: true, alreadyApplied: false, prevDoc: null,
     writeSnapshot: (d) => { wrote = d; }, markApplied: () => { applied = true; } });
   const r = await recordObservationV1(
     { deliveryId: "d", responseReceivedAt: "2026-08-30T10:00:00.000Z", monthlyUsedBeforeSend: 41, acceptedUnits: 1 },
@@ -172,4 +172,60 @@ test("recordObservationV1 accepts a canonical timestamp and writes the exact-lim
   assert.equal(wrote.observedAt, "2026-08-30T10:00:00.000Z");
   assert.equal(wrote.source, "resend-send-response");
   assert.equal(wrote.monthly.limit, 3000);
+});
+
+/* ---- P0/P1: stored-timestamp validity + deterministic ordering / tie-break ---- */
+const AT1 = "2026-08-30T10:00:00.000Z";
+const AT2 = "2026-08-30T10:05:00.000Z";
+const prevDocOf = (over = {}) => ({ model: MODEL, providerUsageProven: true,
+  monthly: { used: 42, limit: 3000, percent: 1.4 }, daily: null, dailyReason: "not-provided",
+  observedAt: AT1, source: "resend-send-response", ...over });
+// Record with an injected tx exposing `prevDoc`; returns {wrote, applied, r}.
+async function recordWith(prevDoc, { ts = AT1, before = 41, dailyBefore, alreadyApplied = false } = {}) {
+  let wrote = null, applied = false;
+  const runTransaction = (fn) => fn({ deliveryExists: true, alreadyApplied, prevDoc,
+    writeSnapshot: (d) => { wrote = d; }, markApplied: () => { applied = true; } });
+  const obs = { deliveryId: "d", responseReceivedAt: ts, monthlyUsedBeforeSend: before, acceptedUnits: 1 };
+  if (dailyBefore != null) obs.dailyUsedBeforeSend = dailyBefore;
+  const r = await recordObservationV1(obs, { runTransaction });
+  return { wrote, applied, r };
+}
+
+test("a NON-CANONICAL / malformed stored observedAt is treated as absent → repaired", async () => {
+  for (const bad of ["garbage", "2099-01-01", "2099-01-01T00:00:00+00:00", 1735689600000, null]) {
+    const { wrote, applied } = await recordWith(prevDocOf({ observedAt: bad }), { ts: AT1, before: 41 });
+    assert.ok(wrote, `stored ${JSON.stringify(bad)} treated as absent → write repairs`);
+    assert.equal(wrote.monthly.used, 42);
+    assert.equal(applied, true);
+  }
+});
+
+test("a VALID canonical FUTURE stored timestamp still blocks an older incoming observation", async () => {
+  const { wrote, applied } = await recordWith(prevDocOf({ observedAt: "2099-01-01T00:00:00.000Z" }), { ts: AT1, before: 41 });
+  assert.equal(wrote, null, "older incoming loses to a valid future stored timestamp");
+  assert.equal(applied, true, "receipt still marked");
+});
+
+test("EQUAL canonical timestamps: greater monthly used wins (42 then 43 → 43)", async () => {
+  const { wrote } = await recordWith(prevDocOf({ observedAt: AT1, monthly: { used: 42, limit: 3000, percent: 1.4 } }), { ts: AT1, before: 42 });
+  assert.ok(wrote); assert.equal(wrote.monthly.used, 43);
+});
+test("EQUAL canonical timestamps: lower monthly used loses (43 then 42 → stays 43)", async () => {
+  const { wrote, applied } = await recordWith(prevDocOf({ observedAt: AT1, monthly: { used: 43, limit: 3000, percent: 1.4 } }), { ts: AT1, before: 41 });
+  assert.equal(wrote, null); assert.equal(applied, true);
+});
+test("EQUAL timestamps + equal monthly: greater valid daily used wins", async () => {
+  const prev = prevDocOf({ observedAt: AT1, monthly: { used: 42, limit: 3000, percent: 1.4 }, daily: { used: 3, limit: 100, percent: 3 }, dailyReason: null });
+  const { wrote } = await recordWith(prev, { ts: AT1, before: 41, dailyBefore: 4 }); // monthly 42==42, daily 5>3
+  assert.ok(wrote); assert.equal(wrote.monthly.used, 42); assert.equal(wrote.daily.used, 5);
+});
+test("a LOWER-but-LATER observation still wins; an OLDER delayed one still loses", async () => {
+  const lowerLater = await recordWith(prevDocOf({ observedAt: AT1, monthly: { used: 500, limit: 3000, percent: 16.7 } }), { ts: AT2, before: 9 });
+  assert.ok(lowerLater.wrote); assert.equal(lowerLater.wrote.monthly.used, 10);
+  const olderDelayed = await recordWith(prevDocOf({ observedAt: AT2, monthly: { used: 10, limit: 3000, percent: 0.3 } }), { ts: AT1, before: 499 });
+  assert.equal(olderDelayed.wrote, null);
+});
+test("replay remains idempotent (no write, no ordering evaluated)", async () => {
+  const { wrote, r } = await recordWith(prevDocOf(), { ts: AT1, before: 41, alreadyApplied: true });
+  assert.equal(r.replay, true); assert.equal(wrote, null);
 });

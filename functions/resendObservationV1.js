@@ -165,22 +165,38 @@ async function recordObservationV1(observed, { runTransaction, proven = QUOTA_HE
     return fn({
       deliveryExists: delSnap.exists,
       alreadyApplied: !!(delSnap.exists && delSnap.data().usageV1Applied === true),
-      prevObservedAt: pubSnap.exists ? (pubSnap.data().observedAt || null) : null,
+      // Expose the RAW previous doc so the decision can validate it through the same
+      // sanitizer (canonical timestamp + provider totals for tie-breaking).
+      prevDoc: pubSnap.exists ? pubSnap.data() : null,
       writeSnapshot: (data) => t.set(pubRef, data, { merge: true }),   // merge → keeps disjoint internalTelemetry
       markApplied: () => t.set(delRef, { usageV1Applied: true, usageV1AppliedAt: FieldValue.serverTimestamp() }, { merge: true }),
     });
   }));
 
-  return run(({ deliveryExists, alreadyApplied, prevObservedAt, writeSnapshot, markApplied }) => {
+  return run(({ deliveryExists, alreadyApplied, prevDoc, writeSnapshot, markApplied }) => {
     if (!deliveryExists) return { skipped: true, reason: "no-delivery-receipt" };  // never orphan a receipt/snapshot
     if (alreadyApplied) return { replay: true };                                   // exactly-once
-    // OUT-OF-ORDER GUARD (last-observed, NOT high-water): compare by MILLISECONDS. A newer
-    // responseReceivedAt wins; an older delayed response cannot regress the snapshot; a
-    // lower-but-newer value is accepted. A MALFORMED stored observedAt is treated as
-    // absent so the next valid observation REPAIRS the document.
-    const prevMs = Date.parse(prevObservedAt);
-    const prevValid = prevObservedAt != null && !Number.isNaN(prevMs);
-    if (!prevValid || incomingMs > prevMs) {
+    // OUT-OF-ORDER GUARD (last-observed, NOT high-water). The stored snapshot is only trusted
+    // when it is a VALID CANONICAL v1 observation (same sanitizer as reads) — any malformed,
+    // numeric, or parseable-but-noncanonical stored value (e.g. "2099-01-01") is treated as
+    // ABSENT so the next valid observation REPAIRS the document. Decision:
+    //   • incoming newer  → incoming wins (a lower-but-newer value is accepted);
+    //   • incoming older  → stored wins;
+    //   • EQUAL canonical timestamps (concurrent instances in the same ms) → deterministic
+    //     tie-break by greater monthly used, then greater valid daily used (no sensitive
+    //     tie-break field is persisted). Both receipts are still marked applied.
+    const prev = sanitizeV1Snapshot(prevDoc);
+    let write;
+    if (!prev.ok) {
+      write = true;                                     // absent / malformed / non-canonical → repair
+    } else {
+      const prevMs = Date.parse(prev.observedAt);       // prev.observedAt is canonical (sanitizer-verified)
+      if (incomingMs > prevMs) write = true;
+      else if (incomingMs < prevMs) write = false;
+      else if (monthly.used !== prev.monthly.used) write = monthly.used > prev.monthly.used;
+      else write = (daily ? daily.used : -1) > (prev.daily ? prev.daily.used : -1);
+    }
+    if (write) {
       writeSnapshot({ model: MODEL, providerUsageProven: true, monthly, daily, dailyReason,
         observedAt: observedAtIso, source: SOURCE });
     }
