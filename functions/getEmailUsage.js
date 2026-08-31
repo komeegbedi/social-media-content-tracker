@@ -1,8 +1,9 @@
 /* Admin-only callable: return the LAST OBSERVED Resend account email-usage for the
    diagnostics panel. Usage is captured from POST /emails responses on every send (see
-   emailService.js) and cached server-side; this just reads that cache — no key, no live
-   fetch (Resend has no usage on GET). A provider-unavailable state (nothing observed
-   yet) comes back as providerAvailable:false, never a fabricated zero. */
+   resendObservationV1.js) and stored in the sanitized adminDiagnostics/emailUsageV1 doc;
+   this reads and re-sanitizes that doc — no key, no live fetch (Resend has no usage on GET).
+   getObservationV1 fully validates the v1 schema, so invalid data comes back as
+   providerAvailable:false with a stable reason code, never a fabricated zero. */
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { logger } = require("firebase-functions/v2");
 const { db } = require("./lib");

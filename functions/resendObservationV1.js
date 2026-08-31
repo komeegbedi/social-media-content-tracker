@@ -42,15 +42,68 @@ const SOURCE = "resend-send-response";
 const QUOTA_HEADER_MODEL_PROVEN = true;
 const PROVIDER_USAGE_DISPLAY_ENABLED = true;
 
-/* App-initiated send telemetry (this app only) — returned SEPARATELY from provider fields,
-   in the SAME sanitized 2-field shape the callable has always returned. Replicated here
-   (not imported) so the dormant legacy module stays byte-unchanged. Best-effort. */
+// ---- strict V1 schema validation (the SAME contract enforced on the client) ----
+const isNonNegInt = (n) => Number.isInteger(n) && n >= 0;
+// A canonical ISO instant that round-trips through Date (the form new Date().toISOString()
+// produces). Rejects strings, junk, and non-canonical variants.
+const isCanonicalIso = (s) =>
+  typeof s === "string" && s.length > 0 && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString() === s;
+// Recompute the percentage from validated used/limit — NEVER trust a persisted percent;
+// clamp finite result to 0..100.
+function safePercent(used, limit) {
+  const p = pct1(used, limit);
+  return p == null || !Number.isFinite(p) ? 0 : Math.min(100, Math.max(0, p));
+}
+// A dimension block is valid ONLY at its EXACT v1 plan limit with an integer used in
+// [0, limit]. Returns a RECOMPUTED sanitized block, or null (fail closed).
+function sanitizeBlock(b, planLimit) {
+  if (!b || !isNonNegInt(b.used) || b.limit !== planLimit || b.used > planLimit) return null;
+  return { used: b.used, limit: planLimit, percent: safePercent(b.used, planLimit) };
+}
+// Full sanitize of a stored/candidate v1 snapshot. Returns the sanitized presentation
+// fields or null. `code` distinguishes not-observed vs unverified vs invalid for callers.
+function sanitizeV1Snapshot(snap) {
+  const claims = !!(snap && (snap.model != null || snap.providerUsageProven === true || snap.monthly != null));
+  if (!claims) return { ok: false, code: "not-observed" };
+  if (snap.model !== MODEL || snap.providerUsageProven !== true) return { ok: false, code: "provider-usage-unverified" };
+  const monthly = sanitizeBlock(snap.monthly, PLAN_MONTHLY_LIMIT);
+  if (!monthly || !isCanonicalIso(snap.observedAt)) return { ok: false, code: "invalid-provider-observation" };
+  let daily = null, dailyReason;
+  if (snap.daily != null) {                                    // present block ⇒ reason must be null
+    daily = sanitizeBlock(snap.daily, PLAN_DAILY_LIMIT);
+    if (!daily || snap.dailyReason != null) return { ok: false, code: "invalid-provider-observation" };
+    dailyReason = null;
+  } else {                                                     // absent block ⇒ exactly not-provided|invalid
+    if (snap.dailyReason !== "not-provided" && snap.dailyReason !== "invalid") return { ok: false, code: "invalid-provider-observation" };
+    dailyReason = snap.dailyReason;
+  }
+  return { ok: true, monthly, daily, dailyReason, observedAt: snap.observedAt };
+}
+// Sanitize the four-field internal-telemetry contract (matches emailQuota's write). All
+// non-negative integers, and each used ≤ its configured limit; else null (fail closed).
+function sanitizeTelemetry(t) {
+  if (!t) return null;
+  const { appInitiatedThisMonth: mUsed, appSafetyCap: mCap, appDailyThisDay: dUsed, appDailyLimit: dCap } = t;
+  if (![mUsed, mCap, dUsed, dCap].every(isNonNegInt)) return null;
+  if (mUsed > mCap || dUsed > dCap) return null;
+  return { appInitiatedThisMonth: mUsed, appSafetyCap: mCap, appDailyThisDay: dUsed, appDailyLimit: dCap };
+}
+
+/* App-initiated send telemetry (this app only) — returned SEPARATELY from provider fields
+   in the EXACT four-field contract emailQuota.settleReservation writes, so Refresh (callable)
+   and the live snapshot render identical telemetry. Replicated here (not imported) so the
+   dormant legacy module stays byte-unchanged. Best-effort → null when unavailable. */
 async function displayTelemetry() {
   try {
     const quota = require("./emailQuota");
     const s = await quota.snapshot();
-    return { appInitiatedThisMonth: s.month.sentCount || 0, appSafetyCap: s.month.monthlyLimit || quota.MONTHLY_LIMIT };
-  } catch { return { appInitiatedThisMonth: null, appSafetyCap: null }; }
+    return {
+      appInitiatedThisMonth: s.month.sentCount || 0,
+      appSafetyCap: s.month.monthlyLimit || quota.MONTHLY_LIMIT,
+      appDailyThisDay: s.day.sentCount || 0,
+      appDailyLimit: s.day.dailyLimit || quota.DAILY_LIMIT,
+    };
+  } catch { return null; }
 }
 
 function firestoreStore() {
@@ -71,6 +124,12 @@ async function recordObservationV1(observed, { runTransaction, proven = QUOTA_HE
   const deliveryId = o.deliveryId;
   const responseReceivedAt = o.responseReceivedAt;
   if (!deliveryId || !responseReceivedAt) return { skipped: true, reason: "missing-delivery-context" };
+  // Validate + canonicalize the ordering timestamp BEFORE any write. Reject a malformed
+  // incoming value; compare by milliseconds (never lexicographically). Store the canonical
+  // ISO form so ordering is unambiguous.
+  const incomingMs = Date.parse(responseReceivedAt);
+  if (Number.isNaN(incomingMs)) { logger.warn("resend usage v1: invalid responseReceivedAt (rejected)", {}); return { skipped: true, reason: "invalid-timestamp" }; }
+  const observedAtIso = new Date(incomingMs).toISOString();
 
   // MONTHLY is REQUIRED. Malformed/missing/at-or-over-capacity → NO provider observation at
   // all (never fabricate zero). Both before-send and computed-after-send are validated.
@@ -108,11 +167,15 @@ async function recordObservationV1(observed, { runTransaction, proven = QUOTA_HE
   return run(({ deliveryExists, alreadyApplied, prevObservedAt, writeSnapshot, markApplied }) => {
     if (!deliveryExists) return { skipped: true, reason: "no-delivery-receipt" };  // never orphan a receipt/snapshot
     if (alreadyApplied) return { replay: true };                                   // exactly-once
-    // OUT-OF-ORDER GUARD (last-observed, NOT high-water): a NEWER responseReceivedAt wins; an
-    // older delayed response cannot regress the snapshot. A lower-but-newer value is accepted.
-    if (!prevObservedAt || responseReceivedAt > prevObservedAt) {
+    // OUT-OF-ORDER GUARD (last-observed, NOT high-water): compare by MILLISECONDS. A newer
+    // responseReceivedAt wins; an older delayed response cannot regress the snapshot; a
+    // lower-but-newer value is accepted. A MALFORMED stored observedAt is treated as
+    // absent so the next valid observation REPAIRS the document.
+    const prevMs = Date.parse(prevObservedAt);
+    const prevValid = prevObservedAt != null && !Number.isNaN(prevMs);
+    if (!prevValid || incomingMs > prevMs) {
       writeSnapshot({ model: MODEL, providerUsageProven: true, monthly, daily, dailyReason,
-        observedAt: responseReceivedAt, source: SOURCE });
+        observedAt: observedAtIso, source: SOURCE });
     }
     markApplied();   // this delivery is accounted for even if it lost the ordering race
     return { applied: true };
@@ -124,26 +187,28 @@ async function recordObservationV1(observed, { runTransaction, proven = QUOTA_HE
    exists; otherwise the sanitized presentation model + separated telemetry. Never throws. */
 async function getObservationV1({ store, telemetry } = {}) {
   const st = store || firestoreStore();
-  const tele = telemetry || await displayTelemetry();
+  const tele = sanitizeTelemetry(telemetry || await displayTelemetry());
   let snap = null;
   try { snap = await st.read(); } catch { snap = null; }
-  const notObserved = (code) => ({
+  const unavailable = (code) => ({
     providerAvailable: false, providerUsageProven: false, source: SOURCE, monthly: null, daily: null,
-    dailyReason: null, lastSyncedAt: (snap && snap.observedAt) || null, observedVia: null, stale: false,
-    internalTelemetry: tele, providerError: { code },
+    dailyReason: null, lastSyncedAt: (snap && isCanonicalIso(snap.observedAt)) ? snap.observedAt : null,
+    observedVia: null, stale: false, internalTelemetry: tele, providerError: { code },
   });
-  if (!PROVIDER_USAGE_DISPLAY_ENABLED) return notObserved("not-observed");
-  if (!snap || snap.model !== MODEL || snap.providerUsageProven !== true || !snap.monthly) return notObserved("not-observed");
+  if (!PROVIDER_USAGE_DISPLAY_ENABLED) return unavailable("not-observed");
+  const v = sanitizeV1Snapshot(snap);
+  if (!v.ok) return unavailable(v.code);   // not-observed | provider-usage-unverified | invalid-provider-observation
   return {
     providerAvailable: true, providerUsageProven: true, model: MODEL, source: SOURCE,
-    monthly: snap.monthly, daily: snap.daily || null, dailyReason: snap.dailyReason || null,
-    lastSyncedAt: snap.observedAt || null, observedVia: "send", stale: false,
+    monthly: v.monthly, daily: v.daily, dailyReason: v.dailyReason,
+    lastSyncedAt: v.observedAt, observedVia: "send", stale: false,
     internalTelemetry: tele, providerError: null,
   };
 }
 
 module.exports = {
   recordObservationV1, getObservationV1, displayTelemetry,
+  sanitizeV1Snapshot, sanitizeBlock, sanitizeTelemetry, isCanonicalIso, safePercent,
   QUOTA_HEADER_MODEL_PROVEN, PROVIDER_USAGE_DISPLAY_ENABLED,
   PLAN_MONTHLY_LIMIT, PLAN_DAILY_LIMIT, V1_DISPLAY_DOC, MODEL, SOURCE,
 };

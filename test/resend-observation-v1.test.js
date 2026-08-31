@@ -137,20 +137,44 @@ test("concurrent distinct sends cannot corrupt the doc; both receipts set", asyn
   for (const id of ids) assert.equal((await del(id).get()).data().usageV1Applied, true);
 });
 
-test("getObservationV1: absent → not-observed; present → sanitized available + telemetry", async () => {
-  const none = await getObservationV1({ telemetry: { appInitiatedThisMonth: 3, appSafetyCap: 2800 } });
+const TELE4 = { appInitiatedThisMonth: 5, appSafetyCap: 2800, appDailyThisDay: 3, appDailyLimit: 90 };
+test("getObservationV1: absent → not-observed; present → sanitized available + four-field telemetry", async () => {
+  const none = await getObservationV1({ telemetry: TELE4 });
   assert.equal(none.providerAvailable, false);
   assert.equal(none.providerError.code, "not-observed");
-  assert.deepEqual(none.internalTelemetry, { appInitiatedThisMonth: 3, appSafetyCap: 2800 });
+  assert.deepEqual(none.internalTelemetry, TELE4);
 
   await seedDelivery("d1");
   await recordObservationV1(obs({ monthlyUsedBeforeSend: 41, dailyUsedBeforeSend: 2 }));
-  const got = await getObservationV1({ telemetry: { appInitiatedThisMonth: 5, appSafetyCap: 2800 } });
+  const got = await getObservationV1({ telemetry: TELE4 });
   assert.equal(got.providerAvailable, true);
   assert.equal(got.model, MODEL);
   assert.equal(got.providerUsageProven, true);
   assert.deepEqual(got.monthly, { used: 42, limit: 3000, percent: 1.4 });
   assert.deepEqual(got.daily, { used: 3, limit: 100, percent: 3 });
+  assert.deepEqual(got.internalTelemetry, TELE4);
   assert.equal(got.lastSyncedAt, AT(1));
   for (const k of FORBIDDEN) assert.equal(k in got, false, `forbidden field ${k} must not be returned`);
+});
+
+test("an invalid incoming responseReceivedAt is rejected before any write", async () => {
+  await seedDelivery("d1");
+  const r = await recordObservationV1(obs({ monthlyUsedBeforeSend: 41, responseReceivedAt: "not-a-date" }));
+  assert.equal(r.skipped, true);
+  assert.equal(r.reason, "invalid-timestamp");
+  assert.equal(await pub(), null, "nothing written on an invalid timestamp");
+  assert.equal((await del("d1").get()).data().usageV1Applied, undefined, "receipt not marked");
+});
+
+test("a MALFORMED stored observedAt is repaired by the next valid observation", async () => {
+  // Seed a poisoned snapshot with a junk timestamp (as if hand-edited / corrupted).
+  await db.doc(V1_DISPLAY_DOC).set({ model: MODEL, providerUsageProven: true,
+    monthly: { used: 10, limit: 3000, percent: 0.3 }, daily: null, dailyReason: "not-provided",
+    observedAt: "garbage", source: "resend-send-response" });
+  await seedDelivery("fix");
+  const r = await recordObservationV1(obs({ deliveryId: "fix", monthlyUsedBeforeSend: 41, responseReceivedAt: AT(2) }));
+  assert.equal(r.applied, true, "malformed prior timestamp treated as absent → write proceeds");
+  const p = await pub();
+  assert.equal(p.monthly.used, 42);
+  assert.equal(p.observedAt, AT(2), "document repaired with a canonical timestamp");
 });
