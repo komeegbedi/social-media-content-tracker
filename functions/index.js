@@ -16,6 +16,7 @@ exports.cleanupRetention = require("./cleanupRetention").cleanupRetention;
 exports.weeklyTaskCheck = require("./weeklyTaskCheck").weeklyTaskCheck;
 exports.onFcmTokenWrite = require("./onFcmTokenWrite").onFcmTokenWrite;
 exports.sendTestEmail = require("./sendTestEmail").sendTestEmail;
+exports.getEmailUsage = require("./getEmailUsage").getEmailUsage;
 exports.removeUser = require("./removeUser").removeUser;
 exports.bulkAssign = require("./bulkAssign").bulkAssign;
 exports.adminOverrideStatus = require("./adminOverride").adminOverrideStatus;

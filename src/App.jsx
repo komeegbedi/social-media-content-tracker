@@ -42,6 +42,7 @@ import { planTransition, workflowCapability } from "./workflowTransition";
 import { useNotifications, NOTIF_META, NOTIF_FALLBACK, PREF_TYPES, NOTIF_SECTIONS, effectivePrefs, timeAgo } from "./notifications";
 import { NOTIF_PRIMARY, NOTIF_MORE, filterNotifications } from "./notifFilters";
 import { useSaveFlow } from "./useSaveFlow";
+import { EmailUsage } from "./EmailUsage";
 import { applicableNotifTypes, requiredNotices } from "./notificationPolicy";
 import { pushState, enablePush, listenForeground, refreshPushToken } from "./push";
 import { RELEASES, LATEST_RELEASE } from "./releases";
@@ -501,44 +502,8 @@ function AdminReminderDefaults() {
 }
 
 /* Admin-only: live email usage dashboard (reads server-managed quota docs). */
-function EmailUsage() {
-  const [month, setMonth] = useState(null);
-  const [day, setDay] = useState(null);
-  useEffect(() => {
-    const mk = new Date().toISOString().slice(0, 7);   // YYYY-MM (UTC)
-    const dk = new Date().toISOString().slice(0, 10);  // YYYY-MM-DD (UTC)
-    const u1 = onSnapshot(doc(db, "systemUsage", `email-${mk}`), (s) => setMonth(s.exists() ? s.data() : {}), () => setMonth({}));
-    const u2 = onSnapshot(doc(db, "systemUsage", `emailDaily-${dk}`), (s) => setDay(s.exists() ? s.data() : {}), () => setDay({}));
-    return () => { u1(); u2(); };
-  }, []);
-  if (month === null) return null;
-  const limit = month.monthlyLimit || 2800;
-  const sent = month.sentCount || 0, reserved = month.reservedCount || 0;
-  const used = sent + reserved;
-  const pct = Math.round((used / limit) * 100);
-  const remaining = Math.max(0, limit - used);
-  const status = pct >= 100 ? ["Paused", "var(--red)"] : pct >= 95 ? ["Critical", "var(--red)"] : pct >= 85 ? ["Approaching limit", "var(--amber)"] : ["Normal", "var(--green)"];
-  const dLimit = (day && day.dailyLimit) || 250;
-  const dUsed = ((day && day.sentCount) || 0) + ((day && day.reservedCount) || 0);
-  return (
-    <>
-      <div className="sb-mlabel">Admin · email usage (this month, UTC)</div>
-      <div className="sb-usage">
-        <div className="bar"><span style={{width:`${Math.min(100,pct)}%`, background: status[1]}} /></div>
-        <div className="row"><b>{used.toLocaleString()} of {limit.toLocaleString()}</b><span style={{color:status[1],fontWeight:700}}>{status[0]}</span></div>
-        <div className="grid">
-          <span>Sent: <b>{sent.toLocaleString()}</b></span>
-          <span>Reserved: <b>{reserved}</b></span>
-          <span>Remaining: <b>{remaining.toLocaleString()}</b></span>
-          <span>Used: <b>{pct}%</b></span>
-          <span>Today: <b>{dUsed} / {dLimit}</b></span>
-          <span>Failed: <b>{month.failedCount || 0}</b></span>
-          <span>Suppressed: <b>{month.suppressedCount || 0}</b></span>
-        </div>
-      </div>
-    </>
-  );
-}
+// EmailUsage (admin Resend account-usage diagnostics) lives in its own module so its
+// states are DOM-testable — see EmailUsage.jsx / EmailUsage.ui.test.jsx.
 
 /* Admin-only: verify the Resend email pipeline by sending a test message. */
 // Translate a callable error into a safe, specific message. The backend already
@@ -550,7 +515,7 @@ function friendlyEmailError(e) {
   if (code && code !== "internal" && msg && msg.toLowerCase() !== "internal") return msg;
   return "We couldn't send the test email. The error has been logged. Please try again or check the function logs.";
 }
-function AdminEmailTest() {
+function AdminEmailTest({ onSent }) {
   const [to, setTo] = useState("");
   const [err, setErr] = useState("");           // inline field-validation error
   const [result, setResult] = useState(null);   // { ok, msg }
@@ -562,7 +527,17 @@ function AdminEmailTest() {
     setErr(""); setResult(null); setBusy(true);
     try {
       const res = await callFunction("sendTestEmail", { to: addr });
-      setResult({ ok: true, msg: `Test email sent to ${res.data?.to || addr}.` });
+      if (res.data?.skipped) {
+        // Local emulator: no real send/record happened — say so, and don't make the
+        // usage panel wait for an observation that will never arrive.
+        setResult({ ok: true, msg: "Test skipped in the local emulator — no real email is sent, so usage isn't recorded here." });
+      } else {
+        setResult({ ok: true, msg: `Test email sent to ${addr}.` });
+        // Tell the Email panel to re-read usage (deterministic feedback) — never closes
+        // the modal or clears this success message. Pass the send result so the panel can
+        // surface a failure warning ONLY on an authoritative server usageRecordError.
+        if (onSent) onSent(res.data);
+      }
     } catch (e) {
       // Keep the entered address so the admin can retry; never auto-close the panel.
       setResult({ ok: false, msg: friendlyEmailError(e) });
@@ -598,6 +573,22 @@ function requiredNoticeCopy(required) {
   if (required.includes("admin_delivery_health"))
     return "Account approvals, security messages, and notification delivery problems are always sent.";
   return "Account and security messages are always sent.";
+}
+
+// The Email admin tab: usage panel + test send. A refresh token is lifted here so a
+// successful test send deterministically triggers EmailUsage to re-read (the live
+// listener still catches notifications/digests sent elsewhere).
+function EmailSection() {
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [recordError, setRecordError] = useState(null);   // authoritative server usageRecordError
+  return (
+    <>
+      <EmailUsage refreshToken={refreshToken} recordError={recordError} />
+      <div className="sb-usage-divider" />
+      <div className="sb-mlabel">Send test email</div>
+      <AdminEmailTest onSent={(data) => { setRecordError((data && data.usageRecordError) || null); setRefreshToken((n) => n + 1); }} />
+    </>
+  );
 }
 
 function NotifSettings({ me, isAdmin, onSave, onClose }) {
@@ -693,11 +684,7 @@ function NotifSettings({ me, isAdmin, onSave, onClose }) {
             <AdminReminderDefaults />
           </>}
 
-          {isAdmin && sec==="email" && <>
-            <div className="sb-sub" style={{marginTop:0}}>Workspace email delivery — usage against the monthly quota, plus a test send. Admin diagnostics only.</div>
-            <EmailUsage />
-            <AdminEmailTest />
-          </>}
+          {isAdmin && sec==="email" && <EmailSection />}
         </div>
       </div>
     </div>

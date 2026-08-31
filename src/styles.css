@@ -3451,3 +3451,72 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .sb-notif-locked .hi{flex:none;margin-top:1px;color:var(--text-muted)}
 .sb-save-ok{display:inline-flex;align-items:center;gap:4px;color:var(--green-fg)}
 .sb-save-err{color:var(--danger-foreground)}
+
+/* ── Email usage diagnostics (admin) ─────────────────────────────────────── */
+.sb-emailusage{display:flex;flex-direction:column;gap:12px}
+.sb-usage-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.sb-usage-badge{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;
+  padding:3px 9px;border-radius:999px;white-space:nowrap}
+.sb-usage-badge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.sb-usage-badge.ok{color:var(--green-fg);background:var(--green-soft)}
+.sb-usage-badge.warn{color:var(--amber-fg);background:var(--amber-soft)}
+.sb-usage-badge.err{color:var(--red-fg);background:var(--red-soft)}
+
+.sb-usagerow{display:flex;flex-direction:column;gap:6px}
+.sb-usagerow-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.sb-usagerow-head>span{font-size:13px;color:var(--text-secondary);font-weight:600}
+.sb-usagerow-head>b{font-size:15px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.sb-usagerow-na{font-size:13px;font-weight:600;color:var(--text-secondary)}
+.sb-usagebar{position:relative;height:8px;border-radius:999px;background:var(--surface-muted);overflow:hidden}
+.sb-usagebar>span{position:absolute;inset:0 auto 0 0;height:100%;border-radius:999px;background:var(--green);transition:width .35s ease}
+.sb-usagebar.tone-warn>span{background:var(--amber)}
+.sb-usagebar.tone-crit>span{background:var(--red)}
+.sb-usagerow-foot{font-size:13px;line-height:1.45;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+
+.sb-usage-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  padding-top:8px;border-top:1px solid var(--border)}
+.sb-usage-refresh{appearance:none;border:0;background:none;padding:6px 4px;min-height:44px;
+  font:inherit;font-size:13px;font-weight:700;color:var(--green-fg);cursor:pointer;border-radius:8px}
+.sb-usage-refresh:disabled{color:var(--text-muted);cursor:default}
+.sb-usage-refresh:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+
+.sb-usage-callout{display:flex;gap:10px;padding:12px 14px;border-radius:12px;
+  background:var(--amber-soft);border:1px solid var(--amber);color:var(--text-secondary)}
+.sb-usage-callout .hi{flex:none;margin-top:1px;color:var(--amber-fg)}
+.sb-usage-callout-body{display:flex;flex-direction:column;gap:2px}
+.sb-usage-callout-body>b{color:var(--amber-fg)}
+
+.sb-usage-tech{margin-top:2px}
+.sb-usage-tech>summary{cursor:pointer;font-size:13px;color:var(--text-muted);
+  padding:6px 2px;min-height:32px;display:flex;align-items:center;user-select:none}
+.sb-usage-tech>summary:focus-visible{outline:2px solid var(--border-strong);outline-offset:2px;border-radius:6px}
+.sb-usage-tech[open]>summary{color:var(--text-secondary)}
+.sb-usage-divider{height:1px;background:var(--border);margin:16px 0 10px}
+
+@media(max-width:430px){
+  .sb-usagerow-head{flex-direction:column;align-items:flex-start;gap:2px}
+  .sb-usagerow-head>b{font-size:16px}
+}
+
+/* Email usage — last-observed additions */
+.sb-usage-extlink{display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:600;
+  color:var(--green-fg);text-decoration:none;padding:6px 4px;min-height:32px}
+.sb-usage-extlink:hover{text-decoration:underline}
+.sb-usage-extlink:focus-visible{outline:2px solid var(--green);outline-offset:2px;border-radius:6px}
+.sb-usage-badgerow{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.sb-usage-note{padding:10px 12px;border-radius:10px;background:var(--surface-muted);
+  color:var(--text-secondary);font-size:13.5px;line-height:1.5}
+/* Email usage — v1 readability: meaningful secondary / status / help copy. At least 13.5px
+   with comfortable line-height and AA-contrast secondary text (light --text-secondary #5B616B
+   ~6.5:1; dark #AEB4BE on the panel ~8:1). Replaces the former inline 12px sb-sub styling. */
+.sb-usage-help{font-size:13.5px;line-height:1.45;color:var(--text-secondary)}
+
+/* Email usage — real-time additions */
+.sb-visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.sb-usage-live{display:flex;flex-direction:column;gap:12px}
+.sb-usage-live .sb-usagerow-head>b{transition:color .25s ease}
+.sb-usage-live .sb-usagebar>span{transition:width .4s ease}
+@media(prefers-reduced-motion:reduce){ .sb-usage-live .sb-usagebar>span{transition:none} }
+.sb-usage-quiet{font-size:13.5px;line-height:1.45;color:var(--amber-fg);background:var(--amber-soft);
+  padding:8px 12px;border-radius:10px}

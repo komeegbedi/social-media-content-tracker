@@ -1,0 +1,277 @@
+/* Admin email-usage diagnostics (display-only v1). Resend reports account quota only on
+   SEND (its GET /emails carries no usage), so the panel shows the LAST OBSERVED usage —
+   captured from POST /emails responses on every send by resendObservationV1.js and stored
+   in the sanitized adminDiagnostics/emailUsageV1 doc. The provider snapshot and the app's
+   internal telemetry are DISJOINT merge fields on that doc, written by SEPARATE transactions
+   (recordObservationV1 for the provider snapshot; settleReservation for the four-field
+   telemetry).
+
+   Live updates: while the panel is open it subscribes to emailUsageV1 (onSnapshot) and
+   applies only snapshots NEWER than what's rendered, so the totals advance automatically
+   after any app send (notification, digest, test) without clicking Refresh. The admin
+   callable is the initial-load + manual-recovery path. Refresh re-reads the latest stored
+   observation — it does NOT contact Resend. The app's safety cap is shown separately and
+   never as a Resend limit. Extracted from App.jsx so its states are DOM-testable. */
+import { useState, useEffect, useCallback, useRef } from "react";
+import { onSnapshot, doc } from "firebase/firestore";
+import { ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
+import { callFunction, db } from "./firebase";
+import { presentEmailUsageDoc, normalizeCallableUsage } from "./emailUsageDoc.js";
+
+const RESEND_DASHBOARD = "https://resend.com/settings/usage";
+// The complete four-field telemetry shape, all nullable — the fallback when no valid
+// telemetry is available (never a partial/2-field object).
+const DEFAULT_TELE = { appInitiatedThisMonth: null, appSafetyCap: null, appDailyThisDay: null, appDailyLimit: null };
+
+const fmtSync = (iso) => { try { return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
+const syncedMs = (u) => (u && u.lastSyncedAt ? Date.parse(u.lastSyncedAt) : NaN);
+const totalsLine = (u) => {
+  if (!u || !u.providerAvailable || !u.monthly) return "";
+  const d = u.daily ? `, ${u.daily.used} of ${u.daily.limit} daily` : "";
+  return `Resend usage: ${u.monthly.used} of ${u.monthly.limit} monthly${d}.`;
+};
+
+// One labelled usage row: value/limit on one line, a progress bar, then "% used".
+export function UsageRow({ label, block, note, naLabel = "Not provided by Resend" }) {
+  if (!block) return (
+    <div className="sb-usagerow">
+      <div className="sb-usagerow-head"><span>{label}</span><b className="sb-usagerow-na">{naLabel}</b></div>
+    </div>
+  );
+  const pct = typeof block.percent === "number" ? block.percent : 0;
+  const tone = pct >= 100 ? "crit" : pct >= 85 ? "warn" : "ok";
+  return (
+    <div className="sb-usagerow">
+      <div className="sb-usagerow-head"><span>{label}</span><b>{block.used.toLocaleString()} / {block.limit.toLocaleString()}</b></div>
+      <div className={"sb-usagebar tone-" + tone} role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100} aria-label={`${label}: ${pct}% used`}>
+        <span style={{ width: `${Math.min(100, pct)}%` }} />
+      </div>
+      <div className="sb-usagerow-foot">{pct}% used{note ? ` · ${note}` : ""}</div>
+    </div>
+  );
+}
+
+// refreshToken: bumped by the parent after a successful test send → deterministic re-read.
+// recordError: an AUTHORITATIVE server signal (from the send response's usageRecordError) that
+// the email sent but the observation could not be recorded. It is the ONLY trigger for the
+// failure warning — the panel never infers a recording failure from elapsed time.
+export function EmailUsage({ refreshToken = 0, recordError = null }) {
+  const [usage, setUsage] = useState(null);   // view model | null (loading)
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");       // "" | "updating" | "record-failed"
+  const usageRef = useRef(null);
+  useEffect(() => { usageRef.current = usage; }, [usage]);
+
+  // Take the newer of two view models by lastSyncedAt, preserving internalTelemetry
+  // (the sanitized live doc carries no telemetry; only the callable does).
+  const applyNewer = useCallback((next, keepTeleFrom) => {
+    setUsage((prev) => {
+      const prevMs = syncedMs(prev), nextMs = syncedMs(next);
+      const tele = (next.internalTelemetry) || (keepTeleFrom && keepTeleFrom.internalTelemetry) || (prev && prev.internalTelemetry) || DEFAULT_TELE;
+      if (prev && Number.isFinite(prevMs) && Number.isFinite(nextMs) && nextMs < prevMs) {
+        // Older than what's shown → don't regress; keep provider, take any newer telemetry.
+        return { ...prev, internalTelemetry: tele };
+      }
+      return { ...next, internalTelemetry: tele };
+    });
+  }, []);
+
+  // Initial load + manual Refresh + post-test re-read. Reads the cache via the callable
+  // (never contacts Resend). The callable result is passed through the SAME trust boundary
+  // as the listener (normalizeCallableUsage → providerUsageProven===true) so an old/mixed-
+  // version callable can never make the panel render unproven provider totals (e.g. 3001).
+  // Snapshot ordering is handled by applyNewer.
+  const [refreshWarn, setRefreshWarn] = useState(false);
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      const { data } = await callFunction("getEmailUsage", {});
+      const norm = normalizeCallableUsage(data);
+      const transientFail = !norm.providerAvailable &&
+        (norm.providerError && (norm.providerError.code === "read-failed" || norm.providerError.code === "call-failed"));
+      if (transientFail && usageRef.current && usageRef.current.providerAvailable) {
+        // A transient read failure on Refresh MUST NOT replace a valid observation — keep the
+        // last observed value (still labelled "Last observed") and warn non-destructively.
+        setRefreshWarn(true);
+      } else {
+        setRefreshWarn(false);
+        applyNewer(norm, norm);
+      }
+    } catch (e) {
+      if (usageRef.current && usageRef.current.providerAvailable) {
+        setRefreshWarn(true);                                  // preserve the shown observation
+      } else {
+        setRefreshWarn(false);
+        setUsage((prev) => prev || { providerAvailable: false, source: "internal-fallback", monthly: null, daily: null,
+          dailyReason: null, lastSyncedAt: null, stale: true, internalTelemetry: DEFAULT_TELE, providerError: { code: "call-failed" } });
+      }
+    } finally { setBusy(false); }
+  }, [applyNewer]);
+
+  useEffect(() => { load().catch(() => {}); }, [load]);
+
+  // Live subscription — only while the panel is mounted (unsubscribes on unmount). Both
+  // provider-observation AND internal-telemetry writes arrive here; a read error is
+  // surfaced (distinct from "waiting for usage").
+  const [listenerError, setListenerError] = useState(false);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "adminDiagnostics", "emailUsageV1"),
+      // A live snapshot is authoritative: an existing doc updates the view; a genuine DELETION
+      // (exists()===false) flows through the SAME null-normalization path → honest not-observed
+      // (separately valid telemetry is preserved by applyNewer). Fresh data clears a stale
+      // refresh warning.
+      (snap) => { setListenerError(false); setRefreshWarn(false); applyNewer(presentEmailUsageDoc(snap.exists() ? snap.data() : null)); },
+      () => { setListenerError(true); });
+    return () => unsub();
+  }, [applyNewer]);
+
+  // Deterministic feedback after a successful "Send test email". The failure warning is driven
+  // SOLELY by the authoritative server signal `recordError` (the send response's
+  // usageRecordError) — never by a timeout. On a normal send we show "Updating usage…" while
+  // the re-read is in flight and clear it when THAT re-read resolves. The live listener renders
+  // the new observation the moment it lands — which can be BEFORE this callback runs; that is
+  // still a success and must never produce a warning.
+  const firstToken = useRef(refreshToken);
+  const attemptRef = useRef(refreshToken);
+  const mountedRef = useRef(true);
+  // StrictMode-safe: dev runs setup→cleanup→setup, so RESTORE true on every setup (a
+  // cleanup-only guard would latch false permanently and block the clear). Guards async
+  // setState after a real unmount.
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    if (refreshToken === firstToken.current) return;            // ignore the initial mount value
+    const attempt = refreshToken;
+    attemptRef.current = attempt;
+    if (recordError) {
+      // Authoritative: the email sent but the server reported the observation was not recorded.
+      setNote("record-failed");
+      load().catch(() => {});
+      return;
+    }
+    // Success path: transient "Updating usage…" cleared when the re-read settles — NEVER an
+    // error from elapsed time. A stale attempt or a record-failed state is never overwritten.
+    setNote("updating");
+    load().catch(() => {}).finally(() => {
+      if (mountedRef.current && attemptRef.current === attempt) setNote((n) => (n === "updating" ? "" : n));
+    });
+  }, [refreshToken, recordError, load]);
+
+  const tele = (usage && usage.internalTelemetry) || {};
+  const appSent = tele.appInitiatedThisMonth;                       // UTC-calendar-month telemetry (NOT a provider cap)
+  const appDaily = typeof tele.appDailyThisDay === "number" ? tele.appDailyThisDay : null;
+  // NEVER fabricate a daily limit — only render the internal-enforcement row when BOTH the
+  // count AND a validated limit are present.
+  const appDailyLimit = typeof tele.appDailyLimit === "number" ? tele.appDailyLimit : null;
+  const synced = usage && usage.lastSyncedAt ? fmtSync(usage.lastSyncedAt) : null;
+
+  const errCode = usage && usage.providerError && usage.providerError.code;
+  const errorState = errCode === "invalid-provider-observation" || errCode === "provider-usage-unverified"
+    || errCode === "read-failed" || errCode === "call-failed";
+  const badge = !usage ? null
+    : usage.providerAvailable ? { label: "Last observed", cls: "ok" } // visible text, not color-only
+    : errorState ? { label: "Unavailable", cls: "err" }              // never green, never a 100% bar
+    : { label: "Not observed yet", cls: "warn" };
+
+  return (
+    <section className="sb-emailusage" aria-label="Email usage">
+      <div className="sb-usage-hd">
+        <span className="sb-mlabel" style={{ margin: 0 }}>Email usage</span>
+        <a className="sb-usage-extlink" href={RESEND_DASHBOARD} target="_blank" rel="noopener noreferrer">
+          View in Resend <ArrowTopRightOnSquareIcon className="hi hi-sm" aria-hidden="true" />
+        </a>
+      </div>
+
+      {/* Polite live announcement of the current totals (updates automatically on send). */}
+      <div className="sb-visually-hidden" aria-live="polite">{totalsLine(usage)}</div>
+
+      {usage === null ? (
+        <div className="sb-usage-help" aria-live="polite">Loading email usage…</div>
+      ) : (
+        <>
+          {badge && (
+            <div className="sb-usage-badgerow">
+              <span className="sb-mlabel" style={{ margin: 0, fontWeight: 600 }}>Resend account usage</span>
+              <span className={"sb-usage-badge " + badge.cls}>{badge.label}</span>
+            </div>
+          )}
+
+          {usage.providerAvailable ? (
+            <div className="sb-usage-live">
+              <UsageRow label="Monthly usage" block={usage.monthly} />
+              {/* Daily row is ALWAYS shown — a valid block, or an explicit reason (never hidden). */}
+              {usage.daily ? (
+                <UsageRow label="Daily usage" block={usage.daily} />
+              ) : (
+                <div className="sb-usagerow">
+                  <div className="sb-usagerow-head"><span>Daily usage</span><b className="sb-usagerow-na">Not provided</b></div>
+                  <div className="sb-usagerow-foot">
+                    {usage.dailyReason === "invalid"
+                      ? "Daily usage was unavailable for this observation."
+                      : "Resend did not provide a daily counter for this send."}
+                  </div>
+                </div>
+              )}
+              <div className="sb-usage-note" role="note">
+                Resend updates here after this app sends an email. Other Resend activity appears after the next app send.
+              </div>
+            </div>
+          ) : (
+            <div className="sb-usage-note" role="status">
+              {(() => {
+                const code = usage.providerError && usage.providerError.code;
+                if (code === "read-failed" || code === "call-failed") return "Couldn't load saved Resend usage. Try again.";
+                if (code === "provider-usage-unverified") return "Resend account usage couldn't be verified; an unrecognized reading was ignored. App safety usage below is unaffected.";
+                if (code === "invalid-provider-observation") return "Resend account usage couldn't be verified (an invalid reading was ignored). App safety usage below is unaffected.";
+                return "No Resend usage observed yet. Send an email through this app to load it.";
+              })()}
+            </div>
+          )}
+
+          {note === "updating" && <div className="sb-usage-help" aria-live="polite">Updating usage…</div>}
+          {note === "record-failed" && <div className="sb-usage-quiet" role="status">Email was sent, but the usage observation could not be saved. Check function logs.</div>}
+          {refreshWarn && note !== "record-failed" && <div className="sb-usage-quiet" role="status">Couldn’t refresh Resend usage just now. Showing the last observed value.</div>}
+          {listenerError && note !== "record-failed" && !refreshWarn && <div className="sb-usage-quiet" role="status">Live usage updates are unavailable right now (check your admin access). Use Refresh to re-read.</div>}
+
+          {/* The app's OWN safety cap — clearly separate from the Resend account limit. */}
+          {/* Internal app telemetry — NOT the Resend monthly quota. The monthly count is
+              scoped to the UTC CALENDAR MONTH, which is not aligned with Resend's (unknown)
+              provider reset boundary, so it is telemetry only, never a provider safety cap.
+              The daily app limit below is UTC-day scoped; Resend's daily reset window is
+              still unverified, so it is internal enforcement, not a guaranteed provider guard. */}
+          <div className="sb-usagerow">
+            <div className="sb-usagerow-head"><span>App email activity · UTC calendar month</span>
+              <b>{appSent == null ? "—" : `${appSent.toLocaleString()} successful deliveries`}</b></div>
+            <div className="sb-usagerow-foot">Internal telemetry; not the Resend monthly quota.</div>
+          </div>
+          {appDaily != null && appDailyLimit != null && (
+            <div className="sb-usagerow">
+              <div className="sb-usagerow-head"><span>Daily app limit · UTC day</span><b>{appDaily.toLocaleString()} / {appDailyLimit.toLocaleString()}</b></div>
+              <div className="sb-usagerow-foot">Internal enforcement. Resend’s daily reset window is still being verified.</div>
+            </div>
+          )}
+
+          <div className="sb-usage-foot">
+            <span className="sb-usage-help">
+              {usage.providerAvailable && synced ? `Updated ${synced} after an app email was accepted.` : ""}
+            </span>
+            <button type="button" className="sb-usage-refresh" onClick={() => load()} disabled={busy}
+              aria-label="Reload saved usage" title="Reload saved usage">
+              {busy ? "Refreshing…" : "Refresh"}</button>
+          </div>
+
+          <details className="sb-usage-tech">
+            <summary>Technical details</summary>
+            <div className="sb-usage-help">
+              App-initiated sends this month (this app only): <b>{appSent == null ? "—" : appSent.toLocaleString()}</b><br />
+              Resend reports account usage only on SEND, so this advances when THIS app sends email
+              (notifications, digests, test emails). Out-of-band Resend activity is reflected on the
+              next successful app send. Refresh re-reads the latest observation and does not contact Resend.<br />
+              {!usage.providerAvailable && synced ? <>Historical unverified observation: <b>{synced}</b>. Not shown as current usage.<br /></> : null}
+              Data source: <b>{usage.source}</b>{usage.providerError ? <> · {usage.providerError.code}</> : null}
+            </div>
+          </details>
+        </>
+      )}
+    </section>
+  );
+}

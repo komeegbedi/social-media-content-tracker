@@ -909,3 +909,60 @@ test("non-admins cannot read the issue log", async () => {
   await assertFails(getDoc(doc(as("member"), "issues", "i1")));
   await assertSucceeds(getDoc(doc(as("admin"), "issues", "i1")));
 });
+
+/* ---- adminDiagnostics/emailUsage (sanitized real-time email usage) ---- */
+test("adminDiagnostics/emailUsage: admins read; non-admin/unauth denied; clients cannot write", async () => {
+  await seed("adminDiagnostics", "emailUsage", {
+    monthly: { used: 40, limit: 3000, percent: 1.3 }, daily: { used: 0, limit: 100, percent: 0 },
+    periodMonth: "2026-08", periodDay: "2026-08-28", observedAt: "2026-08-28T12:00:00.000Z", source: "resend",
+  });
+  const ref = (fs) => doc(fs, "adminDiagnostics", "emailUsage");
+  // Reads
+  await assertSucceeds(getDoc(ref(as("admin"))));                                 // admin
+  await assertSucceeds(getDoc(ref(as("adminqa"))));                               // admin (+ qa)
+  await assertFails(getDoc(ref(as("member"))));                                   // non-admin
+  await assertFails(getDoc(ref(as("pending"))));                                  // pending
+  await assertFails(getDoc(ref(as("exadmin"))));                                  // removed/disabled admin
+  await assertFails(getDoc(ref(env.unauthenticatedContext().firestore())));       // unauthenticated
+  // Writes always fail — even for an admin (server Admin SDK bypasses rules).
+  await assertFails(setDoc(ref(as("admin")), { monthly: { used: 0, limit: 3000, percent: 0 } }));
+  await assertFails(updateDoc(ref(as("admin")), { source: "spoof" }));
+  await assertFails(deleteDoc(ref(as("admin"))));
+  await assertFails(setDoc(ref(env.unauthenticatedContext().firestore()), { x: 1 }));
+});
+
+/* ---- adminDiagnostics/emailUsageV1 (display-only v1 snapshot) — same wildcard rule ---- */
+test("adminDiagnostics/emailUsageV1: admins read; non-admin/unauth denied; no client writes", async () => {
+  await seed("adminDiagnostics", "emailUsageV1", {
+    model: "resend-pre-send-used-v1", providerUsageProven: true,
+    monthly: { used: 42, limit: 3000, percent: 1.4 }, daily: { used: 3, limit: 100, percent: 3 },
+    dailyReason: null, observedAt: "2026-08-30T12:00:00.000Z", source: "resend-send-response",
+  });
+  const ref = (fs) => doc(fs, "adminDiagnostics", "emailUsageV1");
+  await assertSucceeds(getDoc(ref(as("admin"))));                                 // admin
+  await assertSucceeds(getDoc(ref(as("adminqa"))));                               // admin (+ qa)
+  await assertFails(getDoc(ref(as("member"))));                                   // non-admin
+  await assertFails(getDoc(ref(as("pending"))));                                  // pending
+  await assertFails(getDoc(ref(as("exadmin"))));                                  // removed/disabled admin
+  await assertFails(getDoc(ref(env.unauthenticatedContext().firestore())));       // unauthenticated
+  // No client may write it (the server Admin SDK bypasses rules).
+  await assertFails(setDoc(ref(as("admin")), { model: "spoof" }));
+  await assertFails(updateDoc(ref(as("admin")), { providerUsageProven: true }));
+  await assertFails(deleteDoc(ref(as("admin"))));
+  await assertFails(setDoc(ref(env.unauthenticatedContext().firestore()), { x: 1 }));
+});
+
+/* ---- emailDeliveries/{id} receipt (holds the v1 idempotency flags) — perms unchanged ---- */
+test("emailDeliveries receipt: admin-read only; no client writes (incl. usageV1Applied)", async () => {
+  await seed("emailDeliveries", "d1", {
+    status: "sent", reserved: false, settled: true, recipientEmail: "ada@example.com",
+    usageV1Applied: true, usageV1AppliedAt: "2026-08-30T12:00:00.000Z",
+  });
+  const ref = (fs) => doc(fs, "emailDeliveries", "d1");
+  await assertSucceeds(getDoc(ref(as("admin"))));                                 // admin read
+  await assertFails(getDoc(ref(as("member"))));                                   // non-admin denied
+  await assertFails(getDoc(ref(env.unauthenticatedContext().firestore())));       // unauthenticated denied
+  await assertFails(setDoc(ref(as("admin")), { usageV1Applied: false }));         // no client write
+  await assertFails(updateDoc(ref(as("admin")), { usageV1Applied: false }));
+  await assertFails(deleteDoc(ref(as("admin"))));
+});

@@ -99,3 +99,124 @@ test("quota denial suppresses and settles without holding a reservation", async 
   assert.equal(d.reserved, false);
   assert.equal(d.status, "suppressed_quota_limit");
 });
+
+/* ---- account-aware gate: Resend usage + local reservations vs the PLAN limit ---- */
+const rqRef = () => db.doc("systemUsage/resendQuota");
+const setResend = (monthlyUsed, ageMs = 0) =>
+  rqRef().set({ provider: "resend", monthlyUsed, observedAt: new Date(Date.now() - ageMs).toISOString() });
+
+test("CONTAINMENT: a bounded provider account value does NOT suppress while header semantics are unproven", async () => {
+  // Even a header at plan capacity (3000) must not drive suppression in the interim — it is
+  // not proven to be a "used" count. The local safety cap alone governs. (Once semantics are
+  // proven, the account-aware deny — resend_account_limit — is re-enabled with the flag.)
+  await setResend(3000);
+  await seedDelivery("acc");
+  const r = await quota.reserve({ type: "assigned", priority: "critical", period, deliveryRef: del("acc") });
+  assert.equal(r.allowed, true, "provider header ignored; local cap has room");
+});
+
+test("reserve ALLOWS when the Resend snapshot is comfortably under the plan limit", async () => {
+  await setResend(10);
+  await seedDelivery("ok");
+  const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("ok") });
+  assert.equal(r.allowed, true);
+});
+
+test("a STALE Resend snapshot is ignored by the gate (fail-safe → local cap governs)", async () => {
+  await setResend(3000, 30 * 60 * 1000); // 30 min old → past the 15-min gate window
+  await seedDelivery("stalegate");
+  const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("stalegate") });
+  assert.equal(r.allowed, true, "an old account snapshot doesn't block sending");
+});
+
+test("no Resend snapshot at all → sending still works (fail-safe preserved)", async () => {
+  await seedDelivery("nosnap");
+  const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("nosnap") });
+  assert.equal(r.allowed, true);
+});
+
+test("concurrent reservations near the local safety cap never overshoot it", async () => {
+  // App safety cap = 2800; seed at 2798 so only 2 more may reserve.
+  await mRef().set({ provider: "resend", period: period.month, monthlyLimit: 2800, sentCount: 2798, reservedCount: 0 });
+  for (let i = 0; i < 6; i++) await seedDelivery(`c${i}`);
+  const results = await Promise.all(
+    [0, 1, 2, 3, 4, 5].map((i) => quota.reserve({ type: "assigned", priority: "critical", period, deliveryRef: del(`c${i}`) })),
+  );
+  const allowed = results.filter((r) => r.allowed).length;
+  assert.equal(allowed, 2, "exactly the remaining budget is granted; the rest are denied");
+  const m = (await mRef().get()).data();
+  assert.ok((m.sentCount + m.reservedCount) <= 2800, "never overshoots the safety cap");
+});
+
+/* ---- app-owned daily safety cap (default 90) ---- */
+test("the 91st app send is suppressed when the daily safety cap is 90", async () => {
+  // No explicit dailyLimit on the day doc → the reserve gate uses DAILY_LIMIT (90).
+  await dRef().set({ provider: "resend", period: period.day, dailyLimit: 90, sentCount: 90, reservedCount: 0 });
+  await seedDelivery("d91");
+  const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("d91") });
+  assert.equal(r.allowed, false);
+  assert.equal(r.reason, "daily_limit", "91st send blocked at the 90/day safety cap");
+});
+
+/* ---- Option A: legacy provider PERIOD exhaustion markers are IGNORED and left untouched ----
+   PROVIDER_PERIOD_BASED_ENFORCEMENT_ENABLED is false (Resend reset boundaries unproven), so a
+   legacy dailyExhaustedDay / monthlyExhaustedMonth must NOT deny a reservation, and the fields
+   must remain in Firestore (passive, non-destructive — an incompatible legacy schema). */
+test("a legacy CURRENT-day exhausted marker does NOT block, and the field is left untouched", async () => {
+  await rqRef().set({ dailyExhaustedDay: period.day, dailyExhaustedAt: new Date().toISOString() });
+  await seedDelivery("legacy-d");
+  const r = await quota.reserve({ type: "assigned", priority: "critical", period, deliveryRef: del("legacy-d") });
+  assert.equal(r.allowed, true, "legacy daily marker ignored (provider-period enforcement disabled)");
+  assert.equal((await rqRef().get()).data().dailyExhaustedDay, period.day, "legacy field NOT deleted");
+});
+
+test("a legacy CURRENT-month exhausted marker does NOT block, and the field is left untouched", async () => {
+  await rqRef().set({ monthlyExhaustedMonth: period.month });
+  await seedDelivery("legacy-m");
+  const r = await quota.reserve({ type: "assigned", priority: "critical", period, deliveryRef: del("legacy-m") });
+  assert.equal(r.allowed, true, "legacy monthly marker ignored (provider-period enforcement disabled)");
+  assert.equal((await rqRef().get()).data().monthlyExhaustedMonth, period.month, "legacy field NOT deleted");
+});
+
+test("concurrent reservations with a legacy marker present are governed ONLY by the app caps (no provider-marker denial)", async () => {
+  // Both legacy markers set for the current period; 5 concurrent reservations well under the
+  // app caps must ALL be allowed — none denied by a provider marker.
+  await rqRef().set({ dailyExhaustedDay: period.day, monthlyExhaustedMonth: period.month });
+  const ids = ["k1", "k2", "k3", "k4", "k5"];
+  await Promise.all(ids.map((i) => seedDelivery(i)));
+  const rs = await Promise.all(ids.map((i) => quota.reserve({ type: "reminder", period, deliveryRef: del(i) })));
+  for (const r of rs) {
+    assert.equal(r.allowed, true, "governed only by app caps");
+    assert.notEqual(r.reason, "resend_daily_exhausted");
+    assert.notEqual(r.reason, "resend_monthly_exhausted");
+  }
+  const u = await usage();
+  assert.equal(u.m.reservedCount, ids.length, "each reserved exactly once under the app cap");
+  // Legacy fields still present, untouched.
+  const g = (await rqRef().get()).data();
+  assert.equal(g.dailyExhaustedDay, period.day);
+  assert.equal(g.monthlyExhaustedMonth, period.month);
+});
+
+/* ---- a structurally invalid provider observation must NOT block email ---- */
+test("a poisoned Resend snapshot (used > plan) is IGNORED by the reserve gate (email not blocked)", async () => {
+  await rqRef().set({ monthlyUsed: 3001, observedAt: new Date().toISOString() }); // impossible value
+  await seedDelivery("poison");
+  const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("poison") });
+  assert.equal(r.allowed, true, "invalid provider value must not suppress sends");
+});
+
+/* ---- display/enforcement isolation: the v1 DISPLAY doc must NEVER gate a reservation ---- */
+test("a v1 display observation near the plan limit (2999/3000) does NOT influence reserve()", async () => {
+  // The display-only snapshot says the provider account is nearly full; reserve() must
+  // neither read it nor deny — enforcement is governed solely by the app-owned caps.
+  await db.doc("adminDiagnostics/emailUsageV1").set({
+    model: "resend-pre-send-used-v1", providerUsageProven: true,
+    monthly: { used: 2999, limit: 3000, percent: 100 }, daily: { used: 99, limit: 100, percent: 99 },
+    observedAt: new Date().toISOString(), source: "resend-send-response",
+  });
+  await seedDelivery("iso");
+  const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("iso") });
+  assert.equal(r.allowed, true, "display data must not gate a send");
+  assert.notEqual(r.reason, "resend_account_limit");
+});

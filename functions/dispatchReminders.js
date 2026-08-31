@@ -240,6 +240,9 @@ async function runDispatch() {
   let reconciled = 0;
   try { reconciled = await quota.reconcile(); } catch (e) { logger.warn("email reconcile failed", { error: e.message }); }
 
+  // (Resend account usage is observed from POST /emails responses on every send — see
+  // emailService.js/resendUsage.js — so there is no GET-based refresh to run here.)
+
   logger.info("dispatchReminders complete", {
     candidates: candidates.length, processed, skipped, failed, digests, reconciled,
     date: dailyDate, dailyStagesFailed: dailyFail,
