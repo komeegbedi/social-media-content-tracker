@@ -4,6 +4,7 @@
    and live. Refresh only re-reads stored state. Run: npm run test:ui */
 import { test, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
+import { StrictMode } from "react";
 
 const callFunction = vi.fn();
 let snapshotCb = null, snapshotErrCb = null, unsubCount = 0;
@@ -297,4 +298,45 @@ test("no stale attempt overwrites a newer one; unmount during a pending send is 
   await act(async () => { resolve1(); });                        // stale attempt 1 resolves late…
   expect(screen.getByText(NOT_SAVED)).toBeInTheDocument();       // …and must NOT clear the newer warning
   expect(() => utils.unmount()).not.toThrow();                   // unmount with async settled — no throw
+});
+
+/* ---- React StrictMode safety (dev setup→cleanup→setup must not latch mountedRef false) ---- */
+const NOT_OBS = { providerAvailable: false, providerUsageProven: false, monthly: null,
+  providerError: { code: "not-observed" }, internalTelemetry: { ...TELE4 } };
+
+test("StrictMode: a successful post-send re-read clears 'Updating usage…' (no false warning)", async () => {
+  callFunction.mockResolvedValue({ data: NOT_OBS });
+  let utils;
+  await act(async () => { utils = render(<StrictMode><EmailUsage refreshToken={0} recordError={null} /></StrictMode>); });
+  callFunction.mockResolvedValue({ data: v1Callable() });
+  await act(async () => { utils.rerender(<StrictMode><EmailUsage refreshToken={1} recordError={null} /></StrictMode>); });
+  expect(screen.queryByText("Updating usage…")).not.toBeInTheDocument();   // cleared, not stuck (mountedRef restored)
+  expect(screen.queryByText(NOT_SAVED)).not.toBeInTheDocument();
+  expect(screen.getByText("Last observed")).toBeInTheDocument();
+});
+
+test("StrictMode: unmount before a deferred re-read resolves → no post-unmount update / no throw", async () => {
+  callFunction.mockResolvedValue({ data: NOT_OBS });
+  let utils;
+  await act(async () => { utils = render(<StrictMode><EmailUsage refreshToken={0} recordError={null} /></StrictMode>); });
+  let resolveLate;
+  callFunction.mockReturnValueOnce(new Promise((r) => { resolveLate = () => r({ data: v1Callable() }); }));
+  await act(async () => { utils.rerender(<StrictMode><EmailUsage refreshToken={1} recordError={null} /></StrictMode>); }); // pending
+  await act(async () => { utils.unmount(); });
+  await act(async () => { resolveLate(); });                                // resolve after unmount
+  expect(screen.queryByText("Last observed")).not.toBeInTheDocument();      // unmounted; no state applied
+});
+
+test("StrictMode: a stale successful attempt cannot clear a newer authoritative failure", async () => {
+  callFunction.mockResolvedValue({ data: NOT_OBS });
+  let utils;
+  await act(async () => { utils = render(<StrictMode><EmailUsage refreshToken={0} recordError={null} /></StrictMode>); });
+  let resolve1;
+  callFunction.mockReturnValueOnce(new Promise((r) => { resolve1 = () => r({ data: v1Callable() }); }));
+  await act(async () => { utils.rerender(<StrictMode><EmailUsage refreshToken={1} recordError={null} /></StrictMode>); });  // updating, pending
+  callFunction.mockResolvedValue({ data: v1Callable() });
+  await act(async () => { utils.rerender(<StrictMode><EmailUsage refreshToken={2} recordError={"record-failed"} /></StrictMode>); }); // authoritative failure
+  expect(screen.getByText(NOT_SAVED)).toBeInTheDocument();
+  await act(async () => { resolve1(); });                                   // stale attempt 1 resolves late
+  expect(screen.getByText(NOT_SAVED)).toBeInTheDocument();                  // must NOT be cleared
 });

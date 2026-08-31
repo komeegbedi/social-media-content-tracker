@@ -134,7 +134,10 @@ export function EmailUsage({ refreshToken = 0, recordError = null }) {
   const firstToken = useRef(refreshToken);
   const attemptRef = useRef(refreshToken);
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);   // guard async setState on unmount
+  // StrictMode-safe: dev runs setup→cleanup→setup, so RESTORE true on every setup (a
+  // cleanup-only guard would latch false permanently and block the clear). Guards async
+  // setState after a real unmount.
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
   useEffect(() => {
     if (refreshToken === firstToken.current) return;            // ignore the initial mount value
     const attempt = refreshToken;
