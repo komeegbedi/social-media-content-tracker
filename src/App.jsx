@@ -534,8 +534,9 @@ function AdminEmailTest({ onSent }) {
       } else {
         setResult({ ok: true, msg: `Test email sent to ${addr}.` });
         // Tell the Email panel to re-read usage (deterministic feedback) — never closes
-        // the modal or clears this success message.
-        if (onSent) onSent();
+        // the modal or clears this success message. Pass the send result so the panel can
+        // surface a failure warning ONLY on an authoritative server usageRecordError.
+        if (onSent) onSent(res.data);
       }
     } catch (e) {
       // Keep the entered address so the admin can retry; never auto-close the panel.
@@ -579,12 +580,13 @@ function requiredNoticeCopy(required) {
 // listener still catches notifications/digests sent elsewhere).
 function EmailSection() {
   const [refreshToken, setRefreshToken] = useState(0);
+  const [recordError, setRecordError] = useState(null);   // authoritative server usageRecordError
   return (
     <>
-      <EmailUsage refreshToken={refreshToken} />
+      <EmailUsage refreshToken={refreshToken} recordError={recordError} />
       <div className="sb-usage-divider" />
       <div className="sb-mlabel">Send test email</div>
-      <AdminEmailTest onSent={() => setRefreshToken((n) => n + 1)} />
+      <AdminEmailTest onSent={(data) => { setRecordError((data && data.usageRecordError) || null); setRefreshToken((n) => n + 1); }} />
     </>
   );
 }

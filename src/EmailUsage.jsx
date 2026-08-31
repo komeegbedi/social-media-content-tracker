@@ -52,10 +52,13 @@ export function UsageRow({ label, block, note, naLabel = "Not provided by Resend
 }
 
 // refreshToken: bumped by the parent after a successful test send → deterministic re-read.
-export function EmailUsage({ refreshToken = 0 }) {
+// recordError: an AUTHORITATIVE server signal (from the send response's usageRecordError) that
+// the email sent but the observation could not be recorded. It is the ONLY trigger for the
+// failure warning — the panel never infers a recording failure from elapsed time.
+export function EmailUsage({ refreshToken = 0, recordError = null }) {
   const [usage, setUsage] = useState(null);   // view model | null (loading)
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState("");       // "" | "updating" | "sent-not-updated"
+  const [note, setNote] = useState("");       // "" | "updating" | "record-failed"
   const usageRef = useRef(null);
   useEffect(() => { usageRef.current = usage; }, [usage]);
 
@@ -122,35 +125,33 @@ export function EmailUsage({ refreshToken = 0 }) {
     return () => unsub();
   }, [applyNewer]);
 
-  // Deterministic feedback after a successful "Send test email": show "Updating usage…"
-  // and wait for EITHER provider usage OR app-safety telemetry to advance (via the live
-  // listener or the callable re-read). If nothing advances within the timeout, surface an
-  // actionable warning instead of a message that lingers forever. The baseline captures
-  // what "advanced" means. Cleared automatically once usage moves.
+  // Deterministic feedback after a successful "Send test email". The failure warning is driven
+  // SOLELY by the authoritative server signal `recordError` (the send response's
+  // usageRecordError) — never by a timeout. On a normal send we show "Updating usage…" while
+  // the re-read is in flight and clear it when THAT re-read resolves. The live listener renders
+  // the new observation the moment it lands — which can be BEFORE this callback runs; that is
+  // still a success and must never produce a warning.
   const firstToken = useRef(refreshToken);
-  const testBaseline = useRef(null);
-  const testTimer = useRef(null);
-  useEffect(() => () => clearTimeout(testTimer.current), []);
+  const attemptRef = useRef(refreshToken);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);   // guard async setState on unmount
   useEffect(() => {
-    if (refreshToken === firstToken.current) return; // ignore initial mount value
-    const u = usageRef.current;
-    testBaseline.current = { syncedMs: syncedMs(u), appSent: (u && u.internalTelemetry && u.internalTelemetry.appInitiatedThisMonth) ?? null };
+    if (refreshToken === firstToken.current) return;            // ignore the initial mount value
+    const attempt = refreshToken;
+    attemptRef.current = attempt;
+    if (recordError) {
+      // Authoritative: the email sent but the server reported the observation was not recorded.
+      setNote("record-failed");
+      load().catch(() => {});
+      return;
+    }
+    // Success path: transient "Updating usage…" cleared when the re-read settles — NEVER an
+    // error from elapsed time. A stale attempt or a record-failed state is never overwritten.
     setNote("updating");
-    load().catch(() => {});
-    clearTimeout(testTimer.current);
-    testTimer.current = setTimeout(() => { setNote((n) => (n === "updating" ? "not-saved" : n)); }, 8000);
-  }, [refreshToken, load]);
-
-  // Clear the "updating"/"not-saved" state as soon as usage advances past the baseline.
-  useEffect(() => {
-    const b = testBaseline.current;
-    if (!b || (note !== "updating" && note !== "not-saved")) return;
-    const nowSynced = syncedMs(usage);
-    const advancedProvider = Number.isFinite(nowSynced) && (!Number.isFinite(b.syncedMs) || nowSynced > b.syncedMs);
-    const nowApp = usage && usage.internalTelemetry ? usage.internalTelemetry.appInitiatedThisMonth : null;
-    const advancedApp = typeof nowApp === "number" && (b.appSent == null || nowApp > b.appSent);
-    if (advancedProvider || advancedApp) { setNote(""); clearTimeout(testTimer.current); testBaseline.current = null; }
-  }, [usage, note]);
+    load().catch(() => {}).finally(() => {
+      if (mountedRef.current && attemptRef.current === attempt) setNote((n) => (n === "updating" ? "" : n));
+    });
+  }, [refreshToken, recordError, load]);
 
   const tele = (usage && usage.internalTelemetry) || {};
   const appSent = tele.appInitiatedThisMonth;                       // UTC-calendar-month telemetry (NOT a provider cap)
@@ -224,9 +225,9 @@ export function EmailUsage({ refreshToken = 0 }) {
           )}
 
           {note === "updating" && <div className="sb-usage-help" aria-live="polite">Updating usage…</div>}
-          {note === "not-saved" && <div className="sb-usage-quiet" role="status">Email was sent, but the usage observation could not be saved. Check function logs.</div>}
-          {refreshWarn && note !== "not-saved" && <div className="sb-usage-quiet" role="status">Couldn’t refresh Resend usage just now. Showing the last observed value.</div>}
-          {listenerError && note !== "not-saved" && !refreshWarn && <div className="sb-usage-quiet" role="status">Live usage updates are unavailable right now (check your admin access). Use Refresh to re-read.</div>}
+          {note === "record-failed" && <div className="sb-usage-quiet" role="status">Email was sent, but the usage observation could not be saved. Check function logs.</div>}
+          {refreshWarn && note !== "record-failed" && <div className="sb-usage-quiet" role="status">Couldn’t refresh Resend usage just now. Showing the last observed value.</div>}
+          {listenerError && note !== "record-failed" && !refreshWarn && <div className="sb-usage-quiet" role="status">Live usage updates are unavailable right now (check your admin access). Use Refresh to re-read.</div>}
 
           {/* The app's OWN safety cap — clearly separate from the Resend account limit. */}
           {/* Internal app telemetry — NOT the Resend monthly quota. The monthly count is

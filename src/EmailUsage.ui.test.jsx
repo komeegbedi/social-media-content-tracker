@@ -224,3 +224,77 @@ test("Technical details cannot crash for any malformed source / error-code type"
   expect(screen.getByText("Unavailable")).toBeInTheDocument();           // still mounted
   expect(screen.queryAllByRole("progressbar").length).toBe(0);
 });
+
+/* ---- post-send feedback state machine: the false "could not be saved" fix ----
+   The failure warning is driven ONLY by an authoritative server `recordError`, never by a
+   timeout. Success (incl. a listener update that lands before the callback) never warns. */
+const NOT_SAVED = /Email was sent, but the usage observation could not be saved/;
+async function renderPanel(over = {}) {
+  callFunction.mockResolvedValue({ data: { providerAvailable: false, providerUsageProven: false, monthly: null,
+    providerError: { code: "not-observed" }, internalTelemetry: { ...TELE4 } } });
+  let utils;
+  await act(async () => { utils = render(<EmailUsage refreshToken={0} recordError={null} {...over} />); });
+  return utils;
+}
+
+test("listener update arrives BEFORE the post-send callback → success, no false 'could not be saved'", async () => {
+  const utils = await renderPanel();
+  await deliverSnap(v1Doc());                                   // observation lands first
+  expect(screen.getByText("44 / 3,000")).toBeInTheDocument();
+  callFunction.mockResolvedValue({ data: v1Callable() });        // …then the send callback fires
+  await act(async () => { utils.rerender(<EmailUsage refreshToken={1} recordError={null} />); });
+  expect(screen.queryByText(NOT_SAVED)).not.toBeInTheDocument();
+  expect(screen.getByText("Last observed")).toBeInTheDocument();
+  expect(screen.getByText("44 / 3,000")).toBeInTheDocument();
+});
+
+test("success callback arrives BEFORE the listener update → success, no false warning", async () => {
+  const utils = await renderPanel();
+  callFunction.mockResolvedValue({ data: v1Callable() });
+  await act(async () => { utils.rerender(<EmailUsage refreshToken={1} recordError={null} />); });
+  await deliverSnap(v1Doc());
+  expect(screen.queryByText(NOT_SAVED)).not.toBeInTheDocument();
+  expect(screen.getByText("Last observed")).toBeInTheDocument();
+});
+
+test("an explicit usageRecordError DOES show the failure warning", async () => {
+  const utils = await renderPanel();
+  callFunction.mockResolvedValue({ data: v1Callable() });
+  await act(async () => { utils.rerender(<EmailUsage refreshToken={1} recordError={"record-failed"} />); });
+  expect(screen.getByText(NOT_SAVED)).toBeInTheDocument();
+});
+
+test("successful recording never shows the failure warning after any elapsed time (no timer)", async () => {
+  vi.useFakeTimers();
+  try {
+    const utils = await renderPanel();
+    callFunction.mockResolvedValue({ data: v1Callable() });
+    await act(async () => { utils.rerender(<EmailUsage refreshToken={1} recordError={null} />); });
+    await act(async () => { vi.advanceTimersByTime(30000); });   // 30s — nothing may invent a failure
+    expect(screen.queryByText(NOT_SAVED)).not.toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
+
+test("a callable/listener failure stays DISTINCT from a recording failure", async () => {
+  const utils = await renderPanel();
+  await deliverSnap(v1Doc());                                    // valid observation shown
+  callFunction.mockResolvedValue({ data: { providerAvailable: false, providerUsageProven: false, monthly: null,
+    providerError: { code: "read-failed" }, internalTelemetry: { ...TELE4 } } });
+  await act(async () => { screen.getByRole("button", { name: /reload saved usage/i }).click(); });
+  expect(screen.getByText(/Couldn.t refresh Resend usage just now/)).toBeInTheDocument();
+  expect(screen.queryByText(NOT_SAVED)).not.toBeInTheDocument(); // NOT the record-failure copy
+});
+
+test("no stale attempt overwrites a newer one; unmount during a pending send is clean", async () => {
+  const utils = await renderPanel();
+  // Attempt 1 (success) with a DEFERRED callable, so its resolution lands AFTER attempt 2.
+  let resolve1;
+  callFunction.mockReturnValueOnce(new Promise((r) => { resolve1 = () => r({ data: v1Callable() }); }));
+  await act(async () => { utils.rerender(<EmailUsage refreshToken={1} recordError={null} />); }); // note "updating", load pending
+  callFunction.mockResolvedValue({ data: v1Callable() });
+  await act(async () => { utils.rerender(<EmailUsage refreshToken={2} recordError={"record-failed"} />); }); // note "record-failed"
+  expect(screen.getByText(NOT_SAVED)).toBeInTheDocument();
+  await act(async () => { resolve1(); });                        // stale attempt 1 resolves late…
+  expect(screen.getByText(NOT_SAVED)).toBeInTheDocument();       // …and must NOT clear the newer warning
+  expect(() => utils.unmount()).not.toThrow();                   // unmount with async settled — no throw
+});
