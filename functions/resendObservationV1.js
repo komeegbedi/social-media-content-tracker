@@ -28,9 +28,13 @@
 const { logger } = require("firebase-functions/v2");
 const { pct1, validateDimension } = require("./resendQuotaMath");
 
-const posInt = (v, d) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : d; };
-const PLAN_MONTHLY_LIMIT = posInt(process.env.RESEND_MONTHLY_LIMIT, 3000);
-const PLAN_DAILY_LIMIT = posInt(process.env.RESEND_DAILY_LIMIT, 100);
+// IMMUTABLE v1 schema limits. The "resend-pre-send-used-v1" model is DEFINED at these
+// literals; it is deliberately NOT derived from enforcement env (RESEND_MONTHLY_LIMIT /
+// RESEND_DAILY_LIMIT), so a production override of the app's caps can never make the server
+// publish a v1 document that the client necessarily rejects. A future plan with different
+// limits ⇒ a NEW provider model version, never a re-parameterization of v1.
+const V1_MONTHLY_LIMIT = 3000;
+const V1_DAILY_LIMIT = 100;
 
 const V1_DISPLAY_DOC = "adminDiagnostics/emailUsageV1";
 const MODEL = "resend-pre-send-used-v1";
@@ -44,6 +48,7 @@ const PROVIDER_USAGE_DISPLAY_ENABLED = true;
 
 // ---- strict V1 schema validation (the SAME contract enforced on the client) ----
 const isNonNegInt = (n) => Number.isInteger(n) && n >= 0;
+const isPosInt = (n) => Number.isInteger(n) && n > 0;
 // A canonical ISO instant that round-trips through Date (the form new Date().toISOString()
 // produces). Rejects strings, junk, and non-canonical variants.
 const isCanonicalIso = (s) =>
@@ -66,11 +71,12 @@ function sanitizeV1Snapshot(snap) {
   const claims = !!(snap && (snap.model != null || snap.providerUsageProven === true || snap.monthly != null));
   if (!claims) return { ok: false, code: "not-observed" };
   if (snap.model !== MODEL || snap.providerUsageProven !== true) return { ok: false, code: "provider-usage-unverified" };
-  const monthly = sanitizeBlock(snap.monthly, PLAN_MONTHLY_LIMIT);
-  if (!monthly || !isCanonicalIso(snap.observedAt)) return { ok: false, code: "invalid-provider-observation" };
+  const monthly = sanitizeBlock(snap.monthly, V1_MONTHLY_LIMIT);
+  // The full declared contract, incl. the exact source string and a canonical observedAt.
+  if (!monthly || !isCanonicalIso(snap.observedAt) || snap.source !== SOURCE) return { ok: false, code: "invalid-provider-observation" };
   let daily = null, dailyReason;
   if (snap.daily != null) {                                    // present block ⇒ reason must be null
-    daily = sanitizeBlock(snap.daily, PLAN_DAILY_LIMIT);
+    daily = sanitizeBlock(snap.daily, V1_DAILY_LIMIT);
     if (!daily || snap.dailyReason != null) return { ok: false, code: "invalid-provider-observation" };
     dailyReason = null;
   } else {                                                     // absent block ⇒ exactly not-provided|invalid
@@ -79,12 +85,13 @@ function sanitizeV1Snapshot(snap) {
   }
   return { ok: true, monthly, daily, dailyReason, observedAt: snap.observedAt };
 }
-// Sanitize the four-field internal-telemetry contract (matches emailQuota's write). All
-// non-negative integers, and each used ≤ its configured limit; else null (fail closed).
+// Sanitize the four-field internal-telemetry contract (matches emailQuota's write): USED
+// counters are non-negative integers, LIMITS are POSITIVE integers (a 0/0 pair is invalid),
+// and each used ≤ its limit; else null (fail closed).
 function sanitizeTelemetry(t) {
   if (!t) return null;
   const { appInitiatedThisMonth: mUsed, appSafetyCap: mCap, appDailyThisDay: dUsed, appDailyLimit: dCap } = t;
-  if (![mUsed, mCap, dUsed, dCap].every(isNonNegInt)) return null;
+  if (!isNonNegInt(mUsed) || !isNonNegInt(dUsed) || !isPosInt(mCap) || !isPosInt(dCap)) return null;
   if (mUsed > mCap || dUsed > dCap) return null;
   return { appInitiatedThisMonth: mUsed, appSafetyCap: mCap, appDailyThisDay: dUsed, appDailyLimit: dCap };
 }
@@ -124,28 +131,28 @@ async function recordObservationV1(observed, { runTransaction, proven = QUOTA_HE
   const deliveryId = o.deliveryId;
   const responseReceivedAt = o.responseReceivedAt;
   if (!deliveryId || !responseReceivedAt) return { skipped: true, reason: "missing-delivery-context" };
-  // Validate + canonicalize the ordering timestamp BEFORE any write. Reject a malformed
-  // incoming value; compare by milliseconds (never lexicographically). Store the canonical
-  // ISO form so ordering is unambiguous.
+  // Require a CANONICAL ISO instant BEFORE any transaction/receipt mutation — not merely a
+  // Date.parse-able value (so "2026-08-30", odd tz forms, numbers, etc. are rejected without
+  // writing). Ordering compares by milliseconds (never lexicographically).
+  if (!isCanonicalIso(responseReceivedAt)) { logger.warn("resend usage v1: non-canonical responseReceivedAt (rejected)", {}); return { skipped: true, reason: "invalid-timestamp" }; }
   const incomingMs = Date.parse(responseReceivedAt);
-  if (Number.isNaN(incomingMs)) { logger.warn("resend usage v1: invalid responseReceivedAt (rejected)", {}); return { skipped: true, reason: "invalid-timestamp" }; }
-  const observedAtIso = new Date(incomingMs).toISOString();
+  const observedAtIso = responseReceivedAt;
 
   // MONTHLY is REQUIRED. Malformed/missing/at-or-over-capacity → NO provider observation at
   // all (never fabricate zero). Both before-send and computed-after-send are validated.
-  const m = validateDimension(o.monthlyUsedBeforeSend, o.acceptedUnits, PLAN_MONTHLY_LIMIT);
+  const m = validateDimension(o.monthlyUsedBeforeSend, o.acceptedUnits, V1_MONTHLY_LIMIT);
   if (!m.valid) {
     logger.warn("resend usage v1: monthly observation rejected (not written)", { code: m.code, reason: m.reason });
     return { invalid: true, dimension: "monthly", reason: m.reason };
   }
-  const monthly = { used: m.after, limit: PLAN_MONTHLY_LIMIT, percent: pct1(m.after, PLAN_MONTHLY_LIMIT) };
+  const monthly = { used: m.after, limit: V1_MONTHLY_LIMIT, percent: pct1(m.after, V1_MONTHLY_LIMIT) };
 
   // DAILY is OPTIONAL. Absent → not-provided. Present-but-invalid → keep monthly, drop daily
   // with an EXPLICIT "invalid" reason + a sanitized server warning (no raw values/headers).
   let daily = null, dailyReason = "not-provided";
   if (o.dailyUsedBeforeSend != null) {
-    const d = validateDimension(o.dailyUsedBeforeSend, o.acceptedUnits, PLAN_DAILY_LIMIT);
-    if (d.valid) { daily = { used: d.after, limit: PLAN_DAILY_LIMIT, percent: pct1(d.after, PLAN_DAILY_LIMIT) }; dailyReason = null; }
+    const d = validateDimension(o.dailyUsedBeforeSend, o.acceptedUnits, V1_DAILY_LIMIT);
+    if (d.valid) { daily = { used: d.after, limit: V1_DAILY_LIMIT, percent: pct1(d.after, V1_DAILY_LIMIT) }; dailyReason = null; }
     else { dailyReason = "invalid"; logger.warn("resend usage v1: daily observation invalid (monthly retained)", { reason: d.reason }); }
   }
 
@@ -188,16 +195,19 @@ async function recordObservationV1(observed, { runTransaction, proven = QUOTA_HE
 async function getObservationV1({ store, telemetry } = {}) {
   const st = store || firestoreStore();
   const tele = sanitizeTelemetry(telemetry || await displayTelemetry());
-  let snap = null;
-  try { snap = await st.read(); } catch { snap = null; }
-  const unavailable = (code) => ({
+  const unavailable = (code, snap) => ({
     providerAvailable: false, providerUsageProven: false, source: SOURCE, monthly: null, daily: null,
     dailyReason: null, lastSyncedAt: (snap && isCanonicalIso(snap.observedAt)) ? snap.observedAt : null,
     observedVia: null, stale: false, internalTelemetry: tele, providerError: { code },
   });
-  if (!PROVIDER_USAGE_DISPLAY_ENABLED) return unavailable("not-observed");
+  if (!PROVIDER_USAGE_DISPLAY_ENABLED) return unavailable("not-observed", null);
+  // An ACTUAL read failure is distinct from a genuine absence: return "read-failed" so the
+  // client can preserve a shown observation and never mislabel a transient outage as
+  // "no usage observed". `not-observed` is returned ONLY on a successful, empty read.
+  let snap;
+  try { snap = await st.read(); } catch { return unavailable("read-failed", null); }
   const v = sanitizeV1Snapshot(snap);
-  if (!v.ok) return unavailable(v.code);   // not-observed | provider-usage-unverified | invalid-provider-observation
+  if (!v.ok) return unavailable(v.code, snap);   // not-observed | provider-usage-unverified | invalid-provider-observation
   return {
     providerAvailable: true, providerUsageProven: true, model: MODEL, source: SOURCE,
     monthly: v.monthly, daily: v.daily, dailyReason: v.dailyReason,
@@ -210,5 +220,5 @@ module.exports = {
   recordObservationV1, getObservationV1, displayTelemetry,
   sanitizeV1Snapshot, sanitizeBlock, sanitizeTelemetry, isCanonicalIso, safePercent,
   QUOTA_HEADER_MODEL_PROVEN, PROVIDER_USAGE_DISPLAY_ENABLED,
-  PLAN_MONTHLY_LIMIT, PLAN_DAILY_LIMIT, V1_DISPLAY_DOC, MODEL, SOURCE,
+  V1_MONTHLY_LIMIT, V1_DAILY_LIMIT, V1_DISPLAY_DOC, MODEL, SOURCE,
 };

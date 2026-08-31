@@ -347,9 +347,10 @@ const RESEND_SEND_TIMEOUT_MS = Number(process.env.RESEND_SEND_TIMEOUT_MS) || 100
 
 /* THE Resend send — a raw POST /emails so we can observe response HEADERS (the SDK
    hides them). Resend returns the account quota (x-resend-monthly-quota / -daily-quota)
-   on SEND, not on GET, so we record the latest "last observed" usage on any response
-   that carries it — including a 429 quota-exceeded (best-effort; a failed record never
-   fails the send). Hardened: AbortController timeout + explicit User-Agent, preserving
+   on SEND, not on GET, so we record the latest "last observed" usage ONLY from a
+   SUCCESSFUL response (res.ok) that carries a valid monthly header — a 429/failed/timed-out
+   send never advances the display (best-effort; a failed record never fails the send).
+   Hardened: AbortController timeout + explicit User-Agent, preserving
    Authorization / Content-Type / Idempotency-Key. Returns the { data, error } contract
    the callers expect; `transport` is set on a timeout/network error (uncertain → retry
    with the SAME idempotency key). `fetchImpl`/`record` are injectable for tests. */
@@ -389,7 +390,7 @@ async function resendPostSend(key, payload, idempotencyKey, { fetchImpl = global
   } catch { /* header iteration not supported → skip */ }
 
   // The quota headers are treated as PRE-SEND used values, but their semantics proved
-  // unreliable (a value == plan capacity was returned) — recordObservedUsage now VALIDATES
+  // unreliable (a value == plan capacity was returned) — recordObservationV1 fully VALIDATES
   // before persisting. Only a SUCCESSFUL send counts; never on a rejection/timeout/uncertain.
   const monthlyUsedBeforeSend = parseIntHeader(res.headers.get("x-resend-monthly-quota"));
   const dailyUsedBeforeSend = parseIntHeader(res.headers.get("x-resend-daily-quota"));
