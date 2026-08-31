@@ -1,8 +1,7 @@
-/* EmailUsage (rendered) — STAGE A build (provider accounting DISABLED for rollback safety).
-   Provider totals are never rendered; a valid Stage D document/callable reads as
-   Unavailable. App-safety telemetry stays visible and live. Scoped failures never block.
-   The full provider-rendering behaviour is covered on the Stage D branch.
-   Run: npm run test:ui */
+/* EmailUsage (rendered) — DISPLAY-ONLY v1 build. A proven v1 observation renders
+   "Last observed" totals and auto-updates via the emailUsageV1 listener without Refresh.
+   Unknown/unproven data fails closed to Unavailable; app-safety telemetry stays visible
+   and live. Refresh only re-reads stored state. Run: npm run test:ui */
 import { test, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 
@@ -13,20 +12,20 @@ vi.mock("./firebase", () => ({ callFunction: (...a) => callFunction(...a), db: {
 vi.mock("firebase/firestore", () => ({ onSnapshot: (...a) => onSnapshot(...a), doc: () => ({}) }));
 
 const { EmailUsage } = await import("./EmailUsage.jsx");
-const { periodKeys } = await import("./emailUsageDoc.js");
+const MODEL = "resend-pre-send-used-v1";
 const NOW = Date.now();
-const CUR = periodKeys(NOW);
+const iso = (ms) => new Date(ms).toISOString();
 
-// A fully-valid Stage D callable result / document (proven + known model + bounded totals).
-const stageDCallable = (over = {}) => ({
-  providerAvailable: true, providerUsageProven: true, providerUsageModel: "resend-pre-send-used-v1", source: "resend",
+// A fully-valid v1 callable result (getEmailUsage) and listener document.
+const v1Callable = (over = {}) => ({
+  providerAvailable: true, providerUsageProven: true, model: MODEL, source: "resend-send-response",
   monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: { used: 5, limit: 100, percent: 5 }, dailyReason: null,
-  lastSyncedAt: new Date(NOW).toISOString(), internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 }, ...over,
+  lastSyncedAt: iso(NOW), internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 }, ...over,
 });
-const stageDDoc = (over = {}) => ({
+const v1Doc = (over = {}) => ({
+  model: MODEL, providerUsageProven: true,
   monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: { used: 5, limit: 100, percent: 5 }, dailyReason: null,
-  periodMonth: CUR.month, periodDay: CUR.day, observedAt: new Date(NOW).toISOString(), observedVia: "send",
-  source: "resend", providerUsageProven: true, providerUsageModel: "resend-pre-send-used-v1",
+  observedAt: iso(NOW), source: "resend-send-response",
   internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 }, ...over,
 });
 const deliverSnap = async (data) => { await act(async () => { snapshotCb({ exists: () => true, data: () => data }); }); };
@@ -34,59 +33,78 @@ async function renderResolved(data) { callFunction.mockResolvedValue({ data }); 
 
 beforeEach(() => { callFunction.mockReset(); onSnapshot.mockClear(); snapshotCb = null; snapshotErrCb = null; unsubCount = 0; });
 
-test("rollback safety: a valid Stage D CALLABLE result renders Unavailable, no totals, app-safety shown", async () => {
-  await renderResolved(stageDCallable());
-  expect(screen.getByText("Unavailable")).toBeInTheDocument();
-  expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
-  expect(screen.queryByText("Observed on send")).not.toBeInTheDocument();
+test("a proven v1 callable renders 'Last observed' totals + timestamp + app-safety", async () => {
+  await renderResolved(v1Callable());
+  expect(screen.getByText("Resend account usage")).toBeInTheDocument();
+  expect(screen.getByText("Last observed")).toBeInTheDocument();
+  expect(screen.getByText("44 / 3,000")).toBeInTheDocument();
+  expect(screen.getByText("5 / 100")).toBeInTheDocument();
+  expect(screen.getByText(/Updated .* after an app email was accepted\./)).toBeInTheDocument();
+  expect(screen.getByText(/Resend updates here after this app sends an email\./)).toBeInTheDocument();
   expect(screen.getByText("114 successful deliveries")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: /view in resend/i })).toBeInTheDocument();
 });
 
-test("unverified provider state: Unavailable badge + reset-window message; no 'Not observed yet'; historical time only under Technical details", async () => {
-  await renderResolved(stageDCallable()); // carries lastSyncedAt → a historical observation exists
-  expect(screen.getByText("Resend account usage")).toBeInTheDocument();          // section title
-  expect(screen.getByText("Unavailable")).toBeInTheDocument();                    // badge
-  expect(screen.getByText(/Resend usage is temporarily unavailable while we verify when its quota counters reset/i)).toBeInTheDocument();
-  // Must NOT imply nothing was ever observed, and must NOT show the historical time in the primary.
-  expect(screen.queryByText("Not observed yet")).not.toBeInTheDocument();
-  expect(screen.queryByText(/^Last observed/)).not.toBeInTheDocument();
-  // No provider totals or bars.
+test("live auto-update: a newer emailUsageV1 snapshot advances totals WITHOUT Refresh", async () => {
+  await renderResolved(v1Callable());
+  expect(screen.getByText("44 / 3,000")).toBeInTheDocument();
+  await deliverSnap(v1Doc({ monthly: { used: 60, limit: 3000, percent: 2 }, observedAt: iso(NOW + 60000) }));
+  expect(screen.getByText("60 / 3,000")).toBeInTheDocument();
+  expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
+});
+
+test("daily NOT provided → the daily row is retained with an explicit reason (never hidden)", async () => {
+  await renderResolved(v1Callable({ daily: null, dailyReason: "not-provided" }));
+  expect(screen.getByText("Daily usage")).toBeInTheDocument();
+  expect(screen.getByText("Not provided")).toBeInTheDocument();
+  expect(screen.getByText(/Resend did not provide a daily counter for this send\./)).toBeInTheDocument();
+});
+
+test("daily INVALID → explicit invalid copy (not collapsed to not-provided)", async () => {
+  await renderResolved(v1Callable({ daily: null, dailyReason: "invalid" }));
+  expect(screen.getByText("Daily usage")).toBeInTheDocument();
+  expect(screen.getByText(/Daily usage was unavailable for this observation\./)).toBeInTheDocument();
+});
+
+test("no observation yet → 'No Resend usage observed yet'; app-safety still shown", async () => {
+  await renderResolved({ providerAvailable: false, providerUsageProven: false, monthly: null,
+    providerError: { code: "not-observed" }, internalTelemetry: { appInitiatedThisMonth: 0, appSafetyCap: 2800 } });
+  expect(screen.getByText(/No Resend usage observed yet/)).toBeInTheDocument();
+  expect(screen.queryByText("Last observed")).not.toBeInTheDocument();
+  expect(screen.getByText(/successful deliveries/)).toBeInTheDocument();
+});
+
+test("unknown/unproven model fails closed to Unavailable (no totals)", async () => {
+  await renderResolved(v1Callable({ model: "resend-future-v2" }));
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
   expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
   expect(screen.queryAllByRole("progressbar").length).toBe(0);
-  // Historical time appears ONLY inside the (collapsed) Technical details.
-  const hist = screen.getByText(/Historical unverified observation/i);
-  expect(hist.closest("details")).not.toBeNull();
-  expect(screen.getByText(/Not shown as current usage/i)).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: /view in resend/i })).toBeInTheDocument();
 });
 
-test("internal-period wording is honest — neither UTC period claims to be the authoritative Resend period", async () => {
-  await renderResolved({ ...stageDCallable(), internalTelemetry: { appInitiatedThisMonth: 119, appSafetyCap: 2800, appDailyThisDay: 5, appDailyLimit: 90 } });
+test("app telemetry keeps its explicit UTC labels, separate from provider usage", async () => {
+  await renderResolved(v1Callable({ internalTelemetry: { appInitiatedThisMonth: 119, appSafetyCap: 2800, appDailyThisDay: 5, appDailyLimit: 90 } }));
   expect(screen.getByText(/App email activity · UTC calendar month/i)).toBeInTheDocument();
   expect(screen.getByText("119 successful deliveries")).toBeInTheDocument();
-  expect(screen.getByText(/Internal telemetry; not the Resend monthly quota/i)).toBeInTheDocument();
   expect(screen.getByText(/Daily app limit · UTC day/i)).toBeInTheDocument();
   expect(screen.getByText("5 / 90")).toBeInTheDocument();
-  expect(screen.getByText(/Resend.s daily reset window is still being verified/i)).toBeInTheDocument();
-  // Never claims to be the authoritative Resend period / a guaranteed provider guard.
-  for (const bad of [/safety cap/i, /real guard/i, /guarantee/i]) expect(screen.queryByText(bad)).not.toBeInTheDocument();
 });
 
-test("rollback safety: a valid Stage D DOCUMENT via the listener renders Unavailable; telemetry still advances", async () => {
-  await renderResolved(stageDCallable());
-  await deliverSnap(stageDDoc({ internalTelemetry: { appInitiatedThisMonth: 120, appSafetyCap: 2800 } }));
-  expect(screen.getByText("Unavailable")).toBeInTheDocument();
-  expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
-  expect(screen.getByText("120 successful deliveries")).toBeInTheDocument(); // app-safety telemetry still live
+test("Refresh re-reads stored state ('Reload saved usage'); never claims to contact Resend", async () => {
+  await renderResolved(v1Callable());
+  const btn = screen.getByRole("button", { name: /reload saved usage/i });
+  expect(btn).toBeInTheDocument();
+  expect(btn.getAttribute("title")).toBe("Reload saved usage");
+  callFunction.mockResolvedValue({ data: v1Callable({ monthly: { used: 70, limit: 3000, percent: 2.3 }, lastSyncedAt: iso(NOW + 120000) }) });
+  await act(async () => { btn.click(); });
+  expect(callFunction).toHaveBeenCalledWith("getEmailUsage", {});
+  expect(screen.getByText("70 / 3,000")).toBeInTheDocument();
 });
 
-test("Refresh does not restore provider totals (accounting disabled)", async () => {
-  await renderResolved(stageDCallable());
-  callFunction.mockResolvedValue({ data: stageDCallable({ monthly: { used: 45, limit: 3000, percent: 1.5 } }) });
-  await act(async () => { screen.getByRole("button", { name: /refresh/i }).click(); });
-  expect(screen.queryByText("45 / 3,000")).not.toBeInTheDocument();
-  expect(screen.getByText("Unavailable")).toBeInTheDocument();
+test("no forbidden internal fields are ever in the DOM", async () => {
+  await renderResolved(v1Callable());
+  for (const bad of [/monthlyUsedBeforeSend/i, /acceptedUnits/i, /deliveryId/i, /idempotency/i, /Bearer /i, /@example\.com/i]) {
+    expect(screen.queryByText(bad)).not.toBeInTheDocument();
+  }
 });
 
 test("a callable rejection is contained — inline error, no throw", async () => {
@@ -96,13 +114,13 @@ test("a callable rejection is contained — inline error, no throw", async () =>
 });
 
 test("a Firestore listener error is contained — scoped status, no throw", async () => {
-  await renderResolved(stageDCallable());
+  await renderResolved(v1Callable());
   await act(async () => { snapshotErrCb(new Error("permission-denied")); });
   expect(screen.getByText(/live usage updates are unavailable right now/i)).toBeInTheDocument();
 });
 
 test("the listener unsubscribes on unmount", async () => {
-  const { unmount } = await renderResolved(stageDCallable());
+  const { unmount } = await renderResolved(v1Callable());
   unmount();
   expect(unsubCount).toBe(1);
 });

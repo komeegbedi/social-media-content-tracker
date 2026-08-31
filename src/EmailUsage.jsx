@@ -22,7 +22,7 @@ const fmtSync = (iso) => { try { return new Date(iso).toLocaleString(undefined, 
 const syncedMs = (u) => (u && u.lastSyncedAt ? Date.parse(u.lastSyncedAt) : NaN);
 const totalsLine = (u) => {
   if (!u || !u.providerAvailable || !u.monthly) return "";
-  const d = u.daily ? `, today ${u.daily.used} of ${u.daily.limit}` : "";
+  const d = u.daily ? `, ${u.daily.used} of ${u.daily.limit} daily` : "";
   return `Resend usage: ${u.monthly.used} of ${u.monthly.limit} monthly${d}.`;
 };
 
@@ -92,8 +92,8 @@ export function EmailUsage({ refreshToken = 0 }) {
   // surfaced (distinct from "waiting for usage").
   const [listenerError, setListenerError] = useState(false);
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, "adminDiagnostics", "emailUsage"),
-      (snap) => { setListenerError(false); if (snap.exists()) applyNewer(presentEmailUsageDoc(snap.data(), Date.now())); },
+    const unsub = onSnapshot(doc(db, "adminDiagnostics", "emailUsageV1"),
+      (snap) => { setListenerError(false); if (snap.exists()) applyNewer(presentEmailUsageDoc(snap.data())); },
       () => { setListenerError(true); });
     return () => unsub();
   }, [applyNewer]);
@@ -137,10 +137,9 @@ export function EmailUsage({ refreshToken = 0 }) {
   const errCode = usage && usage.providerError && usage.providerError.code;
   const invalid = errCode === "invalid-provider-observation" || errCode === "provider-usage-unverified";
   const badge = !usage ? null
-    : invalid ? { label: "Unavailable", cls: "err" }               // never green, never a 100% bar
-    : usage.providerAvailable && !usage.stale ? { label: "Observed on send", cls: "ok" }
-    : usage.providerAvailable && usage.stale ? { label: "Last observed (stale)", cls: "warn" }
-    : { label: "Not yet observed", cls: "warn" };
+    : usage.providerAvailable ? { label: "Last observed", cls: "ok" } // visible text, not color-only
+    : invalid ? { label: "Unavailable", cls: "err" }                 // never green, never a 100% bar
+    : { label: "Not observed yet", cls: "warn" };
 
   return (
     <section className="sb-emailusage" aria-label="Email usage">
@@ -168,18 +167,31 @@ export function EmailUsage({ refreshToken = 0 }) {
           {usage.providerAvailable ? (
             <div className="sb-usage-live">
               <UsageRow label="Monthly usage" block={usage.monthly} />
-              <UsageRow label="Today" block={usage.daily}
-                naLabel={usage.dailyReason === "not-observed-today" ? "No send yet today" : "Not provided by Resend"} />
+              {/* Daily row is ALWAYS shown — a valid block, or an explicit reason (never hidden). */}
+              {usage.daily ? (
+                <UsageRow label="Daily usage" block={usage.daily} />
+              ) : (
+                <div className="sb-usagerow">
+                  <div className="sb-usagerow-head"><span>Daily usage</span><b className="sb-usagerow-na">Not provided</b></div>
+                  <div className="sb-usagerow-foot">
+                    {usage.dailyReason === "invalid"
+                      ? "Daily usage was unavailable for this observation."
+                      : "Resend did not provide a daily counter for this send."}
+                  </div>
+                </div>
+              )}
+              <div className="sb-usage-note" role="note">
+                Resend updates here after this app sends an email. Other Resend activity appears after the next app send.
+              </div>
             </div>
           ) : (
             <div className="sb-usage-note" role="status">
               {(() => {
                 const code = usage.providerError && usage.providerError.code;
                 if (code === "call-failed") return "Couldn't load usage just now. Try again.";
-                if (code === "provider-usage-unverified") return "Resend usage is temporarily unavailable while we verify when its quota counters reset.";
+                if (code === "provider-usage-unverified") return "Resend account usage couldn't be verified; an unrecognized reading was ignored. App safety usage below is unaffected.";
                 if (code === "invalid-provider-observation") return "Resend account usage couldn't be verified (an invalid reading was ignored). App safety usage below is unaffected.";
-                if (code === "not-observed-this-month") return "No Resend usage observed this month yet. It appears after the app sends an email this month.";
-                return "No Resend usage observed yet. Account usage appears here after the app sends an email (Resend only reports quota on send).";
+                return "No Resend usage observed yet. Send an email through this app to load it.";
               })()}
             </div>
           )}
@@ -208,10 +220,10 @@ export function EmailUsage({ refreshToken = 0 }) {
 
           <div className="sb-usage-foot">
             <span className="sb-sub" style={{ fontSize: 12 }}>
-              {usage.providerAvailable && synced ? `Last observed ${synced}${usage.stale ? " · stale" : ""}` : ""}
+              {usage.providerAvailable && synced ? `Updated ${synced} after an app email was accepted.` : ""}
             </span>
             <button type="button" className="sb-usage-refresh" onClick={() => load()} disabled={busy}
-              title="Re-reads the latest observation. Does not contact Resend.">
+              aria-label="Reload saved usage" title="Reload saved usage">
               {busy ? "Refreshing…" : "Refresh"}</button>
           </div>
 

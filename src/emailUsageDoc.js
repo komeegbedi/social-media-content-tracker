@@ -1,105 +1,64 @@
-/* Convert a sanitized adminDiagnostics/emailUsage document into the EmailUsage view
-   model, applying the SAME period-awareness as the server callable
-   (functions/resendUsage.js getResendQuotaUsage) so the real-time listener and the
-   callable can't disagree. Pure + framework-free so it's node-unit-testable.
-   Internal telemetry (app-initiated count, safety cap) is NOT in the sanitized doc —
-   it comes only from the admin callable and is merged in by the component. */
+/* Convert the sanitized adminDiagnostics/emailUsageV1 document (and the getEmailUsage
+   callable result) into the EmailUsage view model. DISPLAY-ONLY v1 "last observed" model:
+   there is NO UTC period inference here — the newest observation is shown as-is with its
+   timestamp. Pure + framework-free so it's node-unit-testable. Internal telemetry
+   (app-initiated count, safety cap) is a SEPARATE, disjoint field and is preserved even
+   when provider usage is unavailable. */
 
-const STALE_MS = 12 * 60 * 60 * 1000; // an observation older than this is flagged stale
-
-// ROLLBACK-SAFETY: this is the Stage A (containment) build — provider account accounting is
-// DISABLED here. The client rejects EVERY provider model, so if a rollback to this build
-// happens while a valid Stage D document (providerUsageProven:true, a known model) is still
-// in Firestore, the panel shows Unavailable IMMEDIATELY — no wait for another send, no
-// Firestore cleanup. (The Stage D build flips this to true and additionally checks the
-// model version.)
-export const PROVIDER_ACCOUNTING_ENABLED = false;
-export const SUPPORTED_PROVIDER_MODELS = [];
+// DISPLAY trust boundary. Provider usage renders ONLY for the exact proven v1 model with
+// providerUsageProven===true; everything else fails closed to Unavailable. This flag is
+// DISPLAY-ONLY and unrelated to enforcement (which never reads this document).
+export const PROVIDER_USAGE_DISPLAY_ENABLED = true;
+export const SUPPORTED_PROVIDER_MODELS = ["resend-pre-send-used-v1"];
 const providerTrusted = (d) =>
-  PROVIDER_ACCOUNTING_ENABLED && d && d.providerUsageProven === true && SUPPORTED_PROVIDER_MODELS.includes(d.providerUsageModel);
+  PROVIDER_USAGE_DISPLAY_ENABLED && d && d.providerUsageProven === true && SUPPORTED_PROVIDER_MODELS.includes(d.model);
 
-export function periodKeys(nowMs) {
-  const iso = new Date(nowMs).toISOString();
-  return { month: iso.slice(0, 7), day: iso.slice(0, 10) };
+// Does the document even CLAIM a provider observation? (A telemetry-only doc — written by a
+// send with no valid headers — carries internalTelemetry but no model/proof: that is
+// "not-observed", not "unavailable".)
+const claimsProvider = (d) => !!(d && (d.model != null || d.providerUsageProven === true || d.monthly != null));
+
+const intOk = (n) => Number.isInteger(n) && n >= 0;
+const blockValid = (b) => !!b && intOk(b.used) && (!Number.isInteger(b.limit) || b.used <= b.limit);
+
+// Normalize the daily block + reason enum (null | "not-provided" | "invalid"). A present
+// daily block must be structurally valid; otherwise it collapses to a reason.
+function normalizeDaily(d) {
+  const reason = d && (d.dailyReason === "not-provided" || d.dailyReason === "invalid") ? d.dailyReason : null;
+  if (d && d.daily && blockValid(d.daily)) return { daily: d.daily, dailyReason: null };
+  return { daily: null, dailyReason: reason || "not-provided" };
 }
 
-// TRUST BOUNDARY for the admin callable (getEmailUsage) result. The callable returns a
-// view-model, but an OLD (pre-fix) callable — or any callable during a mixed-version
-// rollout — can report providerAvailable:true with an unproven/poisoned monthly (e.g. a
-// latched 3001, or even a plausible-looking 44). A bounded number is NOT proof. Provider
-// totals are trusted ONLY when the server stamped providerUsageProven===true AND the
-// numbers are structurally valid (finite non-negative integer ≤ plan limit) with the
-// required source metadata. Otherwise provider usage is Unavailable; independently valid
-// internalTelemetry is preserved. This enforces the SAME providerUsageProven===true rule as
-// presentEmailUsageDoc, so the callable path can never bypass the snapshot's trust boundary.
-// (Period-awareness is applied server-side before the result is returned.)
+const unavailable = (code, d, tele) => ({
+  providerAvailable: false, source: (d && d.source) || "internal-fallback", monthly: null, daily: null,
+  dailyReason: null, lastSyncedAt: (d && d.observedAt) || (d && d.lastSyncedAt) || null, observedVia: null,
+  stale: false, internalTelemetry: tele, providerError: { code },
+});
+
+// Build the shared view model from a sanitized provider snapshot (doc OR callable result).
+function viewFrom(d, tele) {
+  if (!d) return unavailable("not-observed", null, tele);
+  if (!claimsProvider(d)) return { ...unavailable("not-observed", d, tele) };      // telemetry-only / empty
+  if (!providerTrusted(d)) return unavailable("provider-usage-unverified", d, tele); // unknown model / not proven
+  if (!blockValid(d.monthly)) return unavailable("invalid-provider-observation", d, tele); // poisoned / over-cap
+  const { daily, dailyReason } = normalizeDaily(d);
+  return {
+    providerAvailable: true, source: d.source || "resend-send-response", monthly: d.monthly, daily, dailyReason,
+    lastSyncedAt: d.observedAt || d.lastSyncedAt || null, observedVia: "send", stale: false,
+    internalTelemetry: tele, providerError: null,
+  };
+}
+
+// TRUST BOUNDARY for the admin callable (getEmailUsage) result — identical rule to the
+// snapshot path, so the callable can never bypass what the listener enforces.
 export function normalizeCallableUsage(data) {
   const tele = (data && data.internalTelemetry) || null;
-  const unavailable = (code) => ({
-    providerAvailable: false, source: "internal-fallback", monthly: null, daily: null,
-    dailyReason: null, lastSyncedAt: (data && data.lastSyncedAt) || null, observedVia: null,
-    stale: true, internalTelemetry: tele, providerError: { code },
-  });
-  if (!data) return unavailable("call-failed");
-  // Stage A build: accounting disabled → reject ALL provider data (any model, proven or not).
-  if (!providerTrusted(data)) {
-    return unavailable((data.providerError && data.providerError.code) || "provider-usage-unverified");
-  }
-  const intOk = (n) => Number.isInteger(n) && n >= 0;
-  const blockOk = (b) => !b || (intOk(b.used) && (!Number.isInteger(b.limit) || b.used <= b.limit));
-  const m = data.monthly;
-  if (!m || !intOk(m.used) || (Number.isInteger(m.limit) && m.used > m.limit) || !blockOk(data.daily) || !data.source || !data.lastSyncedAt) {
-    return unavailable("invalid-provider-observation");
-  }
-  return { ...data, internalTelemetry: tele };
+  if (!data) return unavailable("call-failed", null, tele);
+  return viewFrom(data, tele);
 }
 
-export function presentEmailUsageDoc(doc, nowMs = Date.now()) {
-  // internalTelemetry (app-initiated count + safety cap) is published by settleReservation
-  // in the same doc — surface it (may be absent) so the panel's app-safety row updates live.
+// The real-time listener path: the sanitized adminDiagnostics/emailUsageV1 doc → view model.
+export function presentEmailUsageDoc(doc) {
   const tele = (doc && doc.internalTelemetry) || null;
-  if (!doc) {
-    return { providerAvailable: false, source: "internal-fallback", monthly: null, daily: null,
-      dailyReason: null, lastSyncedAt: null, observedVia: null, stale: true, internalTelemetry: tele, providerError: { code: "not-observed" } };
-  }
-  // CONTAINMENT (checked BEFORE the monthly shape, so a NEUTRALIZED doc — monthly:null,
-  // providerUsageProven:false — reads as Unavailable, not "not-observed"): provider usage
-  // is shown ONLY when the server explicitly stamps providerUsageProven (header semantics
-  // proven + correct accounting live). Until then — including any stale/pre-fix doc that
-  // still carries provider fields — report Unavailable and keep app-safety telemetry.
-  // Mirrors resendUsage.getResendQuotaUsage so the listener and callable can't disagree.
-  // Stage A build: accounting disabled → reject ALL provider docs, including a valid Stage D
-  // document left in Firestore after a rollback (fails closed → Unavailable immediately).
-  if (!providerTrusted(doc)) {
-    return { providerAvailable: false, source: "internal-fallback", monthly: null, daily: null,
-      dailyReason: null, lastSyncedAt: doc.observedAt || null, observedVia: null, stale: true, internalTelemetry: tele, providerError: { code: "provider-usage-unverified" } };
-  }
-  if (!doc.monthly || typeof doc.monthly.used !== "number") {
-    return { providerAvailable: false, source: "internal-fallback", monthly: null, daily: null,
-      dailyReason: null, lastSyncedAt: null, observedVia: null, stale: true, internalTelemetry: tele, providerError: { code: "not-observed" } };
-  }
-  // Fail-safe: never render a structurally IMPOSSIBLE reading (used > limit, e.g. a
-  // poisoned 3001 / 3000) as a valid observation. Keep app-safety telemetry.
-  const m = doc.monthly;
-  if (!(Number.isInteger(m.used) && m.used >= 0) || (Number.isInteger(m.limit) && m.used > m.limit)) {
-    return { providerAvailable: false, source: "internal-fallback", monthly: null, daily: null,
-      dailyReason: null, lastSyncedAt: doc.observedAt || null, observedVia: null, stale: true, internalTelemetry: tele, providerError: { code: "invalid-provider-observation" } };
-  }
-  const cur = periodKeys(nowMs);
-  const observedAt = doc.observedAt || null;
-
-  // Prior-month (or legacy/no-key) observation → not current usage.
-  if (doc.periodMonth !== cur.month) {
-    return { providerAvailable: false, source: "resend", monthly: null, daily: null,
-      dailyReason: null, lastSyncedAt: observedAt, observedVia: null, stale: true, internalTelemetry: tele, providerError: { code: "not-observed-this-month" } };
-  }
-
-  let daily = null, dailyReason = null;
-  if (doc.periodDay !== cur.day) daily = null, dailyReason = "not-observed-today"; // new day, no send yet
-  else if (!doc.daily) dailyReason = doc.dailyReason || "not-provided";            // plan sends no daily header
-  else daily = doc.daily;
-
-  const stale = observedAt ? !((nowMs - Date.parse(observedAt)) < STALE_MS) : true;
-  return { providerAvailable: true, source: "resend", monthly: doc.monthly, daily, dailyReason,
-    lastSyncedAt: observedAt, observedVia: doc.observedVia || "send", stale, internalTelemetry: tele, providerError: null };
+  return viewFrom(doc, tele);
 }
