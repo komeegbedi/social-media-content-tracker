@@ -18,6 +18,8 @@ const MONTHLY_LIMIT_V1 = 3000;
 const DAILY_LIMIT_V1 = 100;
 
 const isNonNegInt = (n) => Number.isInteger(n) && n >= 0;
+const isPosInt = (n) => Number.isInteger(n) && n > 0;
+const SOURCE_V1 = "resend-send-response";
 // Canonical ISO instant that round-trips through Date (the form toISOString() produces).
 const isCanonicalIso = (s) =>
   typeof s === "string" && s.length > 0 && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString() === s;
@@ -38,7 +40,8 @@ function sanitizeBlock(b, planLimit) {
 export function sanitizeTelemetry(t) {
   if (!t) return null;
   const { appInitiatedThisMonth: mU, appSafetyCap: mC, appDailyThisDay: dU, appDailyLimit: dC } = t;
-  if (![mU, mC, dU, dC].every(isNonNegInt)) return null;
+  // USED counters non-negative ints; LIMITS positive ints (a 0/0 pair is invalid); used<=limit.
+  if (!isNonNegInt(mU) || !isNonNegInt(dU) || !isPosInt(mC) || !isPosInt(dC)) return null;
   if (mU > mC || dU > dC) return null;
   return { appInitiatedThisMonth: mU, appSafetyCap: mC, appDailyThisDay: dU, appDailyLimit: dC };
 }
@@ -64,7 +67,8 @@ function viewFrom(d, tele) {
     if (!providerTrusted(d)) return unavailable("provider-usage-unverified", d, tele); // unknown model / not proven
     const monthly = sanitizeBlock(d.monthly, MONTHLY_LIMIT_V1);
     const observedAt = isCanonicalIso(d.observedAt) ? d.observedAt : (isCanonicalIso(d.lastSyncedAt) ? d.lastSyncedAt : null);
-    if (!monthly || !observedAt) return unavailable("invalid-provider-observation", d, tele);
+    // Full declared contract, incl. the exact source string.
+    if (!monthly || !observedAt || d.source !== SOURCE_V1) return unavailable("invalid-provider-observation", d, tele);
     let daily = null, dailyReason;
     if (d.daily != null) {                                                        // present ⇒ reason must be null
       daily = sanitizeBlock(d.daily, DAILY_LIMIT_V1);
@@ -88,6 +92,11 @@ function viewFrom(d, tele) {
 export function normalizeCallableUsage(data) {
   const tele = sanitizeTelemetry(data && data.internalTelemetry);
   if (!data) return unavailable("call-failed", null, tele);
+  // The server already sanitized this result and is the authority on its UNAVAILABLE verdict
+  // (read-failed / not-observed / …) — preserve that stable code rather than re-deriving it
+  // (so a transient "read-failed" is never relabeled "not-observed"). An AVAILABLE claim is
+  // still independently re-validated through viewFrom (defense against an old/mixed callable).
+  if (data.providerAvailable !== true) return unavailable((data.providerError && data.providerError.code) || "not-observed", data, tele);
   return viewFrom(data, tele);
 }
 

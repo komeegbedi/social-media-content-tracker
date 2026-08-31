@@ -108,10 +108,10 @@ test("no forbidden internal fields are ever in the DOM", async () => {
   }
 });
 
-test("a callable rejection is contained — inline error, no throw", async () => {
+test("a callable rejection on initial load is contained — inline error, no throw", async () => {
   callFunction.mockRejectedValue(new Error("network"));
   await act(async () => render(<EmailUsage />));
-  expect(screen.getByText(/couldn't load usage just now/i)).toBeInTheDocument();
+  expect(screen.getByText(/couldn.t load saved Resend usage\. Try again\./i)).toBeInTheDocument();
 });
 
 test("a Firestore listener error is contained — scoped status, no throw", async () => {
@@ -164,4 +164,47 @@ test("readability: meaningful secondary copy uses the semantic class, not inline
   const stamp = screen.getByText(/Updated .* after an app email was accepted\./);
   expect(stamp.className).toContain("sb-usage-help");
   expect(stamp.getAttribute("style")).toBeNull();                       // no inline font-size override
+});
+
+/* ---- P0/P1: read-failed vs not-observed, failed refresh, deletion, source, telemetry ---- */
+test("initial read failure shows a distinct message (not 'No Resend usage observed yet')", async () => {
+  await renderResolved({ providerAvailable: false, providerUsageProven: false, monthly: null,
+    providerError: { code: "read-failed" }, internalTelemetry: { ...TELE4 } });
+  expect(screen.getByText(/Couldn’t load saved Resend usage\. Try again\.|Couldn't load saved Resend usage\. Try again\./)).toBeInTheDocument();
+  expect(screen.queryByText(/No Resend usage observed yet/)).not.toBeInTheDocument();
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
+});
+
+test("a FAILED Refresh preserves the shown observation (still 'Last observed') + non-destructive warning", async () => {
+  await renderResolved(v1Callable());
+  expect(screen.getByText("44 / 3,000")).toBeInTheDocument();
+  // Refresh now returns a transient read failure.
+  callFunction.mockResolvedValue({ data: { providerAvailable: false, providerUsageProven: false, monthly: null,
+    providerError: { code: "read-failed" }, internalTelemetry: { ...TELE4 } } });
+  await act(async () => { screen.getByRole("button", { name: /reload saved usage/i }).click(); });
+  expect(screen.getByText("44 / 3,000")).toBeInTheDocument();           // observation preserved
+  expect(screen.getByText("Last observed")).toBeInTheDocument();         // not relabeled
+  expect(screen.getByText(/Couldn’t refresh Resend usage just now\.|Couldn't refresh Resend usage just now\./)).toBeInTheDocument();
+});
+
+test("listener DELETION of the v1 doc transitions to not-observed (telemetry preserved)", async () => {
+  await renderResolved(v1Callable());
+  expect(screen.getByText("44 / 3,000")).toBeInTheDocument();
+  await act(async () => { snapshotCb({ exists: () => false, data: () => undefined }); });
+  expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
+  expect(screen.getByText(/No Resend usage observed yet/)).toBeInTheDocument();
+  expect(screen.getByText("114 successful deliveries")).toBeInTheDocument(); // telemetry preserved
+});
+
+test("a wrong source value fails closed to Unavailable", async () => {
+  await renderResolved(v1Callable({ source: "spoofed" }));
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
+});
+
+test("no fabricated daily limit: incomplete telemetry hides the daily app row entirely", async () => {
+  // 2-field telemetry → sanitized to null → no app rows, and NO fabricated '/ 90'.
+  await renderResolved(v1Callable({ internalTelemetry: { appInitiatedThisMonth: 5, appSafetyCap: 2800 } }));
+  expect(screen.queryByText(/Daily app limit · UTC day/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/\/ 90/)).not.toBeInTheDocument();
 });

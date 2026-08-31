@@ -190,3 +190,25 @@ test("a partial (2-field) telemetry is dropped but the provider observation stil
   assert.equal(v.providerAvailable, true);
   assert.equal(v.internalTelemetry, null, "incomplete telemetry contract is not shown");
 });
+
+test("the exact source is required; missing/unknown/non-string fails closed", () => {
+  const noSrc = v1(); delete noSrc.source;
+  assert.equal(presentEmailUsageDoc(noSrc).providerError.code, "invalid-provider-observation");
+  assert.equal(presentEmailUsageDoc(v1({ source: "spoofed" })).providerError.code, "invalid-provider-observation");
+  assert.equal(presentEmailUsageDoc(v1({ source: 123 })).providerError.code, "invalid-provider-observation");
+  assert.equal(presentEmailUsageDoc(v1({ source: "resend-send-response" })).providerAvailable, true);
+});
+
+test("sanitizeTelemetry requires POSITIVE-integer limits (0/0 invalid)", () => {
+  assert.equal(sanitizeTelemetry({ appInitiatedThisMonth: 0, appSafetyCap: 0, appDailyThisDay: 0, appDailyLimit: 0 }), null);
+  assert.equal(sanitizeTelemetry({ ...TELE, appSafetyCap: 0 }), null);
+  assert.equal(sanitizeTelemetry({ ...TELE, appDailyLimit: 0 }), null);
+});
+
+test("callable: a server read-failed verdict is PRESERVED (never relabeled not-observed)", () => {
+  const v = normalizeCallableUsage({ providerAvailable: false, providerUsageProven: false, monthly: null,
+    providerError: { code: "read-failed" }, internalTelemetry: TELE });
+  assert.equal(v.providerAvailable, false);
+  assert.equal(v.providerError.code, "read-failed", "transient read failure kept distinct");
+  assert.deepEqual(v.internalTelemetry, TELE);
+});

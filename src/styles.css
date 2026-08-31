@@ -3455,7 +3455,7 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 /* ── Email usage diagnostics (admin) ─────────────────────────────────────── */
 .sb-emailusage{display:flex;flex-direction:column;gap:12px}
 .sb-usage-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
-.sb-usage-badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;
+.sb-usage-badge{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;
   padding:3px 9px;border-radius:999px;white-space:nowrap}
 .sb-usage-badge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
 .sb-usage-badge.ok{color:var(--green-fg);background:var(--green-soft)}
@@ -3476,7 +3476,7 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .sb-usage-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
   padding-top:8px;border-top:1px solid var(--border)}
 .sb-usage-refresh{appearance:none;border:0;background:none;padding:6px 4px;min-height:44px;
-  font:inherit;font-size:12.5px;font-weight:700;color:var(--green-fg);cursor:pointer;border-radius:8px}
+  font:inherit;font-size:13px;font-weight:700;color:var(--green-fg);cursor:pointer;border-radius:8px}
 .sb-usage-refresh:disabled{color:var(--text-muted);cursor:default}
 .sb-usage-refresh:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 
@@ -3487,7 +3487,7 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .sb-usage-callout-body>b{color:var(--amber-fg)}
 
 .sb-usage-tech{margin-top:2px}
-.sb-usage-tech>summary{cursor:pointer;font-size:12px;color:var(--text-muted);
+.sb-usage-tech>summary{cursor:pointer;font-size:13px;color:var(--text-muted);
   padding:6px 2px;min-height:32px;display:flex;align-items:center;user-select:none}
 .sb-usage-tech>summary:focus-visible{outline:2px solid var(--border-strong);outline-offset:2px;border-radius:6px}
 .sb-usage-tech[open]>summary{color:var(--text-secondary)}
@@ -3499,7 +3499,7 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 }
 
 /* Email usage — last-observed additions */
-.sb-usage-extlink{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;
+.sb-usage-extlink{display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:600;
   color:var(--green-fg);text-decoration:none;padding:6px 4px;min-height:32px}
 .sb-usage-extlink:hover{text-decoration:underline}
 .sb-usage-extlink:focus-visible{outline:2px solid var(--green);outline-offset:2px;border-radius:6px}
@@ -3518,5 +3518,5 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .sb-usage-live .sb-usagerow-head>b{transition:color .25s ease}
 .sb-usage-live .sb-usagebar>span{transition:width .4s ease}
 @media(prefers-reduced-motion:reduce){ .sb-usage-live .sb-usagebar>span{transition:none} }
-.sb-usage-quiet{font-size:12px;color:var(--amber-fg);background:var(--amber-soft);
+.sb-usage-quiet{font-size:13.5px;line-height:1.45;color:var(--amber-fg);background:var(--amber-soft);
   padding:8px 12px;border-radius:10px}
