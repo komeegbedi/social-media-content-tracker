@@ -41,8 +41,12 @@ if (RAW_DAILY_SAFETY > RESEND_PLAN_DAILY_LIMIT)
   logger.warn("RESEND_DAILY_SAFETY_LIMIT exceeds the plan daily limit — clamping to the plan limit",
     { requested: RAW_DAILY_SAFETY, planDaily: RESEND_PLAN_DAILY_LIMIT, applied: DAILY_LIMIT });
 
-const RESEND_QUOTA_DOC = "systemUsage/resendQuota";        // written by resendUsage.js
-const DIAGNOSTICS_DOC = "adminDiagnostics/emailUsage";     // sanitized real-time panel doc
+const RESEND_QUOTA_DOC = "systemUsage/resendQuota";        // legacy provider cache (never read for enforcement here)
+// The v1 sanitized display doc. settleReservation publishes ONLY app-owned internal
+// telemetry here (a disjoint merge field); the provider snapshot is written separately by
+// resendObservationV1.js. This is a one-way publish of app stats — reserve()/gates never
+// read it, so display stays fully decoupled from enforcement.
+const DIAGNOSTICS_DOC = "adminDiagnostics/emailUsageV1";
 const RESEND_GATE_MAX_AGE_MS = posInt(process.env.RESEND_GATE_MAX_AGE_MS, 15 * 60 * 1000);
 
 // AUTHORITATIVE server-side switch for provider-PERIOD-based enforcement (denying a
@@ -233,18 +237,12 @@ async function settleReservation(deliveryRef, kind, period, extra = {}) {
       // period) → telemetry only, not a provider safety cap. Daily is the real enforced guard.
       const appInitiatedThisMonth = (m.sentCount || 0) + 1;
       const appDailyThisDay = (day.sentCount || 0) + 1;
+      // Publish ONLY app-owned internal telemetry (unchanged sanitized shape) into the v1
+      // display doc as a DISJOINT merge field — never any provider field. The provider
+      // snapshot (model/monthly/daily/observedAt) is owned solely by resendObservationV1.js;
+      // merge keeps the two field sets independent. No display flag is imported here.
       const pub = { internalTelemetry: { appInitiatedThisMonth, appSafetyCap: m.monthlyLimit || MONTHLY_LIMIT,
         appDailyThisDay, appDailyLimit: day.dailyLimit || DAILY_LIMIT } };
-      // COMPATIBILITY SIGNAL (containment): while header semantics are unproven, actively
-      // NEUTRALIZE any provider usage fields in the sanitized panel doc on each successful
-      // send. This overwrites a poisoned value (e.g. 3001) so that even an ALREADY-LOADED
-      // old frontend bundle (a tab left open across the deploy, whose listener predates the
-      // providerUsageProven gate) stops rendering it. New clients read providerUsageProven.
-      const { HEADER_SEMANTICS_PROVEN } = require("./resendUsage");
-      if (!HEADER_SEMANTICS_PROVEN) {
-        pub.monthly = null; pub.daily = null; pub.dailyReason = null;
-        pub.providerUsageProven = false; pub.providerError = { code: "provider-usage-unverified" };
-      }
       tx.set(db.doc(DIAGNOSTICS_DOC), pub, { merge: true });
     }
     return { settled: true };

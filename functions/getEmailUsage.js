@@ -6,7 +6,7 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { logger } = require("firebase-functions/v2");
 const { db } = require("./lib");
-const { getResendQuotaUsage } = require("./resendUsage");
+const { getObservationV1 } = require("./resendObservationV1");
 
 exports.getEmailUsage = onCall(
   { memory: "256MiB", timeoutSeconds: 15 },
@@ -21,7 +21,7 @@ exports.getEmailUsage = onCall(
     if (!caller.exists || caller.data().role !== "admin")
       throw new HttpsError("permission-denied", "Only admins can view email usage.");
 
-    // Reads the cached last-observed usage; never throws (labelled snapshot on failure).
-    return getResendQuotaUsage();
+    // Reads the sanitized last-observed v1 usage; never throws (labelled snapshot on failure).
+    return getObservationV1();
   },
 );

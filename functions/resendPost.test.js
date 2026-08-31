@@ -66,8 +66,12 @@ test("successful send WITH quota headers → ok + data.id + records usage", asyn
   assert.equal(r.ok, true);
   assert.equal(r.data.id, "m1");
   assert.equal(r.error, null);
-  // Headers are PRE-send; records the before-values + accepted units + delivery id.
-  assert.deepEqual(calls, [{ monthlyUsedBeforeSend: 41, dailyUsedBeforeSend: 2, acceptedUnits: 1, deliveryId: "idem1" }]);
+  // Headers are PRE-send; records the before-values + accepted units + delivery id, plus
+  // a responseReceivedAt captured immediately after the response (dynamic ISO timestamp).
+  assert.equal(calls.length, 1);
+  const { responseReceivedAt, ...stable } = calls[0];
+  assert.deepEqual(stable, { monthlyUsedBeforeSend: 41, dailyUsedBeforeSend: 2, acceptedUnits: 1, deliveryId: "idem1" });
+  assert.ok(!Number.isNaN(Date.parse(responseReceivedAt)), "responseReceivedAt is a valid timestamp");
 });
 
 test("acceptedUnits counts to + cc + bcc (multi-recipient)", async () => {

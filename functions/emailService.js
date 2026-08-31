@@ -354,7 +354,8 @@ const RESEND_SEND_TIMEOUT_MS = Number(process.env.RESEND_SEND_TIMEOUT_MS) || 100
    the callers expect; `transport` is set on a timeout/network error (uncertain → retry
    with the SAME idempotency key). `fetchImpl`/`record` are injectable for tests. */
 async function resendPostSend(key, payload, idempotencyKey, { fetchImpl = globalThis.fetch, record, timeoutMs = RESEND_SEND_TIMEOUT_MS } = {}) {
-  const recordUsage = record || ((obs) => require("./resendUsage").recordObservedUsage(obs));
+  // DISPLAY-ONLY v1 recorder (last-observed model). Enforcement is untouched.
+  const recordUsage = record || ((obs) => require("./resendObservationV1").recordObservationV1(obs));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res;
@@ -373,6 +374,9 @@ async function resendPostSend(key, payload, idempotencyKey, { fetchImpl = global
   } catch (e) {
     return { transport: e, timedOut: !!(e && e.name === "AbortError") };
   } finally { clearTimeout(timer); }
+  // Capture the response-receipt time IMMEDIATELY (before parsing/tx). Orders v1
+  // observations by application response-receipt time, NOT any Resend billing period.
+  const responseReceivedAt = new Date().toISOString();
 
   let body = null;
   try { body = await res.json(); } catch { body = null; } // malformed / non-JSON
@@ -394,7 +398,7 @@ async function resendPostSend(key, payload, idempotencyKey, { fetchImpl = global
   let usageRecordError = null;
   if (headersValid) {
     try {
-      await recordUsage({ monthlyUsedBeforeSend, dailyUsedBeforeSend, acceptedUnits: units, deliveryId: idempotencyKey });
+      await recordUsage({ monthlyUsedBeforeSend, dailyUsedBeforeSend, acceptedUnits: units, deliveryId: idempotencyKey, responseReceivedAt });
     } catch (e) {
       // A usage-recording failure AFTER a successful send must NOT be silently swallowed
       // as success — surface it (returned + logged) so a stuck panel is diagnosable.

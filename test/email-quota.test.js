@@ -205,3 +205,18 @@ test("a poisoned Resend snapshot (used > plan) is IGNORED by the reserve gate (e
   const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("poison") });
   assert.equal(r.allowed, true, "invalid provider value must not suppress sends");
 });
+
+/* ---- display/enforcement isolation: the v1 DISPLAY doc must NEVER gate a reservation ---- */
+test("a v1 display observation near the plan limit (2999/3000) does NOT influence reserve()", async () => {
+  // The display-only snapshot says the provider account is nearly full; reserve() must
+  // neither read it nor deny — enforcement is governed solely by the app-owned caps.
+  await db.doc("adminDiagnostics/emailUsageV1").set({
+    model: "resend-pre-send-used-v1", providerUsageProven: true,
+    monthly: { used: 2999, limit: 3000, percent: 100 }, daily: { used: 99, limit: 100, percent: 99 },
+    observedAt: new Date().toISOString(), source: "resend-send-response",
+  });
+  await seedDelivery("iso");
+  const r = await quota.reserve({ type: "reminder", period, deliveryRef: del("iso") });
+  assert.equal(r.allowed, true, "display data must not gate a send");
+  assert.notEqual(r.reason, "resend_account_limit");
+});
