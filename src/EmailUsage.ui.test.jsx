@@ -17,16 +17,17 @@ const NOW = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
 
 // A fully-valid v1 callable result (getEmailUsage) and listener document.
+const TELE4 = { appInitiatedThisMonth: 114, appSafetyCap: 2800, appDailyThisDay: 5, appDailyLimit: 90 };
 const v1Callable = (over = {}) => ({
   providerAvailable: true, providerUsageProven: true, model: MODEL, source: "resend-send-response",
   monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: { used: 5, limit: 100, percent: 5 }, dailyReason: null,
-  lastSyncedAt: iso(NOW), internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 }, ...over,
+  lastSyncedAt: iso(NOW), internalTelemetry: { ...TELE4 }, ...over,
 });
 const v1Doc = (over = {}) => ({
   model: MODEL, providerUsageProven: true,
   monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: { used: 5, limit: 100, percent: 5 }, dailyReason: null,
   observedAt: iso(NOW), source: "resend-send-response",
-  internalTelemetry: { appInitiatedThisMonth: 114, appSafetyCap: 2800 }, ...over,
+  internalTelemetry: { ...TELE4 }, ...over,
 });
 const deliverSnap = async (data) => { await act(async () => { snapshotCb({ exists: () => true, data: () => data }); }); };
 async function renderResolved(data) { callFunction.mockResolvedValue({ data }); return act(async () => render(<EmailUsage />)); }
@@ -68,7 +69,7 @@ test("daily INVALID → explicit invalid copy (not collapsed to not-provided)", 
 
 test("no observation yet → 'No Resend usage observed yet'; app-safety still shown", async () => {
   await renderResolved({ providerAvailable: false, providerUsageProven: false, monthly: null,
-    providerError: { code: "not-observed" }, internalTelemetry: { appInitiatedThisMonth: 0, appSafetyCap: 2800 } });
+    providerError: { code: "not-observed" }, internalTelemetry: { appInitiatedThisMonth: 0, appSafetyCap: 2800, appDailyThisDay: 0, appDailyLimit: 90 } });
   expect(screen.getByText(/No Resend usage observed yet/)).toBeInTheDocument();
   expect(screen.queryByText("Last observed")).not.toBeInTheDocument();
   expect(screen.getByText(/successful deliveries/)).toBeInTheDocument();
@@ -123,4 +124,44 @@ test("the listener unsubscribes on unmount", async () => {
   const { unmount } = await renderResolved(v1Callable());
   unmount();
   expect(unsubCount).toBe(1);
+});
+
+/* ---- P0/P1 hardening ---- */
+test("the 'View in Resend' link points to /settings/usage", async () => {
+  await renderResolved(v1Callable());
+  const link = screen.getByRole("link", { name: /view in resend/i });
+  expect(link.getAttribute("href")).toBe("https://resend.com/settings/usage");
+});
+
+test("never crashes on a malformed doc {used:42, limit:undefined} → Unavailable, no totals/bars", async () => {
+  // Initial callable is not-observed; then a MALFORMED listener doc arrives.
+  await renderResolved({ providerAvailable: false, providerUsageProven: false, monthly: null,
+    providerError: { code: "not-observed" }, internalTelemetry: { ...TELE4 } });
+  await deliverSnap({ model: MODEL, providerUsageProven: true, monthly: { used: 42, limit: undefined },
+    daily: null, dailyReason: "not-provided", observedAt: iso(NOW + 1000), source: "resend-send-response",
+    internalTelemetry: { ...TELE4 } });
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  expect(screen.queryByText("42 / 3,000")).not.toBeInTheDocument();
+  expect(screen.queryAllByRole("progressbar").length).toBe(0);
+});
+
+test("Refresh and live snapshot render IDENTICAL four-field telemetry; daily telemetry survives Refresh", async () => {
+  await renderResolved(v1Callable());
+  expect(screen.getByText("114 successful deliveries")).toBeInTheDocument();
+  expect(screen.getByText("5 / 90")).toBeInTheDocument();               // daily app telemetry (four-field)
+  // Refresh re-reads the callable (four-field telemetry) — daily row must NOT disappear.
+  callFunction.mockResolvedValue({ data: v1Callable({ lastSyncedAt: iso(NOW + 120000) }) });
+  await act(async () => { screen.getByRole("button", { name: /reload saved usage/i }).click(); });
+  expect(screen.getByText("114 successful deliveries")).toBeInTheDocument();
+  expect(screen.getByText("5 / 90")).toBeInTheDocument();               // still present after Refresh
+  // A live snapshot carrying the same four-field telemetry renders the same daily value.
+  await deliverSnap(v1Doc({ observedAt: iso(NOW + 180000) }));
+  expect(screen.getByText("5 / 90")).toBeInTheDocument();
+});
+
+test("readability: meaningful secondary copy uses the semantic class, not inline 12px", async () => {
+  await renderResolved(v1Callable());
+  const stamp = screen.getByText(/Updated .* after an app email was accepted\./);
+  expect(stamp.className).toContain("sb-usage-help");
+  expect(stamp.getAttribute("style")).toBeNull();                       // no inline font-size override
 });

@@ -3466,12 +3466,12 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .sb-usagerow-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
 .sb-usagerow-head>span{font-size:13px;color:var(--text-secondary);font-weight:600}
 .sb-usagerow-head>b{font-size:15px;font-variant-numeric:tabular-nums;white-space:nowrap}
-.sb-usagerow-na{font-size:12.5px;font-weight:600;color:var(--text-muted)}
+.sb-usagerow-na{font-size:13px;font-weight:600;color:var(--text-secondary)}
 .sb-usagebar{position:relative;height:8px;border-radius:999px;background:var(--surface-muted);overflow:hidden}
 .sb-usagebar>span{position:absolute;inset:0 auto 0 0;height:100%;border-radius:999px;background:var(--green);transition:width .35s ease}
 .sb-usagebar.tone-warn>span{background:var(--amber)}
 .sb-usagebar.tone-crit>span{background:var(--red)}
-.sb-usagerow-foot{font-size:11.5px;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.sb-usagerow-foot{font-size:13px;line-height:1.45;color:var(--text-secondary);font-variant-numeric:tabular-nums}
 
 .sb-usage-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
   padding-top:8px;border-top:1px solid var(--border)}
@@ -3505,7 +3505,11 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .sb-usage-extlink:focus-visible{outline:2px solid var(--green);outline-offset:2px;border-radius:6px}
 .sb-usage-badgerow{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .sb-usage-note{padding:10px 12px;border-radius:10px;background:var(--surface-muted);
-  color:var(--text-secondary);font-size:12.5px;line-height:1.4}
+  color:var(--text-secondary);font-size:13.5px;line-height:1.5}
+/* Email usage — v1 readability: meaningful secondary / status / help copy. At least 13.5px
+   with comfortable line-height and AA-contrast secondary text (light --text-secondary #5B616B
+   ~6.5:1; dark #AEB4BE on the panel ~8:1). Replaces the former inline 12px sb-sub styling. */
+.sb-usage-help{font-size:13.5px;line-height:1.45;color:var(--text-secondary)}
 
 /* Email usage — real-time additions */
 .sb-visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;

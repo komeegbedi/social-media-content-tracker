@@ -1,12 +1,15 @@
-/* Admin email-usage diagnostics. Resend reports account quota only on SEND (its
-   GET /emails carries no usage), so the panel shows the LAST OBSERVED usage — captured
-   from POST /emails responses on every send and cached server-side, then published to a
-   sanitized adminDiagnostics/emailUsage doc IN THE SAME TRANSACTION.
+/* Admin email-usage diagnostics (display-only v1). Resend reports account quota only on
+   SEND (its GET /emails carries no usage), so the panel shows the LAST OBSERVED usage —
+   captured from POST /emails responses on every send by resendObservationV1.js and stored
+   in the sanitized adminDiagnostics/emailUsageV1 doc. The provider snapshot and the app's
+   internal telemetry are DISJOINT merge fields on that doc, written by SEPARATE transactions
+   (recordObservationV1 for the provider snapshot; settleReservation for the four-field
+   telemetry).
 
-   Live updates: while the panel is open it subscribes to that doc (onSnapshot) and
+   Live updates: while the panel is open it subscribes to emailUsageV1 (onSnapshot) and
    applies only snapshots NEWER than what's rendered, so the totals advance automatically
    after any app send (notification, digest, test) without clicking Refresh. The admin
-   callable is the initial-load + manual-recovery path. Refresh re-reads the latest
+   callable is the initial-load + manual-recovery path. Refresh re-reads the latest stored
    observation — it does NOT contact Resend. The app's safety cap is shown separately and
    never as a Resend limit. Extracted from App.jsx so its states are DOM-testable. */
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -15,7 +18,7 @@ import { ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import { callFunction, db } from "./firebase";
 import { presentEmailUsageDoc, normalizeCallableUsage } from "./emailUsageDoc.js";
 
-const RESEND_DASHBOARD = "https://resend.com/emails";
+const RESEND_DASHBOARD = "https://resend.com/settings/usage";
 const DEFAULT_TELE = { appInitiatedThisMonth: null, appSafetyCap: null };
 
 const fmtSync = (iso) => { try { return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
@@ -154,7 +157,7 @@ export function EmailUsage({ refreshToken = 0 }) {
       <div className="sb-visually-hidden" aria-live="polite">{totalsLine(usage)}</div>
 
       {usage === null ? (
-        <div className="sb-sub" style={{ fontSize: 12 }} aria-live="polite">Loading email usage…</div>
+        <div className="sb-usage-help" aria-live="polite">Loading email usage…</div>
       ) : (
         <>
           {badge && (
@@ -196,7 +199,7 @@ export function EmailUsage({ refreshToken = 0 }) {
             </div>
           )}
 
-          {note === "updating" && <div className="sb-sub" style={{ fontSize: 12 }} aria-live="polite">Updating usage…</div>}
+          {note === "updating" && <div className="sb-usage-help" aria-live="polite">Updating usage…</div>}
           {note === "not-saved" && <div className="sb-usage-quiet" role="status">Email was sent, but the usage observation could not be saved. Check function logs.</div>}
           {listenerError && note !== "not-saved" && <div className="sb-usage-quiet" role="status">Live usage updates are unavailable right now (check your admin access). Use Refresh to re-read.</div>}
 
@@ -219,7 +222,7 @@ export function EmailUsage({ refreshToken = 0 }) {
           )}
 
           <div className="sb-usage-foot">
-            <span className="sb-sub" style={{ fontSize: 12 }}>
+            <span className="sb-usage-help">
               {usage.providerAvailable && synced ? `Updated ${synced} after an app email was accepted.` : ""}
             </span>
             <button type="button" className="sb-usage-refresh" onClick={() => load()} disabled={busy}
@@ -229,7 +232,7 @@ export function EmailUsage({ refreshToken = 0 }) {
 
           <details className="sb-usage-tech">
             <summary>Technical details</summary>
-            <div className="sb-sub" style={{ fontSize: 12 }}>
+            <div className="sb-usage-help">
               App-initiated sends this month (this app only): <b>{appSent == null ? "—" : appSent.toLocaleString()}</b><br />
               Resend reports account usage only on SEND, so this advances when THIS app sends email
               (notifications, digests, test emails). Out-of-band Resend activity is reflected on the
