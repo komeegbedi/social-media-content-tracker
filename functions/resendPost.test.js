@@ -82,6 +82,18 @@ test("acceptedUnits counts to + cc + bcc (multi-recipient)", async () => {
   assert.equal(calls[0].acceptedUnits, 4); // 2 to + 1 cc + 1 bcc
 });
 
+test("a record-usage FAILURE after an accepted send is surfaced as a bounded code (email still ok)", async () => {
+  const r = await resendPostSend(KEY, { from: "a", to: "b" }, "idemE", {
+    fetchImpl: async () => mkRes(200, { headers: { "x-resend-monthly-quota": "10" }, body: { id: "mE" } }),
+    record: async () => { const e = new Error("firestore transaction failed: some/internal/detail"); e.code = "ABORTED"; throw e; },
+  });
+  assert.equal(r.ok, true, "email remains accepted");
+  assert.equal(r.data.id, "mE");
+  assert.ok(r.usageRecordError, "usageRecordError set on record failure");
+  assert.ok(r.usageRecordError.length <= 40, "bounded code, not the raw message");
+  assert.equal(/firestore transaction failed|some\/internal\/detail/.test(r.usageRecordError), false, "raw message not leaked");
+});
+
 test("successful send WITHOUT quota headers → ok, nothing recorded", async () => {
   const { record, calls } = capture();
   const r = await resendPostSend(KEY, {}, "i", { fetchImpl: async () => mkRes(200, { body: { id: "m" } }), record });

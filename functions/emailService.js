@@ -456,7 +456,14 @@ function classifiedError(emailCode, message) {
 // Map a _deliver() result to the test-send outcome. A suppressed send yields the
 // appropriate admin-facing quota message; success returns the provider message id.
 function testOutcome(res) {
-  if (res.status === "sent") return { messageId: res.providerMessageId || "" };
+  if (res.status === "sent") {
+    // BOUNDED, stable signal only — never the raw exception / provider response / headers /
+    // recipient / delivery id / stack. `usageRecordError` is "record-failed" ONLY when the
+    // observation WRITE threw after an accepted send; a successful record → null; and
+    // missing/invalid quota headers (no observation attempted) are NOT a save failure, so
+    // res.usageRecordError is already null there. The email is still reported as sent.
+    return { messageId: res.providerMessageId || "", usageRecordError: res.usageRecordError ? "record-failed" : null };
+  }
   if (res.status === "already-sent") return { messageId: "" };
   if (res.status === "suppressed") {
     const r = String(res.reason || "");
@@ -480,7 +487,9 @@ function testOutcome(res) {
    claim → reserve → POST /emails → record post-send usage → settle sent — so a test
    counts toward the app's safety caps, respects exhausted-period markers, is idempotent,
    and updates both provider + internal usage. _deliver owns the delivery doc (no second
-   record). Returns { messageId }; throws a classified `.emailCode` the caller maps. */
+   record). Returns { messageId, usageRecordError } — usageRecordError is the bounded
+   "record-failed" | null signal from testOutcome; throws a classified `.emailCode` the
+   caller maps. */
 async function sendTest(rawTo) {
   const to = normalizeEmail(rawTo);
   if (!validEmail(to)) throw classifiedError("invalid-email", "invalid recipient");
@@ -495,4 +504,4 @@ async function sendTest(rawTo) {
   return testOutcome(res);
 }
 
-module.exports = { resendApiKey, SENDER, sendNotificationEmail, sendDigestEmail, sendTest, validEmail, normalizeEmail, classifyResend, resendPostSend, classifyProviderError, parseIntHeader, quotaUnits, pickDiagnosticHeaders };
+module.exports = { resendApiKey, SENDER, sendNotificationEmail, sendDigestEmail, sendTest, validEmail, normalizeEmail, classifyResend, resendPostSend, classifyProviderError, parseIntHeader, quotaUnits, pickDiagnosticHeaders, testOutcome };

@@ -1,6 +1,14 @@
 /* Admin-only callable to verify the email pipeline end-to-end.
    Requires an authenticated admin caller and an explicit recipient — it never
-   allows arbitrary public sending. Returns the Resend message id.
+   allows arbitrary public sending.
+
+   Success response contract: { ok:true, messageId, skipped, reason, usageRecordError }.
+     • messageId       — Resend message id ("" when unavailable/skip).
+     • skipped/reason   — true/"emulator" in the local emulator (no real send/record).
+     • usageRecordError — BOUNDED signal: "record-failed" ONLY when the usage OBSERVATION
+       write threw after an accepted send; null otherwise (incl. a successful record and the
+       missing/invalid-header case). It NEVER carries the raw exception, provider response,
+       headers, recipient, delivery id, or stack. Drives the panel's failure warning.
 
    Error contract: every failure throws an HttpsError with a stable code and a
    safe, user-facing message. The full original error (provider response, stack)
@@ -42,10 +50,12 @@ exports.sendTestEmail = onCall(
     if (!to) throw new HttpsError("invalid-argument", "Enter a recipient email address.");
 
     try {
-      const { messageId, skipped, reason } = await sendTest(to);
+      const { messageId, skipped, reason, usageRecordError } = await sendTest(to);
       // `skipped` is true only for the local emulator (no real send/record) — the client
       // shows a benign note and does NOT wait for a usage update that won't happen.
-      return { ok: true, messageId: messageId || "", skipped: !!skipped, reason: reason || "" };
+      // `usageRecordError` is the bounded "record-failed" | null signal (see contract above).
+      return { ok: true, messageId: messageId || "", skipped: !!skipped, reason: reason || "",
+        usageRecordError: usageRecordError || null };
     } catch (e) {
       const mapped = ERROR_MAP[e && e.emailCode];
       // Always log the full detail securely (never returned to the client).
