@@ -52,10 +52,20 @@ const providerTrusted = (d) =>
 // headers) carries internalTelemetry but no model/proof: that is "not-observed", not "invalid".
 const claimsProvider = (d) => !!(d && (d.model != null || d.providerUsageProven === true || d.monthly != null));
 
+// The ONLY error codes the view model may carry. Any unknown / missing / non-string / array /
+// object code is normalized to a safe fallback so nothing render-unsafe reaches the DOM.
+const ALLOWED_CODES = new Set(["not-observed", "read-failed", "call-failed", "provider-usage-unverified", "invalid-provider-observation"]);
+const safeCode = (c) => (typeof c === "string" && ALLOWED_CODES.has(c)) ? c : "invalid-provider-observation";
+
+// An UNAVAILABLE view model must contain ONLY render-safe primitives — never copy an
+// untrusted source/code/timestamp from a malformed document. source is a safe enum; code is
+// allowlisted; lastSyncedAt is a canonical ISO string or null.
 const unavailable = (code, d, tele) => ({
-  providerAvailable: false, source: (d && d.source) || "internal-fallback", monthly: null, daily: null,
-  dailyReason: null, lastSyncedAt: (d && isCanonicalIso(d.observedAt) ? d.observedAt : (d && isCanonicalIso(d.lastSyncedAt) ? d.lastSyncedAt : null)),
-  observedVia: null, stale: false, internalTelemetry: tele, providerError: { code },
+  providerAvailable: false,
+  source: (d && d.source === SOURCE_V1) ? SOURCE_V1 : "internal-fallback",
+  monthly: null, daily: null, dailyReason: null,
+  lastSyncedAt: (d && isCanonicalIso(d.observedAt) ? d.observedAt : (d && isCanonicalIso(d.lastSyncedAt) ? d.lastSyncedAt : null)),
+  observedVia: null, stale: false, internalTelemetry: tele, providerError: { code: safeCode(code) },
 });
 
 // Build the shared view model from a sanitized provider snapshot (doc OR callable result).

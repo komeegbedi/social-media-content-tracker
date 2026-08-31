@@ -208,3 +208,19 @@ test("no fabricated daily limit: incomplete telemetry hides the daily app row en
   expect(screen.queryByText(/Daily app limit · UTC day/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/\/ 90/)).not.toBeInTheDocument();
 });
+
+test("Technical details cannot crash for any malformed source / error-code type", async () => {
+  // Malformed CALLABLE result: object source + object providerError.code → sanitized → safe.
+  await renderResolved({ providerAvailable: true, providerUsageProven: true, model: MODEL,
+    source: { evil: true }, monthly: { used: 44, limit: 3000, percent: 1.5 }, daily: null, dailyReason: "not-provided",
+    lastSyncedAt: iso(NOW), internalTelemetry: { ...TELE4 }, providerError: { code: { evil: true } } });
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  expect(screen.queryByText("44 / 3,000")).not.toBeInTheDocument();
+  expect(screen.getByText("Technical details")).toBeInTheDocument();     // details block rendered, no throw
+  expect(screen.getByText(/Data source:/)).toBeInTheDocument();
+  // A malformed LISTENER doc (array source, object model/blocks/timestamp) must also not crash.
+  await deliverSnap({ model: {}, providerUsageProven: true, source: [], monthly: { used: {}, limit: [] },
+    observedAt: {}, dailyReason: {}, internalTelemetry: { ...TELE4 } });
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();           // still mounted
+  expect(screen.queryAllByRole("progressbar").length).toBe(0);
+});

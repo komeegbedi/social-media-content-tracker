@@ -212,3 +212,33 @@ test("callable: a server read-failed verdict is PRESERVED (never relabeled not-o
   assert.equal(v.providerError.code, "read-failed", "transient read failure kept distinct");
   assert.deepEqual(v.internalTelemetry, TELE);
 });
+
+/* ---- P0: the UNAVAILABLE view model carries only render-safe primitives ---- */
+const isPrimitive = (x) => x == null || (typeof x !== "object" && typeof x !== "function");
+test("a malformed source (object/array/number/huge string) never reaches the view model", () => {
+  for (const bad of [{}, [], 123, "x".repeat(5000)]) {
+    const v = presentEmailUsageDoc(v1({ source: bad }));
+    assert.equal(v.providerAvailable, false);
+    assert.ok(isPrimitive(v.source), "source is a primitive");
+    assert.ok(v.source === "resend-send-response" || v.source === "internal-fallback", `safe source enum (got ${JSON.stringify(v.source)})`);
+    assert.equal(v.providerError.code, "invalid-provider-observation");
+  }
+});
+
+test("an object/array/unknown providerError.code is normalized to a safe allowlisted string", () => {
+  for (const bad of [{}, [], "totally-unknown-code", 42]) {
+    const v = normalizeCallableUsage({ providerAvailable: false, monthly: null, providerError: { code: bad }, internalTelemetry: TELE });
+    assert.equal(typeof v.providerError.code, "string");
+    assert.equal(v.providerError.code, "invalid-provider-observation");
+  }
+});
+
+test("EVERY field of an unavailable view model is a render-safe primitive (no throw)", () => {
+  const v = presentEmailUsageDoc({ source: { unexpected: true }, model: {}, monthly: { used: [], limit: {} },
+    observedAt: { bad: 1 }, dailyReason: [], internalTelemetry: TELE });
+  for (const k of ["providerAvailable", "source", "monthly", "daily", "dailyReason", "lastSyncedAt", "observedVia", "stale"]) {
+    assert.ok(isPrimitive(v[k]), `${k} is primitive (got ${JSON.stringify(v[k])})`);
+  }
+  assert.equal(typeof v.providerError.code, "string");
+  assert.deepEqual(v.internalTelemetry, TELE);
+});
