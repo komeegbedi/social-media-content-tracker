@@ -3,7 +3,7 @@
 **Plan. Create. Review. Publish.** A content operating system for the **IFC (Immanuel Fellowship Church) Creative Team** — replacing a Google Sheet and a WhatsApp group with a focused, mobile-first web app for planning, producing, reviewing, and posting content.
 
 > [!NOTE]
-> **Project status.** The web app runs in production on Firebase Hosting. The client — URL-driven navigation, notification deep-linking, QA-as-a-department, and the capacity engine — is **implemented and tested** on `main`. The one piece **implemented and emulator-tested but not yet deployed** is the notification/reminder **backend** (Cloud Functions, "v1.1"), which needs the Blaze plan. See [Roadmap](#roadmap) and [Deployment](#deployment).
+> **Project status.** The full app runs in **production on Firebase** — the React client on Hosting and the notification/reminder/email **backend** on Cloud Functions (2nd gen, Node 22). The client (URL-driven navigation, notification deep-linking, QA-as-a-department, the capacity engine, UID-based assignment authorization) and the backend (immediate + scheduled notifications, web push, and Resend transactional email with an admin **"Resend account usage"** diagnostics panel) are **implemented, tested, and deployed**. See [Roadmap](#roadmap) and [Deployment](#deployment).
 
 ---
 
@@ -75,7 +75,7 @@ A mostly-volunteer church creative team working **primarily from their phones**:
 | **Database** | Cloud Firestore (real-time listeners, offline persistence) |
 | **Authentication** | Firebase Auth (Email/Password + Google) |
 | **Authorization** | Firestore Security Rules (`firestore.rules`) — the source of truth |
-| **Backend** | Firebase Cloud Functions (2nd gen, Node 20) — a thin notification/reminder layer |
+| **Backend** | Firebase Cloud Functions (2nd gen, Node 22) — a thin notification/reminder/email layer |
 | **Notifications** | Firebase Cloud Messaging (web push) + in-app Notification Center |
 | **Email** | [Resend](https://resend.com) transactional email, sent from Cloud Functions |
 | **Hosting** | Firebase Hosting (SPA) |
@@ -98,7 +98,11 @@ A deliberately small, flat codebase. Most "components" are functions inside `App
 │
 ├── src/
 │   ├── main.jsx               # Bootstraps React + the router; initTheme() + error capture
-│   ├── App.jsx                # The app: all pages/components + real-time hooks
+│   ├── App.jsx                # The app shell: most pages + real-time hooks
+│   ├── AdminScreen.jsx · EmailUsage.jsx · MentionComposer.jsx · RevisionComposer.jsx ·
+│   │                          #   AdminOverrideDialog.jsx · ProfileDrawer.jsx · … (extracted feature UIs)
+│   ├── workflowTransition.js · emailUsageDoc.js · notificationPolicy.js · importPlan.js ·
+│   │                          #   adminActions.js · … (pure, framework-free logic modules)
 │   ├── firebase.js            # Firebase init + emulator wiring (the "service" layer)
 │   ├── nav.js                 # Pure URL ⇄ screen mapping (routes, overlays, migration)
 │   ├── navHooks.js            # React adapters over the router + nav.js (useNav, scroll)
@@ -112,31 +116,41 @@ A deliberately small, flat codebase. Most "components" are functions inside `App
 │   ├── styles.css             # All styles + the light/dark design tokens
 │   └── *.test.js              # Node unit tests (see Testing)
 │
-├── functions/                 # Cloud Functions — the notification/reminder backend
+├── functions/                 # Cloud Functions — the notification/reminder/email backend
 │   ├── index.js               # Entry: global options + exports
-│   ├── lib.js                 # Shared helpers (idempotent writes, recipients, timezone)
-│   ├── emailService.js        # Resend email (templates, idempotent send, delivery log)
-│   ├── emailQuota.js          # Monthly/daily send limits + atomic reservation
+│   ├── lib.js                 # Shared helpers (idempotent writes, notifyUsers, recipients, timezone)
+│   ├── emailService.js        # Resend send (templates, idempotent POST /emails, delivery log)
+│   ├── emailQuota.js          # App-owned send caps (2,800/mo · 90/day) + atomic reservation + admin alerts
+│   ├── resendObservationV1.js # Display-only "last observed" Resend account-usage model (writes emailUsageV1)
+│   ├── resendQuotaMath.js     # Pure quota-header parsing + strict numeric validation
+│   ├── resendUsage.js         # Legacy provider-usage cache (dormant; superseded by resendObservationV1)
+│   ├── getEmailUsage.js       # Admin-only callable: read the sanitized last-observed usage
 │   ├── onTaskWrite.js         # Assignment/status notifications; reminder materialization
 │   ├── onCommentCreate.js     # @mention notifications
 │   ├── onUserWrite.js         # New registration → admins; approval → user
 │   ├── onFcmTokenWrite.js     # Privacy-safe push-device rollup on the user doc
 │   ├── dispatchReminders.js   # Hourly reminder dispatcher + leadership digest
+│   ├── retryDeliveries.js     # Retry sweep for unsettled email deliveries
 │   ├── weeklyTaskCheck.js     # Saturday 9 PM team check-in
 │   ├── cleanupRetention.js    # Daily retention pruning
 │   ├── adminOverride.js       # Admin-only callable: audited status override (never a QA decision)
+│   ├── bulkAssign.js · removeUser.js   # Admin-only callables: server-trusted (re)assignment + removal
 │   └── sendTestEmail.js       # Admin-only callable to verify the email pipeline
+│       # + focused helpers: assignmentIdentity, assignmentRecipients, mentions,
+│       #   notificationPolicy, reminderSchedule, deliveryCore, removalSaga, taskDetach
 │
 └── scripts/
     ├── seed.js                # Seed the emulator with demo users + tasks + notifications
-    └── import-csv.js          # Import a CSV into Firestore
+    ├── import-csv.js          # Import a CSV into Firestore
+    ├── backfill-assignee-uids.js  # One-off: backfill assigneeUids on existing tasks
+    └── verify-headers.mjs     # Hosting security-header check (npm run test:headers)
 ```
 
 **Mental model for newcomers:**
 
-- **Pages & components** → functions in `src/App.jsx` (`Home`, `MyDay`, `BoardList`, `Mine`, `Team`, `Admin`, `TaskDetail`, `TaskEditor`, …).
+- **Pages & components** → functions in `src/App.jsx` (`Home`, `MyDay`, `BoardList`, `Mine`, `Team`, `Admin`, `TaskDetail`, `TaskEditor`, …), with larger feature UIs extracted into their own files (`AdminScreen.jsx`, `EmailUsage.jsx`, `MentionComposer.jsx`, …) so their states are DOM-testable.
 - **Navigation** → `src/nav.js` (pure) + `src/navHooks.js` (`useNav`).
-- **Business logic** → `src/data.js` and `src/events.js` (no React, no Firebase — unit-testable).
+- **Business logic** → pure, framework-free modules (`src/data.js`, `events.js`, `nav.js`, `workflowTransition.js`, `emailUsageDoc.js`, `notificationPolicy.js`, …) — no React, no Firebase, unit-testable.
 - **Services** → `src/firebase.js` and `functions/`.
 
 ---
@@ -145,11 +159,11 @@ A deliberately small, flat codebase. Most "components" are functions inside `App
 
 ### Prerequisites
 
-- **Node 18+** and a **JDK** (the Firebase emulators require Java).
+- **Node 20+** for the app and tests, and a **JDK** (the Firebase emulators require Java). **Cloud Functions target the Node 22 runtime** (`firebase.json` + `functions/package.json`) — install Node 22 locally for emulator and deploy parity.
 - `firebase-tools` is pinned to **v13** as a local dev dependency (v14+ needs Java 21). No global CLI install is required.
 
 > [!NOTE]
-> Tests use `jsdom@24`, which is CommonJS-clean on Node 20. `jsdom@25+` can fail under Node 20's test loader; bump it only after moving to Node 22+.
+> The Vitest UI tests use `jsdom@24`, which is CommonJS-clean on Node 20. `jsdom@25+` can fail under Node 20's test loader; bump it only after the local toolchain moves to Node 22+.
 
 ### Installation
 
@@ -177,8 +191,8 @@ Configuration lives in **three tiers**. Keep them separate, and never place a se
 | --- | --- | --- |
 | `IFC_APP_URL` | Base URL for email deep-links | production URL |
 | `IFC_REPLY_TO` | Monitored inbox for email Reply-To | *(unset)* |
-| `RESEND_MONTHLY_EMAIL_LIMIT` | Internal monthly email cap | `2800` |
-| `RESEND_DAILY_SAFETY_LIMIT` | Daily runaway guard | `250` |
+| `RESEND_MONTHLY_EMAIL_LIMIT` | App-owned monthly email cap (UTC calendar month) | `2800` |
+| `RESEND_DAILY_SAFETY_LIMIT` | App-owned daily runaway guard (clamped to the plan's 100/day) | `90` |
 
 **3 — Google Cloud secret** (never in any `.env` or frontend code).
 
@@ -322,6 +336,8 @@ An in-app **Notification Center** (bell, unread badge, mark-read, click-through)
 
 **Every notification deep-links to exactly what it's about** — the task (scrolled to its review or comments section), an event, a filtered Workflow list, or **Admin → People** with the pending person highlighted for an approval request. Destinations come from one resolver (`notificationDestination`) driven by structured metadata, never by parsing text, and are mirrored server-side for push/email. See [Architecture](#architecture).
 
+**Resend account usage (admin diagnostics).** The Email settings panel shows the **last observed** Resend account usage, captured from the quota headers on each accepted send and stored in a sanitized `adminDiagnostics/emailUsageV1` doc. It is **display-only and decoupled from enforcement** (sending is governed by the app-owned caps, not this reading); it makes no assumption about Resend's reset boundary, auto-updates via an admin-only listener after each app send, and **Refresh** only re-reads the saved observation — it never calls Resend. The app's own UTC month/day counters are shown separately as internal telemetry, never as a provider limit.
+
 ### Recurring events
 
 A real recurrence engine generates upcoming church events (e.g. Cross Over Service on the last day of the month, Praise & Testimony Night on the last Friday, a bi-monthly vigil) with no hardcoded dates. Admins create and edit their own recurring series in **Admin → Events**. Home cards show the next date, days remaining, and per-occurrence content status, with **Create content** / **View content** actions.
@@ -331,7 +347,7 @@ A real recurrence engine generates upcoming church events (e.g. Cross Over Servi
 Bulk-create tasks from a CSV or the team's Google Sheet. Owners and crew without accounts import as **Pending**. The importer reconciles shortened, alternate, and misspelled names against real accounts (e.g. "Jon" → Jonathan Smith), auto-resolving only clear, unambiguous matches and asking an admin to confirm the rest. Confirmed mappings are remembered for next time.
 
 > [!NOTE]
-> Import is currently **hidden behind a build flag** (`ENABLE_CSV_IMPORT = false` in `App.jsx`). Flip it to expose the Import tab for a launch or bulk load.
+> Import is currently **hidden behind a build flag** (`ENABLE_CSV_IMPORT`, wired through `AdminScreen.jsx`). Flip it to expose the Import tab for a launch or bulk load.
 
 ### Admin & reporting
 
@@ -394,7 +410,7 @@ Overlays are URL-backed query parameters (`?compose=new`, `?edit=<id>`, `?panel=
 
 Three hooks in `App.jsx` power live data: `useAuthUser()`, `useProfile(uid)`, and `useCollection(path, canRead)`. Writes go straight to Firestore and are validated by rules; `onSnapshot` listeners stream the result back to every client. A persistent IndexedDB cache renders data instantly on repeat visits and works offline.
 
-**Primary collections:** `users` · `tasks` · `eventSeries` · `issues` · `notifications` · `reminderInstances` · `settings/notifications` · `emailDeliveries` · `systemUsage`. Server-owned collections (`reminderInstances`, `emailDeliveries`, `systemUsage`) are admin-read and never client-writable.
+**Primary collections:** `users` · `tasks` · `eventSeries` · `issues` · `notifications` · `reminderInstances` · `settings/notifications` · `emailDeliveries` · `systemUsage` · `adminDiagnostics` · `auditEvents`. Server-owned collections (`reminderInstances`, `emailDeliveries`, `systemUsage`, `adminDiagnostics`, `auditEvents`) are admin-read and never client-writable.
 
 ### Notification backend
 
@@ -435,16 +451,18 @@ All notification writes use deterministic IDs and idempotency keys. Timezone mat
 
 ## Testing
 
-The project has no lint or type-check tooling (plain JSX). Tests run on Node's built-in test runner.
+The project has no lint or type-check tooling (plain JSX). Pure logic and Cloud Functions run on **Node's built-in test runner**; rendered components run on **Vitest + jsdom**.
 
 | Command | What it checks |
 | --- | --- |
-| `npm run build` | Frontend production build (Vite) |
-| `node --test src/*.test.js` | **All frontend unit tests (156)** |
-| `node --test functions/emailService.test.js` | Email normalize/validate + provider-error classification |
-| `node --check functions/*.js` | Cloud Functions syntax (CommonJS, no build step) |
+| `npm run build` | Frontend production build (Vite) — the compile/lint gate |
+| `npm test` (`node --test src/*.test.js`) | Pure frontend unit tests — **474** across 39 files |
+| `npm run test:ui` (Vitest + jsdom) | Rendered-component tests (`*.ui.test.jsx`) — **176** across 15 files |
+| `npm run test:functions` | Cloud Functions unit tests — **186** — plus `node --check functions/index.js` |
+| `npm run test:emulator` | Backend integration against a throwaway Firestore emulator (`test/*.test.js`) — **243** across 22 files |
+| `npm run verify` | Runs build + all four suites in sequence |
 
-There is no separate lint step — the project is plain JSX (no TypeScript), so a clean `npm run build` is the compile/lint gate.
+Also available: `npm run test:headers` (Hosting security-header check) and `npm run test:trigger` (a functions-triggered mention test). There is no separate lint step — the project is plain JSX (no TypeScript), so a clean `npm run build` is the compile/lint gate.
 
 **Frontend suites** cover the recurrence engine, content Title-Case, task-UX helpers, the **capacity engine**, date validation, theme resolution, stylesheet **guards** (input contrast; capacity expand-in-place), **QA-as-a-department** rules (production exclusions, capabilities), the pure **navigation mapping** including **notification destinations** (`nav.test.js`), and a **jsdom history-integration** suite (`nav.integration.test.js`) that drives the real router through push/back/forward, overlay-close-on-Back, launcher-replace, legacy-link migration, and the unsaved-form blocker.
 
@@ -490,9 +508,9 @@ Requires the **Blaze** (pay-as-you-go) plan.
 4. Deploy: `npx firebase deploy --only functions`. Hourly and daily schedules register automatically.
 
 > [!NOTE]
-> **The notification backend has not been deployed yet** — it is verified only against the emulator. Work through the checklist below before the first production deploy.
+> **The notification backend is deployed in production** (2nd-gen Cloud Functions on Node 22, region `northamerica-northeast1`). The one-time setup below was completed for the live environment — keep it as the reference for a fresh environment or a re-bootstrap. Scoped redeploys use `firebase deploy --only functions:<name>`.
 
-**Pre-deploy checklist:**
+**One-time production setup (completed for the live environment; reference for a fresh one):**
 
 - [ ] Blaze plan enabled + billing alert set
 - [ ] `RESEND_API_KEY` in Secret Manager; functions granted access
@@ -534,7 +552,7 @@ Fix (one-time, in the Google Cloud console — Firebase can't do it for you):
 
 ## Roadmap
 
-Each item is marked **implemented** (code on `main`), **tested** (unit/integration), and **deployed** (live in production) where they differ. The web client deploys with Hosting; only the Cloud Functions backend is a separate, still-undeployed surface.
+Each item is marked **implemented**, **tested** (unit/integration), and **deployed** (live in production) where they differ. The web client deploys with Hosting; the Cloud Functions backend deploys separately — both are now live.
 
 ### Completed — implemented, tested, and live
 
@@ -549,10 +567,9 @@ Each item is marked **implemented** (code on `main`), **tested** (unit/integrati
 - In-app Notification Center + per-user preferences
 - **Mobile-first design system** (glass nav/header, single-scroll shell, dark mode)
 - Offline persistence, logging/error capture, "What's New" + feature requests
-
-### Implemented & emulator-tested, not yet deployed
-
-- **Notification/reminder backend** (Cloud Functions) and **Resend email** — fully built and exercised against the emulator; **not deployed** (needs the Blaze plan + config). Web push ships with it.
+- **Notification/reminder backend** (2nd-gen Cloud Functions) with **web push** and **Resend transactional email** — immediate + scheduled notifications, atomic email-quota reservation, and a retry sweep; deployed to production
+- **Resend account-usage display** — display-only "last observed" provider usage in the admin Email panel (decoupled from enforcement; no reset-boundary assumptions)
+- **UID-based assignment authorization** — stable `ownerUid` / `support[].uid` / `assigneeUids`, enforced in Firestore rules (rename-safe; a legacy owner-name fallback remains until backfill coverage is 100%)
 
 ### Planned
 
@@ -563,7 +580,7 @@ Each item is marked **implemented** (code on `main`), **tested** (unit/integrati
 - **Content-performance analytics** (Instagram / Facebook / YouTube) and calendar/Drive integrations
 - **PWA & performance** — route-level code-splitting, richer offline support
 - Bulk admin actions; recurring content templates; AI caption suggestions
-- **ID-based task assignments** — replace name-based `owner` / `support[].name` with stable **user IDs**, so assignment integrity can be validated in Firestore rules, renames/removals don't break references, task-history attribution stays reliable, and QA production exclusions can be enforced **server-side** (today they're client-side plus the server-side user-doc invariant). Also unblocks a per-task `reviewerId`.
+- **Strictly UID-only authorization** — once `scripts/backfill-assignee-uids.js` reports 100% coverage on active tasks, remove the legacy owner-name fallback in `firestore.rules` (`pIsTaskAssignee`) so task authorization is UID-only. Also unblocks a per-task `reviewerId`.
 
 ---
 

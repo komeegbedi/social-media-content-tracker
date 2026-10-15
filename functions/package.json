@@ -2,7 +2,7 @@
   "name": "functions",
   "description": "IFC Creatives Board — Cloud Functions (notifications + reminder dispatch)",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "private": true,
