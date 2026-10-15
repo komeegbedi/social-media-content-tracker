@@ -808,6 +808,12 @@ a{color:var(--accent-foreground)}
 .sb-radio{display:flex;align-items:center;gap:9px;min-height:44px;padding:8px 0;font-size:13.5px;color:var(--ink);cursor:pointer}
 .sb-radio input{accent-color:var(--accent-foreground);width:18px;height:18px;flex:none}
 .sb-radio:focus-within{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:9px}
+/* A .sb-radio label WRAPS its own input, so the generic standalone-field rules
+   (.sb-field input → width:100%; .sb-field label → block/muted/600) must not win over
+   it — otherwise the control stretches full-width and shoves the label text into a
+   clipped column. Scope the radio back to its intended inline layout. */
+.sb-field label.sb-radio{display:flex;font-size:13.5px;font-weight:400;color:var(--ink);margin-bottom:0}
+.sb-field .sb-radio input[type="radio"]{width:18px;height:18px;flex:none;margin:0}
 
 /* ===== Expand / collapse all control ===== */
 .sb-collapserow{display:flex;justify-content:flex-end;margin:-4px 2px 8px}
