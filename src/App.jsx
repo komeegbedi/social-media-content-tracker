@@ -3522,7 +3522,6 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   // reset when a new task opens.
   const [blocked, setBlocked] = useState(task.blockedOn || "");
   const [links, setLinksDraft] = useState(task.links || {});
-  const [postLink, setPostLink] = useState(task.postLink || "");
   const [showOverride, setShowOverride] = useState(false);      // admin override panel revealed
   const [overrideTo, setOverrideTo] = useState("");             // destination status
   const [overrideReason, setOverrideReason] = useState("");     // required audit reason
@@ -3619,7 +3618,6 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
   const required = requiredLinkKeys(task.type);
   // Only the type's required links (plus any already filled) — keeps it focused.
   const linkKeys = Object.keys(LINK_FIELDS).filter(k => required.includes(k) || (links[k]||"").trim());
-  const postStage = ["Ready to Post","Posted"].includes(task.status);
   // A submit-to-QA step (Submit / Resubmit) is BLOCKED until every required link is a
   // valid http(s) URL — missingLinks now validates the URL, so blank, whitespace,
   // plain text, or a scheme-less value all count as missing. Drives both the disabled
@@ -3654,14 +3652,11 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
       const miss = missingLinks({ ...task, links });
       if (miss.length) { setWarn(`Add the required content link${miss.length>1?"s":""} first: ${miss.map(k=>LINK_FIELDS[k]).join(", ")}.`); return; }
     }
-    if (action.needsPostLink && !postLink.trim()) { setWarn("Add the final post link first."); return; }
-    if (action.needsPostLink && !isValidUrl(postLink.trim())) { setWarn("Please enter a valid URL for the post link."); return; }
     setWarn("");
     const extra = {};
     // Persist the CURRENT link draft together with the status change — one atomic
     // submit, so status never advances to QA without its deliverable link.
     if (action.requiresLinks) extra.links = { ...links };
-    if (action.needsPostLink) extra.postLink = postLink.trim();
     onAction(action, extra);
   };
 
@@ -3810,14 +3805,6 @@ function TaskDetail({ task, me, isAdmin, isQA, users, focus, highlightComment, o
               );
             })}
           </>}
-
-          {/* Final post link — captured when marking as posted. */}
-          {postStage && (
-            <div className="sb-field"><label htmlFor="td-postlink">Final post link</label>
-              <UrlInput id="td-postlink" value={postLink} ariaLabel="Final post link" placeholder="https://instagram.com/…"
-                disabled={task.status==="Posted"} onChange={setPostLink} />
-            </div>
-          )}
 
           {/* Waiting on (blocker) — editable while the task is live. */}
           {task.status!=="Posted" && (
