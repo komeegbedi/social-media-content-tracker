@@ -1,0 +1,146 @@
+rules_version = '2';
+
+// IFC Creative Academy — Cloud Storage rules (covers + lesson thumbnails ONLY).
+//
+// Everything else in the bucket is denied. Images are read through the SDK
+// (getBlob) by signed-in, approved members — there are no public objects and
+// the app never hands out download URLs, so access always follows the same
+// model as the Firestore course docs:
+//   • published course images: any approved member
+//   • draft / archived course images: the course's editors only
+//   • uploads / replacements / deletes: course editors (admin or the course's
+//     instructor) — the client stores a versioned path and only deletes the
+//     previous object AFTER the new reference is saved.
+// Content type and size are enforced here as well as in the client: the client
+// re-encodes to JPEG ≤ ~250 KB, so the 2 MB ceiling is a hard backstop, not the
+// expected size. Firestore lookups are cross-service rules (firestore.get).
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() { return request.auth != null; }
+    function me() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+    function hasProfile() {
+      return signedIn() && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+    function notDisabled() { return me().get('disabled', false) != true; }
+    function isAdmin() { return hasProfile() && me().role == 'admin' && notDisabled(); }
+    function isApproved() {
+      return hasProfile() && notDisabled() && (me().status == 'approved' || me().role == 'admin');
+    }
+    function course(courseId) {
+      return firestore.get(/databases/(default)/documents/courses/$(courseId)).data;
+    }
+    function courseExists(courseId) {
+      return firestore.exists(/databases/(default)/documents/courses/$(courseId));
+    }
+    // v4: global Academy-editor role; hidden categories gate learner reads.
+    function isEditor() {
+      return isApproved() && (isAdmin() || me().get('academyEditor', false) == true);
+    }
+    function hiddenCategoryIds() {
+      return firestore.exists(/databases/(default)/documents/academySettings/categoryIndex)
+        ? firestore.get(/databases/(default)/documents/academySettings/categoryIndex).data.get('hidden', [])
+        : [];
+    }
+    // v6: a course may exist only as a draft (never published yet); editors can
+    // upload/read its images before the first publish.
+    function draftExists(courseId) {
+      return firestore.exists(/databases/(default)/documents/courseDrafts/$(courseId));
+    }
+    function isCourseEditor(courseId) { return isEditor() && (courseExists(courseId) || draftExists(courseId)); }
+    // Deleting a course removes its Firestore docs FIRST, then its uploads — so
+    // the uploads of a course that no longer exists (neither live nor draft) may
+    // be removed by an Academy editor. (While it exists, isCourseEditor applies.)
+    // The client additionally checks no other course/draft still uses an image.
+    function leftoverOfDeletedCourse(courseId) { return isEditor() && !courseExists(courseId) && !draftExists(courseId); }
+    function canSeeCourse(courseId) {
+      return isApproved() && (isCourseEditor(courseId) || (courseExists(courseId)
+        && course(courseId).status == 'published' && !(course(courseId).get('category', '') in hiddenCategoryIds())));
+    }
+    function guide(guideId) {
+      return firestore.get(/databases/(default)/documents/guides/$(guideId)).data;
+    }
+    function guideExists(guideId) {
+      return firestore.exists(/databases/(default)/documents/guides/$(guideId));
+    }
+    function isGuideEditor(guideId) { return isEditor() && guideExists(guideId); }
+    function canSeeGuide(guideId) {
+      return isApproved() && guideExists(guideId)
+        && (isEditor() || (guide(guideId).status == 'published' && !(guide(guideId).get('category', '') in hiddenCategoryIds())));
+    }
+    function pathDoc(pathId) {
+      return firestore.get(/databases/(default)/documents/paths/$(pathId)).data;
+    }
+    function pathExists(pathId) {
+      return firestore.exists(/databases/(default)/documents/paths/$(pathId));
+    }
+    function isPathEditor(pathId) { return isEditor() && pathExists(pathId); }
+    function canSeePath(pathId) {
+      return isApproved() && pathExists(pathId)
+        && (isEditor() || pathDoc(pathId).status == 'published');
+    }
+    function validImage() {
+      return request.resource != null
+        && request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp']
+        && request.resource.size > 0
+        && request.resource.size <= 2 * 1024 * 1024;
+    }
+
+    // Course covers: academy/covers/{courseId}/{version}.jpg
+    match /academy/covers/{courseId}/{file} {
+      allow read: if canSeeCourse(courseId);
+      allow create, update: if isCourseEditor(courseId) && validImage();
+      allow delete: if isCourseEditor(courseId) || leftoverOfDeletedCourse(courseId);
+    }
+
+    // Lesson thumbnails: academy/lessonThumbs/{courseId}/{lessonId}/{version}.jpg
+    match /academy/lessonThumbs/{courseId}/{lessonId}/{file} {
+      allow read: if canSeeCourse(courseId);
+      allow create, update: if isCourseEditor(courseId) && validImage();
+      allow delete: if isCourseEditor(courseId) || leftoverOfDeletedCourse(courseId);
+    }
+
+    // Quick-guide thumbnails: academy/guideThumbs/{guideId}/{version}.jpg
+    match /academy/guideThumbs/{guideId}/{file} {
+      allow read: if canSeeGuide(guideId);
+      allow create, update: if isGuideEditor(guideId) && validImage();
+      allow delete: if isGuideEditor(guideId);
+    }
+
+    // Learning-path covers: academy/pathCovers/{pathId}/{version}.jpg
+    match /academy/pathCovers/{pathId}/{file} {
+      allow read: if canSeePath(pathId);
+      allow create, update: if isPathEditor(pathId) && validImage();
+      allow delete: if isPathEditor(pathId);
+    }
+
+    // Category covers (v4, portrait 3:4): academy/catCovers/{categoryId}/{version}.jpg
+    // — any category RECORD id. Older landscape uploads under categoryArt/ stay
+    // readable until an admin replaces them.
+    match /academy/catCovers/{categoryId}/{file} {
+      allow read: if isApproved();
+      allow create, update: if isAdmin() && validImage()
+        && firestore.exists(/databases/(default)/documents/academyCategories/$(categoryId));
+      allow delete: if isAdmin();
+    }
+    match /academy/categoryArt/{categoryId}/{file} {
+      allow read: if isApproved();
+      allow create, update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // Purpose-video thumbnail (Learn home): admins manage, approved members view.
+    match /academy/purpose/{file} {
+      allow read: if isApproved();
+      allow create, update: if isAdmin() && validImage();
+      allow delete: if isAdmin();
+    }
+
+    // Default deny for every other path.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

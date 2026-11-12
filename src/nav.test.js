@@ -4,12 +4,13 @@ import assert from "node:assert/strict";
 import {
   SCREENS, pathForScreen, parseLocation, parseOverlay, migrate, withParams,
   openComposeNew, openComposeEdit, openPanel, closeOverlays, fallbackPath,
-  titleFor, hasOverlay, PARAM, notificationDestination, overlayClose,
+  titleFor, hasOverlay, PARAM, notificationDestination, overlayClose, learnPath, learnGuidePath, learnPathwayPath,
+  learnCategoryPath, learnBrowsePath, learnManagePath, learnPreviewPath,
 } from "./nav.js";
 
 test("every screen has a canonical path and round-trips", () => {
   const paths = SCREENS.map(pathForScreen);
-  assert.deepEqual(paths, ["/", "/my-day", "/workflow", "/my-work", "/team", "/admin"]);
+  assert.deepEqual(paths, ["/", "/my-day", "/workflow", "/my-work", "/learn", "/team", "/admin"]);
   for (const s of SCREENS) assert.equal(parseLocation(pathForScreen(s), "").screen, s);
 });
 
@@ -295,4 +296,103 @@ test("launcher: Settings from Notifications drops the panel, keeps pathname+para
   assert.equal(parseOverlay(dropped).panel, null, `notifications panel must be gone: ${dropped}`);
   assert.ok(/section=content/.test(dropped), "unrelated params preserved");
   assert.ok(!/panel=notifications/.test(dropped), "no stale notifications panel");
+});
+
+/* ---- IFC Creative Academy (Learn) routes ---- */
+test("learn routes: catalogue, course, lesson; malformed ids fall back to /learn", () => {
+  assert.equal(parseLocation("/learn", "").screen, "learn");
+  const c = parseLocation("/learn/course/abc_123", "");
+  assert.equal(c.screen, "learn"); assert.equal(c.courseId, "abc_123"); assert.equal(c.lessonId, null); assert.equal(c.redirect, null);
+  const l = parseLocation("/learn/course/abc/lesson/l-9", "");
+  assert.equal(l.screen, "learn"); assert.equal(l.courseId, "abc"); assert.equal(l.lessonId, "l-9");
+  assert.equal(parseLocation("/learn/course/", "").redirect, "/learn");
+  assert.equal(parseLocation("/learn/whatever", "").redirect, "/learn");
+  assert.equal(parseLocation("/learn/course/a%2Fb", "").redirect, "/learn", "encoded slash is not an id");
+  assert.equal(learnPath(), "/learn");
+  assert.equal(learnPath("c1"), "/learn/course/c1");
+  assert.equal(learnPath("c1", "l2"), "/learn/course/c1/lesson/l2");
+});
+
+test("learn Back fallbacks walk lesson → course → catalogue; titles say Learn", () => {
+  assert.equal(fallbackPath(parseLocation("/learn/course/c1/lesson/l2", "")), "/learn/course/c1");
+  assert.equal(fallbackPath(parseLocation("/learn/course/c1", "")), "/learn");
+  assert.match(titleFor(parseLocation("/learn", "")), /^Creative Academy ·/);
+  assert.match(titleFor(parseLocation("/learn/course/c1", ""), "Lighting"), /^Lighting · Learn ·/);
+  assert.match(titleFor(parseLocation("/learn/course/c1/lesson/l1", "")), /^Lesson · Learn ·/);
+});
+
+test("learn routes: quick guides and learning paths are deep-linkable; existing course/lesson URLs unchanged", () => {
+  const g = parseLocation("/learn/guide/g-1", "");
+  assert.equal(g.screen, "learn"); assert.equal(g.guideId, "g-1"); assert.equal(g.courseId, null); assert.equal(g.redirect, null);
+  const p = parseLocation("/learn/path/p_2", "");
+  assert.equal(p.screen, "learn"); assert.equal(p.pathId, "p_2"); assert.equal(p.guideId, null);
+  assert.equal(parseLocation("/learn/guide/", "").redirect, "/learn");
+  assert.equal(learnGuidePath("g1"), "/learn/guide/g1");
+  assert.equal(learnPathwayPath("p1"), "/learn/path/p1");
+  assert.equal(learnPath("c1", "l2"), "/learn/course/c1/lesson/l2");
+  assert.equal(fallbackPath(parseLocation("/learn/guide/g1", "")), "/learn");
+  assert.equal(fallbackPath(parseLocation("/learn/path/p1", "")), "/learn");
+  assert.match(titleFor(parseLocation("/learn/guide/g1", "")), /^Quick guide · Learn ·/);
+  assert.match(titleFor(parseLocation("/learn/path/p1", ""), "Short-Form Content"), /^Short-Form Content · Learn ·/);
+});
+
+test("learn routes: category pages and the browse listing are deep-linkable; legacy category ids parse (page redirects)", () => {
+  const c = parseLocation("/learn/category/filmmaking", "");
+  assert.equal(c.screen, "learn"); assert.equal(c.categoryId, "filmmaking"); assert.equal(c.redirect, null);
+  assert.equal(parseLocation("/learn/category/videography", "").categoryId, "videography", "legacy id is parsed; the page replaces it with the canonical one");
+  assert.equal(parseLocation("/learn/category/Not_Valid", "").redirect, "/learn");
+  const b = parseLocation("/learn/browse", "?format=path&category=photography&sort=recent&q=light");
+  assert.deepEqual(b.browse, { format: "path", category: "photography", topic: "", sort: "recent", q: "light" });
+  assert.deepEqual(parseLocation("/learn/browse", "").browse, { format: "", category: "", topic: "", sort: "", q: "" });
+  assert.equal(learnCategoryPath("filmmaking"), "/learn/category/filmmaking");
+  assert.equal(learnBrowsePath({ sort: "recent" }), "/learn/browse?sort=recent");
+  assert.equal(learnBrowsePath({}), "/learn/browse");
+  assert.equal(learnBrowsePath({ q: "a b", format: "guide" }), "/learn/browse?format=guide&q=a+b");
+  assert.equal(fallbackPath(parseLocation("/learn/category/filmmaking", "")), "/learn");
+  assert.equal(fallbackPath(parseLocation("/learn/browse", "")), "/learn");
+  assert.match(titleFor(parseLocation("/learn/category/filmmaking", ""), "Filmmaking"), /^Filmmaking · Learn ·/);
+  assert.match(titleFor(parseLocation("/learn/browse", "")), /^Browse · Learn ·/);
+  // existing routes untouched
+  assert.equal(parseLocation("/learn/course/c1/lesson/l1", "").lessonId, "l1");
+  assert.equal(parseLocation("/learn/guide/g1", "").guideId, "g1");
+  assert.equal(parseLocation("/learn/path/p1", "").pathId, "p1");
+});
+
+test("learn routes v4: topic filter by stable id, and the editor manage page", () => {
+  assert.equal(parseLocation("/learn/browse", "?topic=colour-grading").browse.topic, "colour-grading");
+  assert.equal(learnBrowsePath({ topic: "colour-grading" }), "/learn/browse?topic=colour-grading");
+  const m = parseLocation("/learn/manage", "");
+  assert.equal(m.screen, "learn"); assert.deepEqual(m.manage, { view: "home" }); assert.equal(m.redirect, null);
+  assert.equal(fallbackPath(m), "/learn");
+  assert.match(titleFor(m), /^Manage · Academy workspace ·/);
+  assert.equal(parseLocation("/learn", "").manage, null);
+});
+
+test("workspace + preview routes: deep-linkable, back-safe, and the existing learner routes are untouched", () => {
+  assert.deepEqual(parseLocation("/learn/manage/category/new", "").manage, { view: "category", id: "new", item: "", category: "" });
+  assert.deepEqual(parseLocation("/learn/manage/category/filmmaking", "").manage, { view: "category", id: "filmmaking", item: "", category: "" });
+  assert.deepEqual(parseLocation("/learn/manage/course/new", "?category=photography").manage, { view: "course", id: "new", item: "", category: "photography" });
+  assert.deepEqual(parseLocation("/learn/manage/course/c1", "?item=l2").manage, { view: "course", id: "c1", item: "l2", category: "" });
+  assert.deepEqual(parseLocation("/learn/manage/more", "").manage, { view: "more" });
+  assert.equal(parseLocation("/learn/manage/bogus/x", "").redirect, "/learn/manage");
+  assert.equal(learnManagePath({ view: "course", id: "c1", item: "details" }), "/learn/manage/course/c1?item=details");
+  assert.equal(learnManagePath({ view: "course", category: "photography" }), "/learn/manage/course/new?category=photography");
+  assert.equal(learnManagePath({ view: "category", id: "new" }), "/learn/manage/category/new");
+  assert.equal(learnManagePath(), "/learn/manage");
+  const pv = parseLocation("/learn/preview/course/c1/lesson/l2", "");
+  assert.deepEqual([pv.screen, pv.preview, pv.courseId, pv.lessonId], ["learn", true, "c1", "l2"]);
+  assert.equal(learnPreviewPath("c1"), "/learn/preview/course/c1");
+  assert.equal(fallbackPath(pv), "/learn/manage/course/c1");
+  assert.equal(fallbackPath(parseLocation("/learn/manage/course/c1", "")), "/learn/manage");
+  assert.equal(parseLocation("/learn/course/c1/lesson/l2", "").preview, false);
+});
+
+test("the retired Admin → Academy page redirects (replace) to the Academy workspace; other admin sections are untouched", () => {
+  const r = parseLocation("/admin", "?section=academy");
+  assert.equal(r.redirect, "/learn/manage");
+  assert.equal(r.screen, "learn");
+  // the redirect target itself doesn't redirect again (no loop)
+  assert.equal(parseLocation("/learn/manage", "").redirect, null);
+  assert.equal(parseLocation("/admin", "?section=people").redirect, null);
+  assert.equal(parseLocation("/admin", "?section=people").section, "people");
 });

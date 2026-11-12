@@ -13,7 +13,7 @@ import { db } from "./firebase";
 import { collection, doc, updateDoc, addDoc, serverTimestamp } from "firebase/firestore";
 import {
   ArrowUpTrayIcon, BoltIcon, CalendarDaysIcon, CheckCircleIcon, ChevronDownIcon, ExclamationTriangleIcon, LightBulbIcon,
-  ChevronRightIcon, FunnelIcon, PlusIcon, SparklesIcon, TrashIcon, ArrowUturnLeftIcon, UserGroupIcon, ViewColumnsIcon, XMarkIcon,
+  ChevronRightIcon, FunnelIcon, PlusIcon, SparklesIcon, TrashIcon, ArrowUturnLeftIcon, UserGroupIcon, ViewColumnsIcon, XMarkIcon, AcademicCapIcon,
 } from "@heroicons/react/24/outline";
 import {
   ADMIN_FILTERS, PEOPLE_FILTERS, adminHealth, adminNeedsAttention, adminReadyToMove,
@@ -31,6 +31,8 @@ import { BusyButton, Progress } from "./loading.jsx";
 import { buildRowKeys, sourceContentDigest, importBatch, mergeRowResults, importSummary } from "./importPlan.js";
 import { formatDateTime, formatRelativeDays, formatRelativeShort } from "./dateFormat.js";
 import { centeredScrollTarget } from "./rtlScroll.js";
+import { useNav } from "./navHooks.js";
+import { learnManagePath } from "./nav.js";
 
 // Admin content-card kebab actions live in a pure module (adminActions.js) so the
 // "no one-click mark-posted shortcut" invariant is unit-testable.
@@ -247,7 +249,7 @@ function EventSeriesEditor({ doc: d, onSave, onClose }) {
   );
 }
 
-export default function Admin({ users, tasks, trashed = [], teamUsers, issues, eventSeries, secReq, focusUser, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onRestoreTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
+export default function Admin({ me, users, tasks, trashed = [], teamUsers, issues, eventSeries, secReq, focusUser, onEditUser, onEditTask, onDeleteUser, onRemoveUser, onDeleteTask, onRestoreTask, onDuplicateTask, onOpenTask, onAutoAll, onAutoOne, onImport, onResolveIssue, onAssignSuggested, onNewForEvent }) {
   // Start on the requested section (deep-link / notification) so we never flash
   // "Overview" before switching — that intermediate render looked jumpy.
   const [sec, setSec] = useState(() => secReq?.sec || "overview");
@@ -358,6 +360,14 @@ export default function Admin({ users, tasks, trashed = [], teamUsers, issues, e
 
 /* Compact "New" actions menu — moves the old admin toolbar into a single
    top-right dropdown so the overview leads with information, not buttons. */
+function AcademyShortcut() {
+  const R = useNav();
+  return (
+    <button type="button" className="sb-btn ghost compact" onClick={() => R.navigate(learnManagePath({ view: "home" }))}>
+      <AcademicCapIcon className="hi hi-sm" aria-hidden="true" /><span>Academy workspace</span>
+    </button>
+  );
+}
 function AdminActions({ onNewContent, onNewEvent, onAutoAll, onImport }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -442,7 +452,11 @@ function AdminOverview({ tasks, users, h, onGoContent, onGoPeople, onGoImport, o
       <div className="sb-eyebrow">{greet}</div>
       <div className="sb-adhead">
         <div className="sb-h">Leadership overview</div>
-        <AdminActions onNewContent={onNewContent} onNewEvent={onGoEvents} onAutoAll={onAutoAll} onImport={onGoImport} />
+        <div className="sb-adhead-actions">
+          {/* Academy authoring lives in Learn → Manage; this is only a shortcut. */}
+          <AcademyShortcut />
+          <AdminActions onNewContent={onNewContent} onNewEvent={onGoEvents} onAutoAll={onAutoAll} onImport={onGoImport} />
+        </div>
       </div>
 
       {/* Briefing row: the summary + project health, side by side (compact). */}

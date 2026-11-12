@@ -20,3 +20,6 @@ exports.getEmailUsage = require("./getEmailUsage").getEmailUsage;
 exports.removeUser = require("./removeUser").removeUser;
 exports.bulkAssign = require("./bulkAssign").bulkAssign;
 exports.adminOverrideStatus = require("./adminOverride").adminOverrideStatus;
+exports.submitQuizAttempt = require("./academyQuiz").submitQuizAttempt;
+exports.fetchVideoMetadata = require("./videoMetadata").fetchVideoMetadata;
+exports.fetchLinkMetadata = require("./linkMetadata").fetchLinkMetadata;

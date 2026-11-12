@@ -54,7 +54,7 @@ import {
   ChatBubbleLeftRightIcon, BellAlertIcon, ArrowRightStartOnRectangleIcon, CheckCircleIcon, ChevronDownIcon,
   InformationCircleIcon, ClipboardIcon, ArrowTopRightOnSquareIcon, CheckIcon, ClipboardDocumentIcon,
   ComputerDesktopIcon, DocumentTextIcon, SignalSlashIcon, TrophyIcon, CheckBadgeIcon,
-  TrashIcon, ArrowUturnLeftIcon, LockClosedIcon,
+  TrashIcon, ArrowUturnLeftIcon, LockClosedIcon, AcademicCapIcon,
 } from "@heroicons/react/24/outline";
 import { setView, reportIssue, logIssue, submitFeatureRequest } from "./logging";
 import { getThemePref, setThemePref, resolvedTheme, subscribeTheme } from "./theme";
@@ -75,6 +75,9 @@ import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM, notif
 /* The admin dashboard is a lazy-loaded chunk (React.lazy). It's only rendered for
    an admin who opens the Admin tab, so non-admins never download it. */
 const Admin = lazy(() => import("./AdminScreen.jsx"));
+// IFC Creative Academy ("Learn") — its own chunk: player, quiz, discussion and
+// the course editor only download when someone opens Learn.
+const Academy = lazy(() => import("./Academy.jsx"));
 
 /* Sign out AND reset the URL to a canonical route first, so a transient overlay
    in the query (?panel=profile|notifications|search, an open editor, a filter)
@@ -1453,12 +1456,14 @@ function Board({ profile, isAdmin }) {
     ? [
         { id:"mine",  label:"Reviews",  ico:()=>navIco(ClipboardDocumentCheckIcon) },
         { id:"board", label:"Workflow", ico:()=>navIco(ViewColumnsIcon) },
+        { id:"learn", label:"Learn",    ico:()=>navIco(AcademicCapIcon) },
       ]
     : [
         { id:"home",  label:"Home",    ico:()=>navIco(HomeIcon) },
         { id:"myday", label:"My Day",  ico:()=>navIco(ClockIcon) },
         { id:"board", label:"Workflow", ico:()=>navIco(ViewColumnsIcon) },
         { id:"mine",  label:"My Work", ico:()=>navIco(ClipboardDocumentListIcon) },
+        { id:"learn", label:"Learn",   ico:()=>navIco(AcademicCapIcon) },
       ];
   const mgmtNav = [
     { id:"team", label:"Team", ico:()=>navIco(UserGroupIcon) },
@@ -1888,7 +1893,7 @@ function Board({ profile, isAdmin }) {
             </div>
           </header>
 
-          <main id="sb-main" role="main" className={"sb-content"+(["home","board","team","admin"].includes(tab)?" wide":"")} ref={contentRef} tabIndex={-1}>
+          <main id="sb-main" role="main" className={"sb-content"+(["home","board","team","admin","learn"].includes(tab)?" wide":"")} ref={contentRef} tabIndex={-1}>
             <BetaBanner onReport={()=>setShowReport(true)} />
             <div className="sb-pageshow">
             {tab==="home"  && <Home tasks={activeTasks} tasksLoaded={tasksLoaded} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
@@ -1896,10 +1901,17 @@ function Board({ profile, isAdmin }) {
             {tab==="board" && <BoardList tasks={activeTasks} openTask={setOpenId} me={me} isAdmin={isAdmin} eventFilter={boardEvent} onClearEventFilter={()=>setBoardEvent(null)} urlFilter={nav.filter} />}
             {tab==="mine"  && <Mine tasks={activeTasks} me={me} openTask={setOpenId} />}
             {tab==="team"  && <Team tasks={activeTasks} users={users} />}
+            {tab==="learn" && (
+              <ChunkBoundary label="Learn">
+                <Suspense fallback={<ScreenFallback label="Learn" />}>
+                  <Academy me={me} users={users} isAdmin={isAdmin} nav={nav} R={R} />
+                </Suspense>
+              </ChunkBoundary>
+            )}
             {tab==="admin" && isAdmin && (
               <ChunkBoundary label="Admin">
                 <Suspense fallback={<ScreenFallback label="Admin" />}>
-                  <Admin users={allUsers} tasks={activeTasks} trashed={trashedTasks(tasks)} teamUsers={users} issues={issues} eventSeries={eventSeries}
+                  <Admin me={me} users={allUsers} tasks={activeTasks} trashed={trashedTasks(tasks)} teamUsers={users} issues={issues} eventSeries={eventSeries}
                     secReq={adminSecReq} focusUser={nav.user}
                     onEditUser={setEditUser} onEditTask={setEditTask}
                     onDeleteUser={removeUser} onRemoveUser={removeUserWithTasks} onDeleteTask={moveToTrash} onRestoreTask={restoreTask}
@@ -2357,7 +2369,7 @@ function GlobalSearch({ tasks, users, onClose, onOpenTask, goTab }) {
           </div>}
           <div className="sb-searchgroup">
             <div className="sb-searchsec">Jump to</div>
-            {[["home","Home",HomeIcon],["myday","My Day",ClockIcon],["board","Workflow",ViewColumnsIcon],["mine","My Work",ClipboardDocumentListIcon],["team","Team",UserGroupIcon]].map(([tab,label,Icon]) => (
+            {[["home","Home",HomeIcon],["myday","My Day",ClockIcon],["board","Workflow",ViewColumnsIcon],["mine","My Work",ClipboardDocumentListIcon],["learn","Learn",AcademicCapIcon],["team","Team",UserGroupIcon]].map(([tab,label,Icon]) => (
               <button key={tab} className="sb-sresult" onClick={()=>{ goTab(tab); onClose(); }}>
                 <span className="r-icon"><Icon className="hi hi-sm" aria-hidden="true"/></span>
                 <span className="r-main">{label}</span>
@@ -4626,6 +4638,7 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
     deprioritize: !!user.deprioritize, limited: !!user.limited, manualSchedule: !!user.manualSchedule,
     qa: !!user.qa, captions: !!user.captions, name: user.name||"",
     departments: userDepartments(user), lead: !!user.lead,   // #3 — multiple departments
+    academyEditor: !!user.academyEditor,                     // Creative Academy editor (courses, guides, paths)
     available: user.available !== false,                     // #4 — available for assignment (default on)
   });
   const [resetMsg, setResetMsg] = useState("");
@@ -4695,6 +4708,7 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
               <Toggle label="Department lead: leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
               <Toggle label="Captions & upload: handles posting after approval" v={f.captions} on={()=>set("captions",!f.captions)} />
             </>}
+            <Toggle label="Academy editor: creates and publishes courses, quick guides and learning paths in Learn" v={f.academyEditor} on={()=>set("academyEditor",!f.academyEditor)} />
           </div>
 
           {qaMode ? (

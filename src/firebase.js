@@ -83,6 +83,17 @@ export const getFunctionsInstance = memoizeImport(async () => {
   return fns;
 });
 
+/* Cloud Storage (Academy covers/thumbnails) — loaded on first use, same pattern
+   as Functions, so firebase/storage stays out of the initial bundle. Images are
+   READ through the SDK (getBlob → object URL, auth enforced by storage.rules),
+   never via public/long-lived download URLs. */
+export const getStorageInstance = memoizeImport(async () => {
+  const { getStorage, connectStorageEmulator } = await import("firebase/storage");
+  const st = getStorage(app);
+  if (_useEmulator) connectStorageEmulator(st, "127.0.0.1", 9199);
+  return st;
+});
+
 /* Invoke a callable, loading firebase/functions (getFunctions AND httpsCallable)
    on demand. httpsCallable must be imported here too — importing it statically
    anywhere pulls the whole functions SDK into the initial bundle. Rejections

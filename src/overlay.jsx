@@ -15,6 +15,9 @@ import { createPortal } from "react-dom";
 
 let _savedScrollY = 0;
 const _activeOverlays = new Set();
+// Focus that couldn't be restored because the background was still inert; it is
+// applied the moment the lock is released (see releaseBackgroundLock).
+let _pendingRestore = null;
 function applyBackgroundLock() {
   _savedScrollY = window.scrollY || window.pageYOffset || 0;
   const b = document.body;
@@ -34,6 +37,8 @@ function releaseBackgroundLock() {
   b.style.width = "";
   document.getElementById("root")?.removeAttribute("inert");
   window.scrollTo(0, _savedScrollY);
+  const pf = _pendingRestore; _pendingRestore = null;
+  if (pf && document.contains(pf) && typeof pf.focus === "function") pf.focus({ preventScroll: true });
 }
 function acquireOverlay(token) {
   const wasEmpty = _activeOverlays.size === 0;
@@ -63,7 +68,17 @@ export function Portal({ children, modal = true }) {
     prevFocusRef.current = document.activeElement;
     return () => {
       const pf = prevFocusRef.current;
-      if (pf && typeof pf.focus === "function" && document.contains(pf)) pf.focus({ preventScroll: true });
+      if (!pf || typeof pf.focus !== "function") return;
+      if (!document.contains(pf)) return;
+      pf.focus({ preventScroll: true });
+      // A modal's background lock (`inert` on #root) is released by a LATER
+      // cleanup in this same unmount, and browsers ignore focus() inside an inert
+      // subtree — so if that blocked us, hand the target to the lock release.
+      if (document.activeElement !== pf) {
+        _pendingRestore = pf;
+        // non-modal overlays / nested modals: if no release follows, try again shortly
+        queueMicrotask(() => { if (_pendingRestore === pf && !pf.closest("[inert]")) { _pendingRestore = null; pf.focus({ preventScroll: true }); } });
+      }
     };
   }, []);
   // (2) Move focus into the overlay on open (unless it focused something itself).

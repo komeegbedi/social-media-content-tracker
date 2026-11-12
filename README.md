@@ -53,6 +53,7 @@ A mostly-volunteer church creative team working **primarily from their phones**:
 - A **notification and reminder engine** that keeps the team proactive even when the app is closed.
 - **Recurring-event planning** tied to the church calendar.
 - A **mobile-first** experience with offline-friendly data and dark mode.
+- **IFC Creative Academy** ("Learn") — six learning categories, courses (link-only video, portrait covers, server-graded quizzes, saved progress, discussions), quick guides and learning paths. *(On the `creative-academy` branch; see [docs/academy.md](docs/academy.md).)*
 
 ---
 
@@ -208,7 +209,7 @@ Configuration lives in **three tiers**. Keep them separate, and never place a se
 Run the whole app against the **Firebase Emulator Suite** with seeded data. Production is never touched.
 
 ```bash
-# Terminal A — emulators (Auth, Firestore, Functions, Pub/Sub, UI on :4000)
+# Terminal A — emulators (Auth, Firestore, Functions, Pub/Sub, Storage, UI on :4000)
 npm run emulators
 
 # Terminal B — seed demo data, then start the dev server
@@ -225,7 +226,7 @@ Seeded logins (shared password `password123`):
 | `sam@example.com` | Member · Captions/Upload |
 | `riley@example.com` | Pending (approval screen) |
 
-Re-run `npm run seed` anytime to reset. Scheduled functions don't fire on a timer in the emulator — invoke `dispatchReminders` manually to test reminder delivery.
+The seed also creates fictional Academy courses (`alex@example.com` is an instructor + department lead; `sam@example.com` has started a course). Re-run `npm run seed` anytime to reset. Scheduled functions don't fire on a timer in the emulator — invoke `dispatchReminders` manually to test reminder delivery.
 
 ### Production build
 
@@ -462,7 +463,7 @@ The project has no lint or type-check tooling (plain JSX). Pure logic and Cloud 
 | `npm run test:emulator` | Backend integration against a throwaway Firestore emulator (`test/*.test.js`) — **243** across 22 files |
 | `npm run verify` | Runs build + all four suites in sequence |
 
-Also available: `npm run test:headers` (Hosting security-header check) and `npm run test:trigger` (a functions-triggered mention test). There is no separate lint step — the project is plain JSX (no TypeScript), so a clean `npm run build` is the compile/lint gate.
+Also available: `npm run test:headers` (Hosting security-header check), `npm run test:trigger` (a functions-triggered mention test) and `npm run test:academy` (Academy **Firestore + Storage** rules against throwaway Firestore + Storage emulators — the Storage suite needs both because `storage.rules` reads Firestore). There is no separate lint step — the project is plain JSX (no TypeScript), so a clean `npm run build` is the compile/lint gate.
 
 **Frontend suites** cover the recurrence engine, content Title-Case, task-UX helpers, the **capacity engine**, date validation, theme resolution, stylesheet **guards** (input contrast; capacity expand-in-place), **QA-as-a-department** rules (production exclusions, capabilities), the pure **navigation mapping** including **notification destinations** (`nav.test.js`), and a **jsdom history-integration** suite (`nav.integration.test.js`) that drives the real router through push/back/forward, overlay-close-on-Back, launcher-replace, legacy-link migration, and the unsaved-form blocker.
 
