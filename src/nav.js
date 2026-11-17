@@ -7,26 +7,128 @@
    function is (location) -> value or (location, change) -> next location. */
 
 // Top-level screens and their canonical paths. Order = tab order.
-export const SCREENS = ["home", "myday", "board", "mine", "team", "admin"];
+export const SCREENS = ["home", "myday", "board", "mine", "learn", "team", "admin"];
 
 const SCREEN_PATH = {
   home: "/",
   myday: "/my-day",
   board: "/workflow",
   mine: "/my-work",
+  learn: "/learn",
   team: "/team",
   admin: "/admin",
 };
 const PATH_SCREEN = Object.fromEntries(Object.entries(SCREEN_PATH).map(([s, p]) => [p, s]));
 
 // Legacy tab ids (old ?tab= values) → screen. Same ids as the nav model.
-const LEGACY_TAB = { home: "home", myday: "myday", board: "board", mine: "mine", team: "team", admin: "admin" };
+const LEGACY_TAB = { home: "home", myday: "myday", board: "board", mine: "mine", learn: "learn", team: "team", admin: "admin" };
 
 // Human titles for <title> — "IFC Creatives Board" is appended by the caller.
 export const SCREEN_TITLE = {
   home: "Home", myday: "My Day", board: "Workflow", mine: "My Work",
-  team: "Team", admin: "Admin", content: "Content", notfound: "Not found",
+  learn: "Creative Academy", team: "Team", admin: "Admin", content: "Content", notfound: "Not found",
 };
+
+/* IFC Creative Academy routes (all render the `learn` screen):
+     /learn                                   catalogue + purpose video
+     /learn/course/:courseId                  course overview
+     /learn/course/:courseId/lesson/:lessonId lesson player
+   Ids are opaque Firestore ids; a malformed id falls through to /learn. */
+const ID = "[A-Za-z0-9_-]{1,64}";
+const LEARN_COURSE = new RegExp(`^/learn/course/(${ID})$`);
+const LEARN_LESSON = new RegExp(`^/learn/course/(${ID})/lesson/(${ID})$`);
+const LEARN_GUIDE = new RegExp(`^/learn/guide/(${ID})$`);
+/* Category ids: the six built-ins are plain words, but categories created in
+   the workspace get a slug + random suffix that can contain DIGITS
+   ("testing-123-k3x9"). Accept every id the rules allow ([a-z0-9-]{1,40})
+   and let the page decide whether it exists / is visible —
+   an unknown id shows "not available", never a silent bounce back to /learn. */
+const LEARN_CATEGORY = /^\/learn\/category\/([a-z0-9-]{1,40})$/;      // exactly the ids the rules allow
+const LEARN_BROWSE = "/learn/browse";
+const LEARN_PATHWAY = new RegExp(`^/learn/path/(${ID})$`);
+/* Course / lesson URL. `opts.path` = the learning path the learner opened it
+   from (?path=<id>) — explicit context, carried through lesson navigation so
+   completion can offer "Continue learning path". Without it, the URL is the
+   plain direct link (unchanged). */
+export const learnPath = (courseId, lessonId, opts = {}) => {
+  const base = !courseId ? "/learn"
+    : !lessonId ? `/learn/course/${encodeURIComponent(courseId)}`
+    : `/learn/course/${encodeURIComponent(courseId)}/lesson/${encodeURIComponent(lessonId)}`;
+  return courseId && opts.path ? `${base}?path=${encodeURIComponent(opts.path)}` : base;
+};
+//   /learn/guide/:guideId   quick guide        /learn/path/:pathId   learning path
+export const learnGuidePath = (guideId) => `/learn/guide/${encodeURIComponent(guideId)}`;
+//   /learn/category/:categoryId   category page   /learn/browse?format=&category=&sort=&q=   full listing
+/* Where an old editing link should go: the course workspace (with the lesson
+   selected), else a category workspace, else null. Ids are validated. */
+const VALID_ID = new RegExp(`^${"[A-Za-z0-9_-]{1,64}"}$`);
+export function legacyEditTarget({ course, lesson, category } = {}) {
+  const ok = (v) => typeof v === "string" && VALID_ID.test(v);
+  if (ok(course)) return learnManagePath({ view: "course", id: course, item: ok(lesson) ? lesson : "" });
+  if (ok(category)) return learnManagePath({ view: "category", id: category });
+  return null;
+}
+const EDIT_WORDS = "edit|details|settings|manage";
+export function legacyEditRedirect(path, p) {
+  let m;
+  // /learn/manage/course/:id/(lesson|item|lessons)/:lid · /learn/manage/course/:id/:lid · …/:id/edit
+  if ((m = path.match(new RegExp(`^/learn/manage/course/(${ID})/(?:lessons?|items?)/(${ID})/?$`)))) return legacyEditTarget({ course: m[1], lesson: m[2] });
+  if ((m = path.match(new RegExp(`^/learn/manage/course/(${ID})/(?:${EDIT_WORDS})/?$`)))) return legacyEditTarget({ course: m[1] });
+  if ((m = path.match(new RegExp(`^/learn/manage/course/(${ID})/(${ID})/?$`)))) return legacyEditTarget({ course: m[1], lesson: m[2] });
+  // /learn/manage/category/:cat/course/:id(/lesson/:lid)
+  if ((m = path.match(new RegExp(`^/learn/manage/category/${ID}/course/(${ID})(?:/lessons?/(${ID}))?/?$`)))) return legacyEditTarget({ course: m[1], lesson: m[2] });
+  // /learn/manage?course=&lesson= · ?category=
+  if (path === "/learn/manage" && !p.get("guide") && (p.get("course") || p.get("category"))) return legacyEditTarget({ course: p.get("course"), lesson: p.get("lesson") || p.get("item"), category: p.get("category") });
+  // /learn/course/:id/edit · /learn/course/:id/lesson/:lid/edit · learner pages with ?edit / ?manage
+  if ((m = path.match(new RegExp(`^/learn/course/(${ID})/(?:${EDIT_WORDS})/?$`)))) return legacyEditTarget({ course: m[1] });
+  if ((m = path.match(new RegExp(`^/learn/course/(${ID})/lesson/(${ID})/(?:${EDIT_WORDS})/?$`)))) return legacyEditTarget({ course: m[1], lesson: m[2] });
+  if ((m = path.match(new RegExp(`^/learn/course/(${ID})(?:/lesson/(${ID}))?$`))) && (p.has("edit") || p.has("manage"))) return legacyEditTarget({ course: m[1], lesson: m[2] });
+  // old guide editing links (the dialog editor is gone): /learn/guide/:id/edit · ?edit · /learn/manage?guide=
+  const keepPath = (to) => { const pc = p.get("path"); return pc && PATH_ID.test(pc) ? `${to}?path=${encodeURIComponent(pc)}` : to; };
+  if ((m = path.match(new RegExp(`^/learn/guide/(${ID})/(?:${EDIT_WORDS})/?$`)))) return keepPath(`/learn/manage/guide/${m[1]}`);
+  if ((m = path.match(new RegExp(`^/learn/guide/(${ID})$`))) && (p.has("edit") || p.has("manage"))) return keepPath(`/learn/manage/guide/${m[1]}`);
+  if ((m = path.match(new RegExp(`^/learn/manage/guides?/(${ID})/(?:${EDIT_WORDS})/?$`)))) return `/learn/manage/guide/${m[1]}`;
+  if (path === "/learn/manage" && p.get("guide") && VALID_ID.test(p.get("guide"))) return `/learn/manage/guide/${p.get("guide")}`;
+  return null;
+}
+
+/* Authoring workspace (Academy editors) + draft preview:
+     /learn/manage                         Academy (categories)
+     /learn/manage/category/:id|new        category workspace
+     /learn/manage/course/:id|new          course workspace  (?item=<lessonId|details>&category=<id>)
+     /learn/manage/more                    quick guides, learning paths, topics
+     /learn/preview/course/:id[/lesson/:lid]  learner view of the CURRENT DRAFT */
+// focus: a field to move to on arrival (course details: "prior" | "cover" | "title" | "category").
+export const MANAGE_FOCI = ["prior", "cover", "title", "category"];
+// path: the learning path an editor came from (kept so "Back to course" can
+// restore it; the learner page validates it as usual).
+const PATH_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export function learnManagePath({ view = "home", id = "", item = "", category = "", focus = "", path = "" } = {}) {
+  const base = view === "home" ? "/learn/manage" : view === "more" ? "/learn/manage/more" : `/learn/manage/${view}/${encodeURIComponent(id || "new")}`;
+  const q = new URLSearchParams();
+  if (item) q.set("item", item);
+  if (category) q.set("category", category);
+  if (focus && MANAGE_FOCI.includes(focus)) q.set("focus", focus);
+  if (path && PATH_ID.test(path) && (view === "course" || view === "guide")) q.set("path", path);
+  const qs = q.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+export const learnPreviewPath = (courseId, lessonId, opts = {}) => {
+  const base = lessonId
+    ? `/learn/preview/course/${encodeURIComponent(courseId)}/lesson/${encodeURIComponent(lessonId)}`
+    : `/learn/preview/course/${encodeURIComponent(courseId)}`;
+  return opts.path && PATH_ID.test(opts.path) ? `${base}?path=${encodeURIComponent(opts.path)}` : base;
+};
+export const learnPreviewGuidePath = (guideId, opts = {}) => `/learn/preview/guide/${encodeURIComponent(guideId)}${opts.path && PATH_ID.test(opts.path) ? `?path=${encodeURIComponent(opts.path)}` : ""}`;
+export const learnPreviewCategoryPath = (categoryId) => `/learn/preview/category/${encodeURIComponent(categoryId)}`;
+export const learnCategoryPath = (categoryId) => `/learn/category/${encodeURIComponent(categoryId)}`;
+export const learnBrowsePath = (params = {}) => {
+  const q = new URLSearchParams();
+  for (const k of ["view", "format", "category", "topic", "sort", "q"]) if (params[k]) q.set(k, params[k]);
+  const s = q.toString();
+  return s ? `${LEARN_BROWSE}?${s}` : LEARN_BROWSE;
+};
+export const learnPathwayPath = (pathId) => `/learn/path/${encodeURIComponent(pathId)}`;
 
 export const pathForScreen = (screen) => SCREEN_PATH[screen] || "/";
 
@@ -42,7 +144,9 @@ export const PARAM = {
   focus: "focus",       // /content/:id?focus=comments|review  (deep-link a section)
   comment: "comment",   // /content/:id?focus=comments&comment=<id>  (highlight target)
   user: "user",         // /admin?section=people&user=<uid>  (highlight a person)
+  path: "path",         // /learn/course/:id[/lesson/:lid]?path=<pathId>  (learning-path context)
 };
+// "profile" = THE account menu (mobile avatar + desktop sidebar); one panel at a time.
 export const PANELS = ["profile", "notifications", "search"];
 // Sections of the content detail a notification can jump straight to.
 export const FOCI = ["comments", "review", "links"];
@@ -63,7 +167,8 @@ const params = (search) =>
 export function parseLocation(pathname, search) {
   const p = params(search);
   const base = {
-    screen: "notfound", contentId: null, memberId: null,
+    screen: "notfound", contentId: null, memberId: null, courseId: null, lessonId: null, guideId: null, pathId: null, pathCtx: null,
+    categoryId: null, browse: null, manage: null, preview: false,
     section: null, event: null, filter: null, focus: null, comment: null, user: null,
     overlay: parseOverlay(p),
     redirect: null,
@@ -83,6 +188,12 @@ export function parseLocation(pathname, search) {
     if (screen === "admin") {
       out.section = p.get(PARAM.section) || null;
       out.user = p.get(PARAM.user) || null;        // highlight a person (e.g. a pending approval)
+      // The old Admin → Academy page was only links; old links/bookmarks go to
+      // the Academy workspace (replace-navigation, so Back doesn't bounce).
+      if (out.section === "academy") {
+        const to = legacyEditTarget({ course: p.get("course"), lesson: p.get("lesson") || p.get("item"), category: p.get("category") }) || "/learn/manage";
+        return { ...base, screen: "learn", manage: { view: "home" }, redirect: to };
+      }
     }
     return out;
   }
@@ -100,6 +211,47 @@ export function parseLocation(pathname, search) {
   // Reserved: /team/:memberId — no screen yet, fall back to /team.
   const member = path.match(/^\/team\/([^/]+)$/);
   if (member) return { ...base, screen: "team", memberId: decodeURIComponent(member[1]), redirect: "/team" };
+
+  // Old course/lesson EDITING links (earlier builds, bookmarks) → the workspace
+  // editor for the same course/lesson. Checked before the learner routes so an
+  // edit link never lands on a page that saves differently.
+  const legacy = legacyEditRedirect(path, p);
+  if (legacy) return { ...base, screen: "learn", redirect: legacy };
+
+  // Academy: course overview and lesson player are sub-routes of the Learn screen.
+  const lesson = path.match(LEARN_LESSON);
+  // ?path=<id>: which learning path the learner came from (validated later).
+  const pathCtx = (p.get(PARAM.path) || "").trim().slice(0, 128) || null;
+  if (lesson) return { ...base, screen: "learn", courseId: lesson[1], lessonId: lesson[2], pathCtx };
+  const course = path.match(LEARN_COURSE);
+  if (course) return { ...base, screen: "learn", courseId: course[1], pathCtx };
+  const guide = path.match(LEARN_GUIDE);
+  if (guide) return { ...base, screen: "learn", guideId: guide[1] };
+  const pathway = path.match(LEARN_PATHWAY);
+  if (pathway) return { ...base, screen: "learn", pathId: pathway[1] };
+  const cat = path.match(LEARN_CATEGORY);
+  if (cat) return { ...base, screen: "learn", categoryId: cat[1] };
+  if (path === LEARN_BROWSE) {
+    return { ...base, screen: "learn", browse: {
+      format: p.get("format") || "", category: p.get("category") || "", topic: p.get("topic") || "", sort: p.get("sort") || "", q: p.get("q") || "",
+      // view=categories: every category as cards (the categories row's View all)
+      view: p.get("view") === "categories" ? "categories" : "" } };
+  }
+  if (path === "/learn/manage") return { ...base, screen: "learn", manage: { view: "home" } };
+  if (path === "/learn/manage/more") return { ...base, screen: "learn", manage: { view: "more" } };
+  const mg = path.match(new RegExp(`^/learn/manage/(category|course|guide)/(new|${ID})$`));
+  if (mg) return { ...base, screen: "learn", manage: { view: mg[1], id: mg[2], item: p.get("item") || "", category: p.get("category") || "", focus: MANAGE_FOCI.includes(p.get("focus")) ? p.get("focus") : "", path: PATH_ID.test(p.get("path") || "") ? p.get("path") : "" } };
+  if (path.startsWith("/learn/manage/")) return { ...base, screen: "learn", redirect: "/learn/manage" };
+  const pvl = path.match(new RegExp(`^/learn/preview/course/(${ID})/lesson/(${ID})$`));
+  const pvGuide = path.match(new RegExp(`^/learn/preview/guide/(${ID})$`));
+  if (pvGuide) return { ...base, screen: "learn", preview: true, guideId: pvGuide[1], pathCtx: PATH_ID.test(p.get(PARAM.path) || "") ? p.get(PARAM.path) : null };
+  const pvCat = path.match(/^\/learn\/preview\/category\/([a-z0-9-]{1,40})$/);
+  if (pvCat) return { ...base, screen: "learn", preview: true, categoryId: pvCat[1] };
+  const pvPath = PATH_ID.test(p.get(PARAM.path) || "") ? p.get(PARAM.path) : null;
+  if (pvl) return { ...base, screen: "learn", preview: true, courseId: pvl[1], lessonId: pvl[2], pathCtx: pvPath };
+  const pvc = path.match(new RegExp(`^/learn/preview/course/(${ID})$`));
+  if (pvc) return { ...base, screen: "learn", preview: true, courseId: pvc[1], pathCtx: pvPath };
+  if (path.startsWith("/learn/")) return { ...base, screen: "learn", redirect: "/learn" };
 
   // Unknown → catch-all recovery to home.
   return { ...base, redirect: "/" };
@@ -161,7 +313,7 @@ export function withParams(search, changes) {
     else p.set(k, v);
   }
   // Stable key order for deterministic output.
-  const order = [PARAM.compose, PARAM.edit, PARAM.panel, PARAM.event, PARAM.section, PARAM.filter, PARAM.focus, PARAM.comment, PARAM.user];
+  const order = [PARAM.path, PARAM.compose, PARAM.edit, PARAM.panel, PARAM.event, PARAM.section, PARAM.filter, PARAM.focus, PARAM.comment, PARAM.user];
   const out = new URLSearchParams();
   for (const k of order) if (p.has(k)) out.set(k, p.get(k));
   const s = out.toString();
@@ -277,6 +429,11 @@ export function fallbackPath(navState) {
   }
   if (navState.screen === "admin") return "/admin";
   if (navState.memberId) return "/team";
+  if (navState.screen === "learn" && navState.preview && navState.courseId) return learnManagePath({ view: "course", id: navState.courseId });
+  // A lesson's parent is its course; a course's parent is the catalogue.
+  if (navState.screen === "learn" && navState.lessonId) return learnPath(navState.courseId);
+  if (navState.screen === "learn" && navState.manage && navState.manage.view !== "home") return "/learn/manage";
+  if (navState.screen === "learn" && (navState.courseId || navState.guideId || navState.pathId || navState.categoryId || navState.browse || navState.manage)) return "/learn";
   return "/";
 }
 
@@ -290,6 +447,11 @@ export function titleFor(navState, contentTitle) {
     return `${cap(navState.overlay.panel)} · IFC Creatives Board`;
   if (navState.screen === "content")
     return `${contentTitle || "Content"} · IFC Creatives Board`;
+  if (navState.screen === "learn" && (navState.courseId || navState.guideId || navState.pathId || navState.categoryId))
+    return `${contentTitle || (navState.lessonId ? "Lesson" : navState.guideId ? "Tips & resources" : navState.pathId ? "Learning path" : navState.categoryId ? "Category" : "Course")} · Learn · IFC Creatives Board`;
+  if (navState.screen === "learn" && navState.browse) return `${navState.browse.view === "categories" ? "All categories" : "Browse"} · Learn · IFC Creatives Board`;
+  if (navState.screen === "learn" && navState.manage) return `${contentTitle || "Manage"} · Academy workspace · IFC Creatives Board`;
+  if (navState.screen === "learn" && navState.preview) return `Preview · ${contentTitle || "Course"} · IFC Creatives Board`;
   return `${SCREEN_TITLE[navState.screen] || "IFC Creatives Board"} · IFC Creatives Board`;
 }
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);

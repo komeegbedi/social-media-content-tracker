@@ -332,7 +332,8 @@ service cloud.firestore {
         && request.resource.data.status == 'pending'
         && request.resource.data.get('qa', false) == false
         && request.resource.data.get('captions', false) == false
-        && request.resource.data.get('lead', false) == false;
+        && request.resource.data.get('lead', false) == false
+        && request.resource.data.get('academyEditor', false) == false;
 
       // A QA reviewer is a distinct, non-production department: they must never
       // carry production skills (that's what makes them staffable/recommended).
@@ -538,6 +539,746 @@ service cloud.firestore {
         && (request.resource.data.kind == 'error' || isApproved());
       // Only admins can read the log, triage (resolve), or delete.
       allow read, update, delete: if isAdmin();
+    }
+
+    // =====================================================================
+    // IFC Creative Academy (Learn). See docs/academy.md for the data model.
+    //
+    //   courses/{cid}                     course (status: draft|published|archived)
+    //   courses/{cid}/lessons/{lid}       learner-readable lesson (questions, NO answers)
+    //   courses/{cid}/lessons/{lid}/comments/{id}   lesson discussion
+    //   courses/{cid}/quizKeys/{lid}      correct answers + explanations — EDITORS ONLY
+    //   academySettings/{id}              purpose video etc. — admin-managed
+    //   learnerProgress/{uid}/courseProgress/{cid}   learner-writable progress, EXCEPT
+    //                                     `earned` (server-only, via submitQuizAttempt)
+    //   quizAttempts/{uid}/attempts/{id}  server-written attempts; learner reads own
+    //
+    // Roles: editor = admin OR the course's instructorUid; leader = admin OR
+    // lead == true (may read any learner's progress/attempts). Drafts are
+    // invisible to everyone but editors — the status gate is applied on every
+    // read of a course and its subcollections.
+    // =====================================================================
+    function isLeader() {
+      return isApproved() && (myDoc().role == 'admin' || myDoc().get('lead', false) == true);
+    }
+    function courseDoc(cid) { return get(/databases/$(database)/documents/courses/$(cid)).data; }
+    function courseExists(cid) { return exists(/databases/$(database)/documents/courses/$(cid)); }
+    // v4: a GLOBAL Academy-editor role (admin, or academyEditor == true on the
+    // profile). Per-course instructor ownership is gone; `c` is unused but kept
+    // so every call site reads the same.
+    function isAcademyEditor() {
+      return isApproved() && (myDoc().role == 'admin' || myDoc().get('academyEditor', false) == true);
+    }
+    function isCourseEditorOf(c) { return isAcademyEditor(); }
+    // Hidden categories: a denormalised id list maintained with the category doc
+    // (one extra get per request; cached by the rules engine within a request).
+    function hiddenCategoryIds() {
+      return exists(/databases/$(database)/documents/academySettings/categoryIndex)
+        ? get(/databases/$(database)/documents/academySettings/categoryIndex).data.get('hidden', [])
+        : [];
+    }
+    function isCourseEditor(cid) { return courseExists(cid) && isCourseEditorOf(courseDoc(cid)); }
+    function canSeeCourseDoc(c) {
+      return isApproved() && (isAcademyEditor()
+        || (c.get('status', '') == 'published' && !(c.get('category', '') in hiddenCategoryIds())));
+    }
+    function canSeeCourse(cid) { return courseExists(cid) && canSeeCourseDoc(courseDoc(cid)); }
+    function guideDoc(gid) { return get(/databases/$(database)/documents/guides/$(gid)).data; }
+    function guideExists(gid) { return exists(/databases/$(database)/documents/guides/$(gid)); }
+    function isGuideEditor(gid) { return guideExists(gid) && isCourseEditorOf(guideDoc(gid)); }
+    function canSeeGuide(gid) { return guideExists(gid) && canSeeCourseDoc(guideDoc(gid)); }
+    function pathDoc(pid) { return get(/databases/$(database)/documents/paths/$(pid)).data; }
+    function pathExists(pid) { return exists(/databases/$(database)/documents/paths/$(pid)); }
+    // Paths aren't filed under a category, so they're gated on status alone (the
+    // content they reference is still gated by its own rules).
+    function canSeePathDoc(p) {
+      return isApproved() && (isAcademyEditor() || p.get('status', '') == 'published');
+    }
+    function canSeePath(pid) { return pathExists(pid) && canSeePathDoc(pathDoc(pid)); }
+
+    // The six categories (src/academyProgress.js ACADEMY_CATEGORIES) + the two
+    // legacy ids still readable until the one-off migration (docs/academy.md).
+    // v4: categories are records — any existing academyCategories/{id} is valid,
+    // plus the two legacy ids still readable until the one-off migration.
+    // v6.10: a category being deleted is LOCKED (server-written `deleting`):
+    // nothing new can be filed under it — no course/draft/guide/path create,
+    // move in, publish or autosave that names it — so its contents can only
+    // shrink until the server deletes the record.
+    function categoryLocked(c) {
+      return exists(/databases/$(database)/documents/academyCategories/$(c))
+        && get(/databases/$(database)/documents/academyCategories/$(c)).data.get('deleting', null) != null;
+    }
+    function validCategory(c) {
+      return c is string && c.size() <= 40 && c.matches('[a-z0-9-]+')
+        && (exists(/databases/$(database)/documents/academyCategories/$(c)) || c in ['videography', 'social-media'])
+        && !categoryLocked(c);
+    }
+    function validTopics(t) { return t is list && t.size() <= 12; }
+    function validTopicIds(t) { return t is list && t.size() <= 12; }
+    function validImageRef(r) {
+      return r == null || (r is map
+        && r.keys().hasOnly(['path', 'version', 'contentType', 'bytes', 'w', 'h'])
+        && r.path is string && r.path.size() <= 300 && r.path.matches('academy/.*'));
+    }
+    function validVideoRef(v) {
+      return v == null || (v is map
+        && v.keys().hasOnly(['provider', 'id', 'hash'])
+        && v.provider in ['youtube', 'vimeo', 'gdrive']
+        && v.id is string && v.id.size() >= 1 && v.id.size() <= 100);
+    }
+    // Markdown format version of the doc's formatted text (absent = 1, legacy).
+    function validMdVersion(d) { return d.get('mdVersion', 1) in [1, 2]; }
+    function validCourse(d) {
+      return d.keys().hasOnly([
+           'title', 'category', 'level', 'status', 'instructorUid', 'instructorName', 'topics', 'topicIds',
+           'about', 'outcomes', 'requirements', 'durationMinutes', 'cover', 'previewVideo', 'modules',
+           'lessonCount', 'requiredLessonCount', 'requiredQuizLessonIds', 'bonusLessonIds', 'prerequisiteMap', 'priorKnowledge',
+           'createdAt', 'createdBy', 'updatedAt', 'updatedBy', 'publishedAt', 'archivedAt', 'mdVersion'])
+        && validMdVersion(d)
+        && d.get('prerequisiteMap', {}) is map && d.get('prerequisiteMap', {}).size() <= 300
+        && d.title is string && d.title.size() >= 1 && d.title.size() <= 120
+        && d.status in ['draft', 'published', 'archived']
+        && validCategory(d.category)
+        && d.level in ['beginner', 'intermediate', 'advanced']
+        && d.get('instructorUid', '') is string && d.get('instructorUid', '').size() <= 128
+        && d.get('instructorName', '') is string && d.get('instructorName', '').size() <= 120
+        && validTopics(d.get('topics', [])) && validTopicIds(d.get('topicIds', []))
+        && d.get('about', '') is string && d.get('about', '').size() <= 20000
+        && d.get('outcomes', []) is list && d.get('outcomes', []).size() <= 20
+        && d.get('requirements', []) is list && d.get('requirements', []).size() <= 20
+        && d.get('modules', []) is list && d.get('modules', []).size() <= 50
+        && validImageRef(d.get('cover', null))
+        && validVideoRef(d.get('previewVideo', null))
+        && d.updatedAt == request.time;
+    }
+    // Provider metadata captured at save time (title/creator/thumbnail from the
+    // official oEmbed endpoint via the fetchVideoMetadata callable). Display only.
+    function validVideoMeta(m) {
+      return m == null || (m is map
+        && m.keys().hasOnly(['title', 'author', 'authorUrl', 'thumbnailUrl', 'sourceUrl', 'fetchedAt', 'durationSec', 'isLive', 'id'])
+        && (m.get('durationSec', null) == null || (m.durationSec is number && m.durationSec > 0 && m.durationSec < 100000))
+        && m.get('isLive', false) is bool
+        && m.get('title', '') is string && m.get('title', '').size() <= 200
+        && m.get('author', '') is string && m.get('author', '').size() <= 120
+        && m.get('authorUrl', '') is string && m.get('authorUrl', '').size() <= 300
+        && m.get('thumbnailUrl', '') is string && m.get('thumbnailUrl', '').size() <= 500
+        && (m.get('thumbnailUrl', '') == '' || m.get('thumbnailUrl', '').matches('https://.*'))
+        && m.get('sourceUrl', '') is string && m.get('sourceUrl', '').size() <= 300);
+    }
+    // v6.5 prerequisites: a list of other lesson ids in the same course — at most
+    // 20, no duplicates, never the lesson itself. The full graph (cycles, missing
+    // lessons, optional lessons that required ones depend on) can't be checked in
+    // rules; checkCoursePrerequisites (callable) checks the DRAFT and records the
+    // verdict per draft revision. A published lesson that carries prerequisites
+    // is only accepted when that verdict is ok for the revision being published.
+    function validPrereqShape(d, lid) {
+      return !d.keys().hasAny(['prerequisites'])
+        || (d.prerequisites is list && d.prerequisites.size() <= 20
+            && d.prerequisites.toSet().size() == d.prerequisites.size()
+            && !(lid in d.prerequisites));
+    }
+    function checkPath(cid) { return /databases/$(database)/documents/courseDraftChecks/$(cid); }
+    // The server's verdict exists, is ok, and is for the draft revision being
+    // published (any later draft edit bumps rev, so a stale verdict fails).
+    function verdictCurrent(cid) {
+      return exists(checkPath(cid)) && exists(draftPath(cid))
+        && get(checkPath(cid)).data.ok == true
+        && get(checkPath(cid)).data.rev == get(draftPath(cid)).data.rev;
+    }
+    // A lesson's prerequisites must be EXACTLY what the verdict approved for it.
+    function prereqsVerified(d, cid, lid) {
+      return d.get('prerequisites', []).size() == 0
+        || (verdictCurrent(cid) && d.prerequisites == get(checkPath(cid)).data.prerequisiteMap.get(lid, []));
+    }
+    // A course carrying prerequisites must have the module order + map the
+    // verdict approved (order decides which prerequisites are "earlier").
+    function coursePrereqsVerified(d, cid) {
+      return d.get('prerequisiteMap', {}).size() == 0
+        || (verdictCurrent(cid)
+            && d.get('modules', []) == get(checkPath(cid)).data.modules
+            && d.prerequisiteMap == get(checkPath(cid)).data.prerequisiteMap);
+    }
+    // v6.8: every published LESSON is exactly what the server's publish check
+    // approved for this draft revision — its kind, video record and quiz mode +
+    // questions (so a modified browser can't publish a video lesson without a
+    // valid link, or a quiz whose answers don't fit its questions). The record
+    // lives in the editor-only verdict doc, never on a learner-readable doc.
+    function checkedLesson(cid, lid) { return get(checkPath(cid)).data.get('lessonChecks', {}).get(lid, null); }
+    function lessonVerified(d, cid, lid) {
+      return verdictCurrent(cid) && checkedLesson(cid, lid) != null
+        && d.get('kind', 'video') == checkedLesson(cid, lid).kind
+        && d.get('video', null) == checkedLesson(cid, lid).video
+        && d.get('quiz', {}).get('mode', 'none') == checkedLesson(cid, lid).mode
+        && d.get('quiz', {}).get('questions', []) == checkedLesson(cid, lid).questions;
+    }
+    // …and every published answer key is the one the check approved.
+    function keyVerified(d, cid, lid) {
+      return verdictCurrent(cid)
+        && get(checkPath(cid)).data.get('answerKeys', {}).get(lid, null) != null
+        && d.get('answers', {}) == get(checkPath(cid)).data.answerKeys[lid];
+    }
+    // A course becomes / stays published only with a passing check for the
+    // revision being published. Exempt: changes that don't publish anything
+    // (moving it to another category when a category is deleted).
+    function publishVerified(cid, after, before) {
+      return after.status != 'published'
+        || (before != null && before.status == 'published' && after.diff(before).affectedKeys().hasOnly(['category', 'updatedAt', 'updatedBy']))
+        || verdictCurrent(cid);
+    }
+    // v6.9: deleting PUBLISHED lessons / answer keys is part of Publish (the
+    // course doc is rewritten in the same write) or of an admin's permanent
+    // course delete. A non-admin can't strip a course's lessons on their own.
+    function courseRewrittenNow(cid) {
+      return existsAfter(/databases/$(database)/documents/courses/$(cid))
+        && getAfter(/databases/$(database)/documents/courses/$(cid)).data.updatedAt == request.time;
+    }
+    // Recommended prior knowledge: advisory course references (never a gate).
+    function validPriorKnowledge(d, cid) {
+      return !d.keys().hasAny(['priorKnowledge'])
+        || (d.priorKnowledge is map && d.priorKnowledge.keys().hasOnly(['courseIds', 'note'])
+            && d.priorKnowledge.get('courseIds', []) is list && d.priorKnowledge.get('courseIds', []).size() <= 10
+            && d.priorKnowledge.get('courseIds', []).toSet().size() == d.priorKnowledge.get('courseIds', []).size()
+            && !(cid in d.priorKnowledge.get('courseIds', []))
+            && d.priorKnowledge.get('note', '') is string && d.priorKnowledge.get('note', '').size() <= 300);
+    }
+    function validLesson(d) {
+      return d.keys().hasOnly([
+           'title', 'moduleId', 'kind', 'video', 'videoMeta', 'thumbMode', 'description', 'resources', 'thumb', 'bonus',
+           'durationMinutes', 'quiz', 'prerequisites', 'createdAt', 'createdAtMs', 'updatedAt', 'mdVersion'])
+        && validMdVersion(d)
+        && d.get('thumbMode', 'source') in ['source', 'custom']
+        && validVideoMeta(d.get('videoMeta', null))
+        && d.title is string && d.title.size() <= 120
+        && d.get('kind', 'video') in ['video', 'written', 'exercise', 'resource']
+        && d.get('moduleId', '') is string
+        && d.get('description', '') is string && d.get('description', '').size() <= 20000
+        && d.get('resources', []) is list && d.get('resources', []).size() <= 20
+        && d.get('bonus', false) is bool
+        && validVideoRef(d.get('video', null))
+        && validImageRef(d.get('thumb', null))
+        // Learner-readable quiz: mode + questions only. The `answers` key is NOT
+        // allowed here — correct answers live in quizKeys (editor-only).
+        && (!d.keys().hasAny(['quiz']) || (d.quiz is map
+             && d.quiz.keys().hasOnly(['mode', 'passMark', 'retryLimit', 'questions'])
+             && d.quiz.mode in ['none', 'practice', 'required']
+             && d.quiz.get('questions', []) is list && d.quiz.get('questions', []).size() <= 30))
+        && d.updatedAt == request.time;
+    }
+
+    // Before deleting an uploaded image, the client checks no OTHER course
+    // still uses it (live or draft lessons, by thumb.path) — a collection-group
+    // query. Editors can already read every lesson doc individually (live via
+    // canSeeCourse, drafts via isAcademyEditor), so this grants nothing new.
+    match /{path=**}/lessons/{lid} {
+      allow read: if isAcademyEditor();
+    }
+
+    match /courses/{cid} {
+      // get + list: published to approved members; drafts/archived to editors.
+      allow read: if canSeeCourseDoc(resource.data);
+      // Academy editors create courses; new courses start as drafts so nothing
+      // is ever visible before an editor publishes it.
+      // v6: Publish creates the live doc from a draft, so it may be born
+      // 'published'; it can never be born 'archived'.
+      allow create: if isAcademyEditor() && validCourse(request.resource.data)
+        && validPriorKnowledge(request.resource.data, cid) && coursePrereqsVerified(request.resource.data, cid)
+        && publishVerified(cid, request.resource.data, null)
+        && request.resource.data.status in ['draft', 'published']
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.createdBy == request.auth.uid;
+      // Editors edit + publish/unpublish/archive. An instructor can't hand the
+      // course to someone else or rewrite its creation stamp.
+      allow update: if isCourseEditorOf(resource.data) && validCourse(request.resource.data)
+        && validPriorKnowledge(request.resource.data, cid)
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['modules', 'prerequisiteMap'])
+            || coursePrereqsVerified(request.resource.data, cid))
+        && publishVerified(cid, request.resource.data, resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.updatedBy == request.auth.uid;
+      // Permanent delete: admin only, never while published (unpublish first) —
+      // except inside an admin's reviewed category deletion (its category is
+      // locked for deletion), where the published course is deleted directly.
+      allow delete: if isAdmin() && (resource.data.status != 'published' || categoryLocked(resource.data.category));
+
+      match /lessons/{lid} {
+        allow read: if canSeeCourse(cid);
+        // v6: writes check the editor role directly — a first Publish creates
+        // the course doc and its lessons in ONE transaction, and exists() sees
+        // the pre-transaction state. (Reads stay gated by canSeeCourse.)
+        allow create: if isAcademyEditor() && validLesson(request.resource.data)
+          && validPrereqShape(request.resource.data, lid) && prereqsVerified(request.resource.data, cid, lid)
+          && lessonVerified(request.resource.data, cid, lid);
+        // unchanged prerequisites need no new verdict (the course doc's rule
+        // covers a changed lesson ORDER)
+        allow update: if isAcademyEditor() && validLesson(request.resource.data)
+          && validPrereqShape(request.resource.data, lid)
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['prerequisites'])
+              || prereqsVerified(request.resource.data, cid, lid))
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['kind', 'video', 'quiz'])
+              || lessonVerified(request.resource.data, cid, lid));
+        allow delete: if isAdmin() || (isAcademyEditor() && courseRewrittenNow(cid));
+
+        // Discussion: comments + threaded replies (parentId). `role` is stamped
+        // by the client but VERIFIED here against the real role, so a learner
+        // can't badge themselves as the instructor.
+        match /comments/{id} {
+          function commentRole() {
+            return myDoc().role == 'admin' ? 'admin' : (isAcademyEditor() ? 'moderator' : 'learner');
+          }
+          allow read: if canSeeCourse(cid);
+          allow create: if canSeeCourse(cid)
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.keys().hasOnly(['uid', 'name', 'role', 'txt', 'parentId', 'pinned', 'createdAt', 'editedAt'])
+            && request.resource.data.name is string && request.resource.data.name.size() <= 120
+            && request.resource.data.txt is string
+            && request.resource.data.txt.size() >= 1 && request.resource.data.txt.size() <= 2000
+            && request.resource.data.role == commentRole()
+            && (request.resource.data.parentId == null || request.resource.data.parentId is string)
+            && request.resource.data.pinned == false
+            && request.resource.data.createdAt == request.time;
+          // Author: edit own text. Editors: edit text (moderation) + pin/unpin.
+          // Pinning alone changes ONLY `pinned` — it must not stamp editedAt, or
+          // the comment would wrongly show as "edited".
+          allow update: if canSeeCourse(cid) && (
+            (request.resource.data.txt is string
+              && request.resource.data.txt.size() >= 1 && request.resource.data.txt.size() <= 2000
+              && request.resource.data.editedAt == request.time
+              && ((resource.data.uid == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['txt', 'editedAt']))
+               || (isCourseEditor(cid)
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['txt', 'editedAt', 'pinned']))))
+            || (isCourseEditor(cid)
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned'])
+                && request.resource.data.pinned is bool));
+          allow delete: if canSeeCourse(cid)
+            && (resource.data.uid == request.auth.uid || isCourseEditor(cid));
+        }
+      }
+
+      // Correct answers + explanations. Never readable by learners; graded by
+      // the submitQuizAttempt callable with the Admin SDK.
+      match /quizKeys/{lid} {
+        allow read: if isCourseEditor(cid);
+        allow create, update: if isAcademyEditor()
+          && request.resource.data.keys().hasOnly(['answers', 'explanations', 'updatedAt'])
+          && request.resource.data.get('answers', {}) is map
+          && request.resource.data.get('explanations', {}) is map
+          && keyVerified(request.resource.data, cid, lid);
+        allow delete: if isAdmin() || (isAcademyEditor() && courseRewrittenNow(cid));
+      }
+    }
+
+    // ---- Course DRAFTS (v6): the private working copy authors edit. Learners
+    // never read these; Publish copies a draft to courses/{cid} (+ lessons,
+    // quizKeys) with the same lesson ids. `rev` must go up by exactly one on
+    // every write, so a stale editor's write is rejected (concurrent edits are
+    // detected, never silently overwritten). Draft lessons may only change in
+    // the same batch/transaction as that rev bump.
+    function draftPath(cid) { return /databases/$(database)/documents/courseDrafts/$(cid); }
+    function validCourseDraft(d) {
+      return d.keys().hasOnly([
+           'title', 'category', 'level', 'about', 'outcomes', 'requirements', 'cover', 'previewVideo',
+           'topicIds', 'topics', 'modules', 'priorKnowledge', 'rev', 'publishedRev', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy', 'mdVersion'])
+        && validMdVersion(d)
+        && d.get('title', '') is string && d.get('title', '').size() <= 120
+        && (d.get('category', '') == '' || validCategory(d.category))
+        && d.get('level', 'beginner') in ['beginner', 'intermediate', 'advanced']
+        && d.get('about', '') is string && d.get('about', '').size() <= 20000
+        && d.get('outcomes', []) is list && d.get('outcomes', []).size() <= 20
+        && d.get('requirements', []) is list && d.get('requirements', []).size() <= 20
+        && d.get('modules', []) is list && d.get('modules', []).size() <= 50
+        && validImageRef(d.get('cover', null))
+        && validVideoRef(d.get('previewVideo', null))
+        && validTopics(d.get('topics', [])) && validTopicIds(d.get('topicIds', []))
+        && d.rev is int && d.publishedRev is int && d.publishedRev <= d.rev
+        && d.updatedAt == request.time && d.updatedBy == request.auth.uid;
+    }
+    function draftRevBumped(cid) {
+      return exists(draftPath(cid))
+        ? getAfter(draftPath(cid)).data.rev == get(draftPath(cid)).data.rev + 1
+        : getAfter(draftPath(cid)).data.rev == 1;
+    }
+    // Server verdict on a draft's prerequisite graph (checkCoursePrerequisites).
+    // v6.11 — a resource's private working copy (Academy editors only). Every
+    // save bumps rev by exactly one (stale editors get a conflict). Never filed
+    // under a category that's being deleted (validCategory).
+    function validGuideDraft(d) {
+      return d.keys().hasOnly(['title', 'category', 'topics', 'topicIds', 'video', 'videoMeta', 'thumbMode', 'body', 'resources', 'thumb',
+             'durationMinutes', 'mdVersion', 'rev', 'publishedRev', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy'])
+        && d.get('title', '') is string && d.get('title', '').size() <= 120
+        && (d.get('category', '') == '' || validCategory(d.category))
+        && validTopics(d.get('topics', [])) && validTopicIds(d.get('topicIds', []))
+        && d.get('thumbMode', 'source') in ['source', 'custom']
+        && validVideoMeta(d.get('videoMeta', null)) && validVideoRef(d.get('video', null)) && validImageRef(d.get('thumb', null))
+        && d.get('body', '') is string && d.get('body', '').size() <= 20000
+        && d.get('resources', []) is list && d.get('resources', []).size() <= 20
+        && validMdVersion(d)
+        && d.rev is int && d.publishedRev is int && d.publishedRev <= d.rev
+        && d.updatedAt == request.time && d.updatedBy == request.auth.uid;
+    }
+    match /guideDrafts/{gid} {
+      allow read: if isAcademyEditor();
+      allow create: if isAcademyEditor() && validGuideDraft(request.resource.data) && request.resource.data.rev == 1
+        && request.resource.data.publishedRev == 0
+        && request.resource.data.createdAt == request.time && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAcademyEditor() && validGuideDraft(request.resource.data)
+        && request.resource.data.rev == resource.data.rev + 1
+        && request.resource.data.createdAt == resource.data.createdAt && request.resource.data.createdBy == resource.data.createdBy;
+      // discard unpublished changes (the published version stays) / delete a never-published resource
+      allow delete: if isAcademyEditor();
+    }
+    match /courseDraftChecks/{cid} {
+      allow read: if isAcademyEditor();
+      allow write: if false;
+    }
+    match /courseDrafts/{cid} {
+      allow read: if isAcademyEditor();
+      allow create: if isAcademyEditor() && validCourseDraft(request.resource.data) && validPriorKnowledge(request.resource.data, cid)
+        && request.resource.data.rev == 1 && request.resource.data.publishedRev in [0, 1]
+        && request.resource.data.createdAt == request.time && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAcademyEditor() && validCourseDraft(request.resource.data) && validPriorKnowledge(request.resource.data, cid)
+        && request.resource.data.rev == resource.data.rev + 1
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy;
+      // Admins delete any draft (permanent course delete); editors may discard a
+      // draft only while the course has never been published.
+      allow delete: if isAdmin() || (isAcademyEditor() && resource.data.publishedRev == 0 && !courseExists(cid));
+
+      match /lessons/{lid} {
+        function validDraftLesson(d) {
+          return d.keys().hasOnly([
+               'title', 'moduleId', 'kind', 'video', 'videoMeta', 'thumbMode', 'description', 'resources', 'thumb', 'bonus',
+               'durationMinutes', 'quiz', 'quizKey', 'prerequisites', 'createdAtMs', 'updatedAt', 'mdVersion'])
+            && validMdVersion(d)
+            && d.get('title', '') is string && d.get('title', '').size() <= 120
+            && d.get('kind', 'video') in ['video', 'written', 'exercise', 'resource']
+            && d.get('description', '') is string && d.get('description', '').size() <= 20000
+            && d.get('resources', []) is list && d.get('resources', []).size() <= 20
+            && d.get('bonus', false) is bool
+            && d.get('thumbMode', 'source') in ['source', 'custom']
+            && validVideoRef(d.get('video', null))
+            && validVideoMeta(d.get('videoMeta', null))
+            && validImageRef(d.get('thumb', null))
+            && d.get('quizKey', {}) is map
+            && d.updatedAt == request.time;
+        }
+        allow read: if isAcademyEditor();
+        allow create, update: if isAcademyEditor() && validDraftLesson(request.resource.data) && validPrereqShape(request.resource.data, lid) && draftRevBumped(cid);
+        allow delete: if isAcademyEditor() && (draftRevBumped(cid) || !existsAfter(draftPath(cid)));
+      }
+    }
+
+    // ---- Category + topic RECORDS (v4). Stable ids (slug at creation), names
+    // editable, admin-managed. Learners read them all (hidden ones are filtered
+    // client-side and their COURSES are gated by hiddenCategoryIds()).
+    function validCategoryRecord(d) {
+      return d.keys().hasOnly(['name', 'short', 'description', 'order', 'hidden', 'cover', 'courseOrder', 'guideOrder', 'deleting', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy'])
+        && d.get('guideOrder', []) is list && d.get('guideOrder', []).size() <= 500
+        && d.get('courseOrder', []) is list && d.get('courseOrder', []).size() <= 500
+        && d.name is string && d.name.size() >= 1 && d.name.size() <= 60
+        && d.get('short', '') is string && d.get('short', '').size() <= 30
+        && d.get('description', '') is string && d.get('description', '').size() <= 300
+        && d.get('order', 0) is number
+        && d.get('hidden', false) is bool
+        && validImageRef(d.get('cover', null))
+        && d.updatedAt == request.time && d.updatedBy == request.auth.uid;
+    }
+    match /academyCategories/{id} {
+      allow read: if isApproved();
+      allow create: if isAdmin() && id.matches('[a-z0-9-]{1,40}') && validCategoryRecord(request.resource.data)
+        && request.resource.data.createdAt == request.time;
+      // `deleting` (the deletion lock + reviewed plan) is server-written only.
+      allow update: if isAdmin() && validCategoryRecord(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['deleting']);
+      // v6.10: deleted only by the server (finalizeCategoryDeletion), after it has
+      // confirmed no course, draft, guide or path is still filed under it.
+      allow delete: if false;
+    }
+    function validTopicRecord(d) {
+      return d.keys().hasOnly(['name', 'description', 'hidden', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy'])
+        && d.name is string && d.name.size() >= 1 && d.name.size() <= 60
+        && d.get('description', '') is string && d.get('description', '').size() <= 300
+        && d.get('hidden', false) is bool
+        && d.updatedAt == request.time && d.updatedBy == request.auth.uid;
+    }
+    match /academyTopics/{id} {
+      allow read: if isApproved();
+      allow create: if isAcademyEditor() && id.matches('[a-z0-9-]{1,40}') && validTopicRecord(request.resource.data)
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if isAdmin();
+    }
+    // The denormalised hidden-category list the course rules consult.
+    match /academySettings/categoryIndex {
+      allow read: if isApproved();
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(['hidden', 'updatedAt', 'updatedBy'])
+        && request.resource.data.get('hidden', []) is list
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    // Learn-home settings. Admin-managed, approved members read.
+    //   purposeVideo — the "Start here" introduction
+    //   categories   — artwork per FIXED category id (names/ids live in code and
+    //                  cannot be renamed or removed from here: only `art` is stored)
+    // Every stored artwork entry must be a valid image reference (no loops in
+    // rules, so each fixed id is checked explicitly).
+    function validArt(a) {
+      return (!a.keys().hasAny(['heart-of-serving']) || validImageRef(a['heart-of-serving']))
+        && (!a.keys().hasAny(['photography']) || validImageRef(a['photography']))
+        && (!a.keys().hasAny(['filmmaking']) || validImageRef(a['filmmaking']))
+        && (!a.keys().hasAny(['graphic-design']) || validImageRef(a['graphic-design']))
+        && (!a.keys().hasAny(['social-media-storytelling']) || validImageRef(a['social-media-storytelling']))
+        && (!a.keys().hasAny(['creating-together']) || validImageRef(a['creating-together']));
+    }
+    match /academySettings/categories {
+      allow read: if isApproved();
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(['art', 'updatedAt', 'updatedBy'])
+        && request.resource.data.get('art', {}) is map
+        && request.resource.data.get('art', {}).keys().hasOnly(['heart-of-serving', 'photography', 'filmmaking', 'graphic-design', 'social-media-storytelling', 'creating-together'])
+        && validArt(request.resource.data.get('art', {}))
+        && request.resource.data.updatedAt == request.time;
+    }
+    // Unfinished course-deletion cleanup (see src/academyDeletion.js) — admins only.
+    match /academySettings/pendingCleanup {
+      allow read: if isAdmin();
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(['courses', 'updatedAt', 'updatedBy'])
+        && request.resource.data.get('courses', {}) is map
+        && request.resource.data.updatedAt == request.time;
+    }
+    match /academySettings/{id} {
+      allow read: if isApproved() && id != 'pendingCleanup';
+      allow write: if isAdmin() && id != 'categories' && id != 'categoryIndex' && id != 'pendingCleanup'
+        && request.resource.data.keys().hasOnly(['title', 'intro', 'video', 'thumb', 'updatedAt', 'updatedBy'])
+        && request.resource.data.get('title', '') is string && request.resource.data.get('title', '').size() <= 120
+        && request.resource.data.get('intro', '') is string && request.resource.data.get('intro', '').size() <= 4000
+        && validVideoRef(request.resource.data.get('video', null))
+        && validImageRef(request.resource.data.get('thumb', null))
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    // Learner progress. The learner owns the doc; `earned` is SERVER-ONLY: a
+    // client write may neither add it on create nor change it on update, so a
+    // passed-quiz completion can only come from submitQuizAttempt.
+    // v6.4: completion is SERVER-ONLY. `lessons` (completion flags; older docs
+    // also hold view/position data there), `earned` (passed required quizzes) and
+    // `finishedAt`/`finishedRequired` (Finish course) are written only by the
+    // completeLesson / submitQuizAttempt / finishCourse callables, which enforce
+    // the course order. The learner writes view/position data to `playback` and
+    // the last-viewed bookkeeping fields.
+    function validProgress(d, uid, cid) {
+      return d.keys().hasOnly(['uid', 'courseId', 'startedAt', 'lastLessonId', 'lastViewedAt', 'updatedAt',
+                               'lessons', 'earned', 'playback', 'finishedAt', 'finishedRequired', 'finishedVia',
+                               'progressModel', 'attemptGrants', 'attemptRequests'])
+        && d.uid == uid && d.courseId == cid
+        && d.get('lessons', {}) is map
+        && d.get('playback', {}) is map
+        && d.get('lastLessonId', '') is string
+        && d.updatedAt == request.time;
+    }
+    match /learnerProgress/{uid}/courseProgress/{cid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isLeader());
+      allow create: if signedIn() && request.auth.uid == uid && canSeeCourse(cid)
+        && validProgress(request.resource.data, uid, cid)
+        && !request.resource.data.keys().hasAny(['lessons', 'earned', 'finishedAt', 'finishedRequired', 'finishedVia', 'progressModel', 'attemptGrants', 'attemptRequests']);
+      allow update: if signedIn() && request.auth.uid == uid && isApproved()
+        && validProgress(request.resource.data, uid, cid)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['lessons', 'earned', 'finishedAt', 'finishedRequired', 'finishedVia', 'progressModel', 'attemptGrants', 'attemptRequests']);
+      // Cleanup after a PERMANENT course delete only: the course doc must be gone.
+      allow delete: if isAdmin() && !courseExists(cid);
+    }
+    // Leaders' per-course view uses a collection-group query over courseProgress.
+    match /{path=**}/courseProgress/{cid} {
+      allow read: if isLeader();
+    }
+
+    // Quiz attempts: server-written only. Learners read their own; leaders any.
+    match /quizAttempts/{uid}/attempts/{id} {
+      allow read: if signedIn() && (request.auth.uid == uid || isLeader());
+      allow create, update: if false;
+      allow delete: if isAdmin() && !courseExists(resource.data.courseId);
+    }
+    match /{path=**}/attempts/{id} {
+      allow read: if isLeader();
+    }
+
+    // ---- Quick guides: standalone help (video link + body, or text only) ----
+    function validGuide(d) {
+      return d.keys().hasOnly([
+           'title', 'category', 'topics', 'topicIds', 'status', 'instructorUid', 'instructorName',
+           'video', 'videoMeta', 'thumbMode', 'body', 'resources', 'thumb', 'durationMinutes', 'mdVersion',
+           'createdAt', 'createdBy', 'updatedAt', 'updatedBy', 'publishedAt', 'archivedAt'])
+        && validMdVersion(d)
+        && d.title is string && d.title.size() >= 1 && d.title.size() <= 120
+        && d.status in ['draft', 'published', 'archived']
+        && validCategory(d.category)
+        && validTopics(d.get('topics', [])) && validTopicIds(d.get('topicIds', []))
+        && d.get('instructorUid', '') is string && d.get('instructorUid', '').size() <= 128
+        && d.get('thumbMode', 'source') in ['source', 'custom']
+        && validVideoMeta(d.get('videoMeta', null))
+        && d.get('body', '') is string && d.get('body', '').size() <= 20000
+        && d.get('resources', []) is list && d.get('resources', []).size() <= 20
+        && validVideoRef(d.get('video', null))
+        && validImageRef(d.get('thumb', null))
+        && d.updatedAt == request.time;
+    }
+    // v6.11 — Tips & resources have private drafts (guideDrafts/{gid}). Learners
+    // read guides/{gid}; its content changes only by PUBLISHING the draft: the
+    // published fields must equal the draft being published, in the same write
+    // that bumps the draft revision (publishedRev = rev). A published video link
+    // must be a supported format; there must be a video or some text.
+    function guideDraftPath(gid) { return /databases/$(database)/documents/guideDrafts/$(gid); }
+    function strictVideo(v) {
+      return v == null
+        || (v.provider == 'youtube' && v.id.matches('[A-Za-z0-9_-]{11}') && !v.keys().hasAny(['hash']))
+        || (v.provider == 'vimeo' && v.id.matches('[0-9]{6,12}') && (!v.keys().hasAny(['hash']) || v.hash.matches('[a-fA-F0-9]{6,16}')))
+        || (v.provider == 'gdrive' && v.id.matches('[A-Za-z0-9_-]{20,80}') && !v.keys().hasAny(['hash']));
+    }
+    // ONE draft read and ONE map diff over the content fields. (Comparing each
+    // field with its own get() — 12 reads + nested map/list equality for
+    // videoMeta, thumb and resources — exceeded the rules' 1000-expression budget
+    // for a real video resource, so first publishes were refused.) A field present
+    // on one side only counts as a difference: the client copies exactly the
+    // draft's fields and deletes the rest.
+    function guideContentKeys() {
+      return ['title', 'category', 'topics', 'topicIds', 'video', 'videoMeta', 'thumbMode', 'body', 'resources', 'thumb', 'durationMinutes', 'mdVersion'];
+    }
+    function guidePublishesDraft(d, gid) {
+      return exists(guideDraftPath(gid)) && guidePublishesExistingDraft(d, gid);
+    }
+    function guidePublishesExistingDraft(d, gid) {
+      let before = get(guideDraftPath(gid)).data;
+      let after = getAfter(guideDraftPath(gid)).data;
+      return after.rev == before.rev + 1 && after.publishedRev == after.rev
+        && !before.diff(d).affectedKeys().hasAny(guideContentKeys())
+        && strictVideo(d.get('video', null))
+        && (d.get('video', null) != null || d.get('body', '').size() > 0);
+    }
+    // changes that don't publish content: status (unpublish/archive/restore) and
+    // category moves (deleting a category) — exempt; anything else published needs the draft
+    function guideContentUnchanged(after, before) {
+      return after.diff(before).affectedKeys().hasOnly(['status', 'category', 'updatedAt', 'updatedBy', 'publishedAt', 'archivedAt']);
+    }
+    match /guides/{gid} {
+      allow read: if canSeeCourseDoc(resource.data);
+      allow create: if isAcademyEditor() && validGuide(request.resource.data)
+        && (request.resource.data.status == 'draft' || (request.resource.data.status == 'published' && guidePublishesDraft(request.resource.data, gid)))
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isCourseEditorOf(resource.data) && validGuide(request.resource.data)
+        && (request.resource.data.status != 'published'
+            || (resource.data.status == 'published' && guideContentUnchanged(request.resource.data, resource.data))
+            || guidePublishesDraft(request.resource.data, gid))
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.updatedBy == request.auth.uid;
+      // admins; never while published — except inside a reviewed category deletion
+      allow delete: if isAdmin() && (resource.data.status != 'published' || categoryLocked(resource.data.category));
+
+      // Guide discussion — same shape + permissions as lesson comments.
+      match /comments/{id} {
+        function guideCommentRole() {
+          return myDoc().role == 'admin' ? 'admin' : (isAcademyEditor() ? 'moderator' : 'learner');
+        }
+        allow read: if canSeeGuide(gid);
+        allow create: if canSeeGuide(gid)
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['uid', 'name', 'role', 'txt', 'parentId', 'pinned', 'createdAt', 'editedAt'])
+          && request.resource.data.name is string && request.resource.data.name.size() <= 120
+          && request.resource.data.txt is string
+          && request.resource.data.txt.size() >= 1 && request.resource.data.txt.size() <= 2000
+          && request.resource.data.role == guideCommentRole()
+          && (request.resource.data.parentId == null || request.resource.data.parentId is string)
+          && request.resource.data.pinned == false
+          && request.resource.data.createdAt == request.time;
+        allow update: if canSeeGuide(gid) && (
+          (request.resource.data.txt is string
+            && request.resource.data.txt.size() >= 1 && request.resource.data.txt.size() <= 2000
+            && request.resource.data.editedAt == request.time
+            && ((resource.data.uid == request.auth.uid
+                  && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['txt', 'editedAt']))
+             || (isGuideEditor(gid)
+                  && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['txt', 'editedAt', 'pinned']))))
+          || (isGuideEditor(gid)
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned'])
+              && request.resource.data.pinned is bool));
+        allow delete: if canSeeGuide(gid)
+          && (resource.data.uid == request.auth.uid || isGuideEditor(gid));
+      }
+    }
+
+    // ---- Learning paths: ordered REFERENCES to courses / lessons / guides ----
+    // Items carry only ids + a label; the learner's access to each referenced
+    // item is still decided by that item's own rules (a path never grants access).
+    function validPath(d) {
+      return d.keys().hasOnly([
+           'title', 'purpose', 'category', 'topics', 'topicIds', 'status', 'instructorUid', 'instructorName',
+           'cover', 'items', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy', 'publishedAt', 'archivedAt'])
+        && d.title is string && d.title.size() >= 1 && d.title.size() <= 120
+        && d.status in ['draft', 'published', 'archived']
+        && (d.get('category', '') == '' || validCategory(d.category))
+        && validTopics(d.get('topics', [])) && validTopicIds(d.get('topicIds', []))
+        && d.get('instructorUid', '') is string && d.get('instructorUid', '').size() <= 128
+        && d.get('purpose', '') is string && d.get('purpose', '').size() <= 4000
+        && validImageRef(d.get('cover', null))
+        && d.get('items', []) is list && d.get('items', []).size() <= 60
+        && d.updatedAt == request.time;
+    }
+    match /paths/{pid} {
+      allow read: if canSeePathDoc(resource.data);
+      allow create: if isAcademyEditor() && validPath(request.resource.data)
+        && request.resource.data.status == 'draft'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isCourseEditorOf(resource.data) && validPath(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if isAdmin() && resource.data.status != 'published';
+    }
+
+    // ---- "Start here" introduction: the learner's own watched/dismissed flag.
+    match /learnerProgress/{uid}/intro/{id} {
+      allow read: if signedIn() && (request.auth.uid == uid || isLeader());
+      allow create, update: if signedIn() && request.auth.uid == uid && isApproved()
+        && request.resource.data.keys().hasOnly(['uid', 'watched', 'watchedAt', 'updatedAt'])
+        && request.resource.data.uid == uid
+        && request.resource.data.watched is bool
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // ---- Guide "reviewed" flag: the learner's own self-report (not an assessment).
+    match /learnerProgress/{uid}/guideReviews/{gid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isLeader());
+      allow create, update: if signedIn() && request.auth.uid == uid && canSeeGuide(gid)
+        && request.resource.data.keys().hasOnly(['uid', 'guideId', 'reviewed', 'reviewedAt', 'updatedAt'])
+        && request.resource.data.uid == uid && request.resource.data.guideId == gid
+        && request.resource.data.reviewed is bool
+        && request.resource.data.updatedAt == request.time;
+      // only an admin, and only once the resource itself was deleted (clean-up)
+      allow delete: if isAdmin() && !exists(/databases/$(database)/documents/guides/$(gid));
+    }
+    match /{path=**}/guideReviews/{gid} {
+      allow read: if isLeader();
+    }
+
+    // ---- Path bookkeeping (started / last item). Completion is DERIVED from the
+    // referenced content's progress, so nothing here can mark anything complete.
+    match /learnerProgress/{uid}/pathProgress/{pid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isLeader());
+      allow create, update: if signedIn() && request.auth.uid == uid && canSeePath(pid)
+        && request.resource.data.keys().hasOnly(['uid', 'pathId', 'startedAt', 'lastItemKey', 'lastViewedAt', 'completedAt', 'updatedAt'])
+        && request.resource.data.uid == uid && request.resource.data.pathId == pid
+        && request.resource.data.get('lastItemKey', '') is string
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+    match /{path=**}/pathProgress/{pid} {
+      allow read: if isLeader();
     }
   }
 }

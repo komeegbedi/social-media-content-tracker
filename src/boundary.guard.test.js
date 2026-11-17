@@ -39,7 +39,7 @@ test("every ACTIVE surface consumes activeTasks, never raw tasks", () => {
     assert.equal(m[1], "activeTasks", `<${comp}> must be fed activeTasks (got ${m[1]})`);
   }
   // Admin's primary list is active; its Trash view gets trashed separately.
-  assert.match(src, /<Admin users=\{allUsers\} tasks=\{activeTasks\}/);
+  assert.match(src, /<Admin me=\{me\} users=\{allUsers\} tasks=\{activeTasks\}/);
 });
 
 test("the editor never receives raw tasks for workload, and never opens on Trash", () => {

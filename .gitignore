@@ -7,12 +7,17 @@ dist
 .env
 .env.local
 .env.*.local
+# Cloud Functions local secrets (firebase-tools reads functions/.secret.local)
+.secret.local
 
 # Firebase emulator / CLI artifacts
 .firebase
 *-debug.log
 *.log
 firebase-export-*
+# a test Storage emulator's own blob folder (never the dev emulator's: firebase-tools deletes
+# $TMPDIR/firebase/storage/blobs when ANY Storage emulator stops)
+.emulator-test-tmp
 .runtimeconfig.json
 
 # real team data — keep out of the (public) repo

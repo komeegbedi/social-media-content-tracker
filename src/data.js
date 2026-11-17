@@ -277,7 +277,7 @@ export function workflowAction(task, me) {
     case "Approved":
       return isCaption ? { label: "Mark ready to post", to: "Ready to Post", kind: "ready" } : null;
     case "Ready to Post":
-      return isCaption ? { label: "Mark as posted", to: "Posted", kind: "posted", needsPostLink: true } : null;
+      return isCaption ? { label: "Mark as posted", to: "Posted", kind: "posted" } : null;
     default: // In Review (QA panel), Posted (done)
       return null;
   }

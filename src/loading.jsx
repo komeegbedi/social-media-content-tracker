@@ -53,7 +53,9 @@ export const BusyButton = forwardRef(function BusyButton(
       {...rest}
     >
       <span className="sb-busybtn-label">{children}</span>
-      {busy && (
+      {/* Rendered (invisibly) at rest too when there's a busy word, so the button
+          is always as wide as the wider of the two — no jump when it turns busy. */}
+      {(busy || busyLabel) && (
         <span className="sb-busybtn-busy" aria-hidden="true">
           <span className="sb-spin-inline" style={{ width: 15, height: 15 }} />
           {busyLabel ? <span>{busyLabel}</span> : null}

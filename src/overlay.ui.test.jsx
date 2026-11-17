@@ -53,6 +53,25 @@ describe("Portal — modal", () => {
     expect(document.activeElement).toBe(trigger); // ...restored to the trigger
   });
 
+  test("restores focus even though the background is still inert when focus is first restored (real-browser behaviour)", async () => {
+    // Browsers ignore focus() inside an [inert] subtree; jsdom doesn't, so emulate it.
+    const realFocus = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = function (...a) { if (this.closest("[inert]")) return; return realFocus.apply(this, a); };
+    try {
+      const root = document.getElementById("root");
+      const trigger = document.createElement("button");
+      trigger.textContent = "Open";
+      root.appendChild(trigger);
+      trigger.focus();
+      const { unmount } = render(<ModalDialog />, { baseElement: document.body });
+      screen.getAllByRole("button", { name: /First|Middle|Last/ })[1].focus();
+      unmount();
+      await act(async () => { await Promise.resolve(); });
+      expect(root.hasAttribute("inert")).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+    } finally { HTMLElement.prototype.focus = realFocus; }
+  });
+
   test("traps Tab within the dialog (wraps last → first)", () => {
     render(<ModalDialog />, { baseElement: document.body });
     const buttons = screen.getAllByRole("button");
@@ -105,7 +124,7 @@ describe("Portal — nested modals", () => {
 describe("useMediaQuery (drives desktop popover vs mobile sheet)", () => {
   function Harness() {
     const desktop = useMediaQuery("(min-width:900px)");
-    // mirrors ProfileDrawer: modal on mobile, non-modal (no aria-modal) on desktop
+    // mirrors AppMenu (the account menu): modal on mobile, non-modal (no aria-modal) on desktop
     return (
       <Portal modal={!desktop}>
         <div role="dialog" aria-modal={desktop ? undefined : "true"} aria-label="Profile menu">

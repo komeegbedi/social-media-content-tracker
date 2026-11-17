@@ -1,5 +1,6 @@
-/* Rendered test for the Profile menu's EXPLICIT close control + lock lifecycle.
-   Renders the real ProfileDrawer inside a host mirroring App's wiring (mounted
+/* Rendered test for the account menu's EXPLICIT close control + lock lifecycle.
+   (Round 6: the old ProfileDrawer was merged into AppMenu, the one account menu.)
+   Renders the real AppMenu inside a host mirroring App's wiring (mounted
    while ?panel=profile; onClose = the real useNav().dismissPanel), so we prove the
    button removes the panel, unmounts the dialog, and releases inert + scroll-lock.
    Run: npm run test:ui */
@@ -7,7 +8,7 @@ import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { useNav } from "./navHooks.js";
-import { ProfileDrawer } from "./ProfileDrawer.jsx";
+import { AppMenu } from "./AppMenu.jsx";
 
 beforeEach(() => {
   document.body.innerHTML = "";
@@ -33,15 +34,16 @@ function Host() {
       <LocationProbe />
       <button>Team page control</button>
       {open && (
-        <ProfileDrawer
+        <AppMenu
           me={{ name: "Jane Doe", email: "jane@example.com" }}
           isAdmin
-          appearanceLabel="System"
-          PrefIcon={Icon}
+          appearanceOptions={[{ key: "system", label: "Match system", Icon }]}
           onClose={() => R.dismissPanel()}
           onSignOut={() => {}}
-          onNotifications={() => {}}
+          onNotifPrefs={() => {}}
           onAppearance={() => {}}
+          onGoTab={() => {}}
+          onWhatsNew={() => {}}
           onReport={() => {}}
         />
       )}
@@ -57,21 +59,24 @@ function renderAt(entries, index) {
   );
 }
 
-describe("Profile menu — explicit close", () => {
-  test("exposes a visible 'Close profile menu' button (mobile = modal: inert + scroll-lock held)", () => {
+describe("Account menu — explicit close", () => {
+  test("exposes a visible 'Close account menu' button (mobile = modal: inert + scroll-lock held)", () => {
     // mobile: matchMedia(min-width:900) => false, so aria-modal + Portal lock
     renderAt(["/team", "/team?panel=profile"], 1);
-    expect(screen.getByRole("dialog", { name: "Profile menu" })).toHaveAttribute("aria-modal", "true");
-    expect(screen.getByRole("button", { name: "Close profile menu" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Account menu" })).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByRole("button", { name: "Close account menu" })).toBeInTheDocument();
     expect(inert()).toBe(true);
     expect(bodyLocked()).toBe(true);
   });
 
   test("clicking Close removes ?panel, unmounts the dialog, and releases inert + body lock", () => {
+    vi.useFakeTimers();
     renderAt(["/team", "/team?panel=profile"], 1);
-    fireEvent.click(screen.getByRole("button", { name: "Close profile menu" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close account menu" }));
+    act(() => { vi.advanceTimersByTime(250); });                             // the sheet slides away first
+    vi.useRealTimers();
     expect(screen.getByTestId("loc").textContent).toBe("/team");             // panel removed
-    expect(screen.queryByRole("dialog", { name: "Profile menu" })).toBeNull(); // unmounted
+    expect(screen.queryByRole("dialog", { name: "Account menu" })).toBeNull(); // unmounted
     expect(inert()).toBe(false);                                             // inert released
     expect(bodyLocked()).toBe(false);                                       // scroll-lock released
   });
@@ -83,8 +88,11 @@ describe("Profile menu — explicit close", () => {
     trigger.textContent = "Profile trigger";
     document.body.appendChild(trigger);
     trigger.focus();
+    vi.useFakeTimers();
     renderAt(["/team", "/team?panel=profile"], 1);
-    fireEvent.click(screen.getByRole("button", { name: "Close profile menu" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close account menu" }));
+    act(() => { vi.advanceTimersByTime(250); });
+    vi.useRealTimers();
     expect(document.activeElement).toBe(trigger);   // focus returned to the trigger
   });
 });

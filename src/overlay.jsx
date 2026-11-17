@@ -15,6 +15,9 @@ import { createPortal } from "react-dom";
 
 let _savedScrollY = 0;
 const _activeOverlays = new Set();
+// Focus that couldn't be restored because the background was still inert; it is
+// applied the moment the lock is released (see releaseBackgroundLock).
+let _pendingRestore = null;
 function applyBackgroundLock() {
   _savedScrollY = window.scrollY || window.pageYOffset || 0;
   const b = document.body;
@@ -34,6 +37,8 @@ function releaseBackgroundLock() {
   b.style.width = "";
   document.getElementById("root")?.removeAttribute("inert");
   window.scrollTo(0, _savedScrollY);
+  const pf = _pendingRestore; _pendingRestore = null;
+  if (pf && document.contains(pf) && typeof pf.focus === "function") pf.focus({ preventScroll: true });
 }
 function acquireOverlay(token) {
   const wasEmpty = _activeOverlays.size === 0;
@@ -63,7 +68,17 @@ export function Portal({ children, modal = true }) {
     prevFocusRef.current = document.activeElement;
     return () => {
       const pf = prevFocusRef.current;
-      if (pf && typeof pf.focus === "function" && document.contains(pf)) pf.focus({ preventScroll: true });
+      if (!pf || typeof pf.focus !== "function") return;
+      if (!document.contains(pf)) return;
+      pf.focus({ preventScroll: true });
+      // A modal's background lock (`inert` on #root) is released by a LATER
+      // cleanup in this same unmount, and browsers ignore focus() inside an inert
+      // subtree — so if that blocked us, hand the target to the lock release.
+      if (document.activeElement !== pf) {
+        _pendingRestore = pf;
+        // non-modal overlays / nested modals: if no release follows, try again shortly
+        queueMicrotask(() => { if (_pendingRestore === pf && !pf.closest("[inert]")) { _pendingRestore = null; pf.focus({ preventScroll: true }); } });
+      }
     };
   }, []);
   // (2) Move focus into the overlay on open (unless it focused something itself).
@@ -139,10 +154,44 @@ export function useSheetDrag(onClose) {
   };
 }
 
+/* The phone bottom-sheet foundation (round 7), shared by the account menu and
+   the notification panel so they enter, drag and close the same way:
+     • slides up from the bottom; closing slides it back down (instant when the
+       user prefers reduced motion) before `onClose` runs
+     • drag DOWN from the handle or the header to dismiss; a drag that starts on
+       a button, link, field or label is left alone, and the scrolling content
+       never starts a dismissal (so scrolling a list can't close the sheet)
+   Outside tap, the close button and Escape all go through `finish`; browser Back
+   is handled by the URL panel owner; focus return + inert by <Portal>. */
+export const SHEET_EXIT_MS = 200;
+const INTERACTIVE = "button,a,input,select,textarea,label,[role='radio'],[role='switch'],[contenteditable='true']";
+export function useSheet(onClose) {
+  const [closing, setClosing] = useState(false);
+  const timer = useRef(null);
+  const closingRef = useRef(false);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const finish = (action) => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    const reduce = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => (action || onClose)(), reduce ? 0 : SHEET_EXIT_MS);
+  };
+  const drag = useSheetDrag(() => finish());
+  const fromHeader = (h) => (e) => { if (e.target.closest && e.target.closest(INTERACTIVE)) return; h(e); };
+  const headerProps = {
+    onTouchStart: fromHeader(drag.handleProps.onTouchStart), onTouchMove: drag.handleProps.onTouchMove, onTouchEnd: drag.handleProps.onTouchEnd,
+    onPointerDown: fromHeader(drag.handleProps.onPointerDown), onPointerMove: drag.handleProps.onPointerMove, onPointerUp: drag.handleProps.onPointerUp,
+  };
+  return { closing, finish, handleProps: drag.handleProps, headerProps, sheetStyle: drag.sheetStyle };
+}
+
 /* Tracks a media query as a boolean (SSR-safe, updates on change). */
 export function useMediaQuery(query) {
-  const [match, setMatch] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+  const [match, setMatch] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches);
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") return undefined;
     const mq = window.matchMedia(query);
     const on = () => setMatch(mq.matches);
     on();

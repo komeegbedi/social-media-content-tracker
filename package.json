@@ -12,11 +12,14 @@
     "test": "node --test src/*.test.js",
     "test:ui": "vitest run",
     "test:functions": "node --test functions/*.test.js && node --check functions/index.js",
-    "test:emulator": "firebase emulators:exec --only firestore \"node --test --test-concurrency=1 test/*.test.js\"",
-    "test:trigger": "firebase emulators:exec --only firestore,functions --project demo-mention-trigger \"node --test test/trigger/mention-trigger.test.js\"",
-    "test:headers": "npm run build && firebase emulators:exec --only hosting \"node scripts/verify-headers.mjs\"",
+    "test:emulator": "node scripts/emulator-test.mjs --project demo-rules-suite --only firestore -- node --test --test-concurrency=1 test/*.test.js",
+    "test:academy": "node scripts/emulator-test.mjs --project demo-academy-test --only firestore,storage -- node --test --test-concurrency=1 test/academy.rules.test.js test/storage/storage.rules.test.js",
+    "test:trigger": "node scripts/emulator-test.mjs --project demo-mention-trigger --only firestore,functions -- node --test test/trigger/mention-trigger.test.js",
+    "test:headers": "npm run build && node scripts/emulator-test.mjs --project demo-headers --only hosting -- node scripts/verify-headers.mjs",
     "verify": "npm run build && npm test && npm run test:ui && npm run test:functions && npm run test:emulator",
-    "deploy": "npm run build && firebase deploy --only hosting,firestore:rules,firestore:indexes"
+    "deploy": "npm run build && firebase deploy --only hosting,firestore:rules,firestore:indexes",
+    "dev:emulators": "node scripts/dev-emulators.mjs",
+    "test:safety": "node --test test/emulatorBackup.test.js"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

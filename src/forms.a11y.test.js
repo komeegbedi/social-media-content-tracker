@@ -31,7 +31,7 @@ test("admin search inputs carry an accessible name (were placeholder-only)", () 
 test("previously-unassociated form labels now use htmlFor/id", () => {
   // A representative set spanning feature request, report, task detail, event +
   // user editors, notification settings, crew, compose, import.
-  for (const id of ["fr-title", "fr-problem", "fr-link", "ri-note", "td-blocked", "td-postlink",
+  for (const id of ["fr-title", "fr-problem", "fr-link", "ri-note", "td-blocked",
                      "ue-name", "ue-role", "ns-hour", "crew-who", "pc-link"]) {
     assert.ok(new RegExp(`htmlFor="${id}"`).test(app), `label htmlFor="${id}" missing`);
     assert.ok(new RegExp(`id="${id}"`).test(app), `control id="${id}" missing`);

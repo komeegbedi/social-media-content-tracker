@@ -19,6 +19,16 @@ const firebaseConfig = {
 
 export const app = initializeApp(firebaseConfig);
 const _useEmulator = import.meta.env.VITE_USE_EMULATOR === "true";
+/* Emulator address. Defaults are the dev emulators; an isolated test instance of
+   the app (its own emulator suite on other ports) overrides them. Dev builds only:
+   in a production build `_useEmulator` is false and this code is removed. */
+const _emu = {
+  host: import.meta.env.VITE_EMULATOR_HOST || "127.0.0.1",
+  auth: Number(import.meta.env.VITE_EMULATOR_AUTH_PORT) || 9099,
+  firestore: Number(import.meta.env.VITE_EMULATOR_FIRESTORE_PORT) || 8080,
+  functions: Number(import.meta.env.VITE_EMULATOR_FUNCTIONS_PORT) || 5001,
+  storage: Number(import.meta.env.VITE_EMULATOR_STORAGE_PORT) || 9199,
+};
 const _appCheckKey = import.meta.env.VITE_FIREBASE_APPCHECK_KEY;
 
 // Auth + Firestore are LIVE BINDINGS assigned only AFTER App Check init (in the
@@ -40,8 +50,8 @@ function constructServices() {
     ...(_useEmulator ? {} : { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }),
   });
   if (_useEmulator) {
-    connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
-    connectFirestoreEmulator(db, "127.0.0.1", 8080);
+    connectAuthEmulator(auth, `http://${_emu.host}:${_emu.auth}`, { disableWarnings: true });
+    connectFirestoreEmulator(db, _emu.host, _emu.firestore);
   }
 }
 
@@ -79,8 +89,19 @@ export const firebaseReady = bootstrapFirebase(_plan, {
 export const getFunctionsInstance = memoizeImport(async () => {
   const { getFunctions, connectFunctionsEmulator } = await import("firebase/functions");
   const fns = getFunctions(app, "northamerica-northeast1");
-  if (_useEmulator) connectFunctionsEmulator(fns, "127.0.0.1", 5001);
+  if (_useEmulator) connectFunctionsEmulator(fns, _emu.host, _emu.functions);
   return fns;
+});
+
+/* Cloud Storage (Academy covers/thumbnails) — loaded on first use, same pattern
+   as Functions, so firebase/storage stays out of the initial bundle. Images are
+   READ through the SDK (getBlob → object URL, auth enforced by storage.rules),
+   never via public/long-lived download URLs. */
+export const getStorageInstance = memoizeImport(async () => {
+  const { getStorage, connectStorageEmulator } = await import("firebase/storage");
+  const st = getStorage(app);
+  if (_useEmulator) connectStorageEmulator(st, _emu.host, _emu.storage);
+  return st;
 });
 
 /* Invoke a callable, loading firebase/functions (getFunctions AND httpsCallable)
