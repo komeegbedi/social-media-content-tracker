@@ -38,7 +38,7 @@ describe("course draft offline status", () => {
     saveCourseDraft.mockImplementation(async () => { if (!online) throw Object.assign(new Error("Failed to get document because the client is offline."), { code: "unavailable" }); return 2; });
     goOffline();
     act(() => { ref.current.updateCourse({ title: "Edited offline" }); });
-    expect(await screen.findByText(/Offline — not saved yet/, {}, { timeout: 3000 })).toHaveAttribute("role", "status");
+    expect(await screen.findByText(/You're offline, so your latest edits aren't saved yet/, {}, { timeout: 3000 })).toHaveAttribute("role", "status");
     expect(screen.queryByText("Draft saved")).toBeNull();
     expect(screen.getByTestId("title")).toHaveTextContent("Edited offline");
     expect(saveCourseDraft.mock.calls.length).toBeLessThanOrEqual(2);       // no save loop while offline
@@ -54,7 +54,7 @@ describe("course draft offline status", () => {
     await screen.findByTestId("title");
     saveCourseDraft.mockRejectedValue(Object.assign(new Error("Missing or insufficient permissions."), { code: "permission-denied" }));
     act(() => { ref.current.updateCourse({ title: "Nope" }); });
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/permission/), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/Couldn.t save the draft: the server refused the change\. You may no longer have editing access/), { timeout: 3000 });
     expect(screen.queryByText(/Offline/)).toBeNull();
   });
 });

@@ -65,7 +65,9 @@ service firebase.storage {
     function guideExists(guideId) {
       return firestore.exists(/databases/(default)/documents/guides/$(guideId));
     }
-    function isGuideEditor(guideId) { return isEditor() && guideExists(guideId); }
+    // v6.11: a resource may exist only as a private draft (guideDrafts) until published
+    function guideDraftExists(guideId) { return firestore.exists(/databases/(default)/documents/guideDrafts/$(guideId)); }
+    function isGuideEditor(guideId) { return isEditor() && (guideExists(guideId) || guideDraftExists(guideId)); }
     function canSeeGuide(guideId) {
       return isApproved() && guideExists(guideId)
         && (isEditor() || (guide(guideId).status == 'published' && !(guide(guideId).get('category', '') in hiddenCategoryIds())));
@@ -104,9 +106,9 @@ service firebase.storage {
 
     // Quick-guide thumbnails: academy/guideThumbs/{guideId}/{version}.jpg
     match /academy/guideThumbs/{guideId}/{file} {
-      allow read: if canSeeGuide(guideId);
+      allow read: if canSeeGuide(guideId) || isGuideEditor(guideId);
       allow create, update: if isGuideEditor(guideId) && validImage();
-      allow delete: if isGuideEditor(guideId);
+      allow delete: if isGuideEditor(guideId) || (isEditor() && !guideExists(guideId) && !guideDraftExists(guideId));   // clean-up after a delete
     }
 
     // Learning-path covers: academy/pathCovers/{pathId}/{version}.jpg

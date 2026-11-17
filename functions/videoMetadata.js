@@ -70,7 +70,7 @@ const fetchVideoMetadata = onCall({ memory: "256MiB", timeoutSeconds: 15 }, asyn
     return { available: false, reason: "Couldn't reach the video provider. Try again.", retryable: true };
   }
   if (res.status === 401 || res.status === 403) return { available: false, reason: "This video is private or embedding is restricted." };
-  if (res.status === 404) return { available: false, reason: "The provider doesn't know this video — check the link." };
+  if (res.status === 404) return { available: false, reason: "We couldn't find this video. Check the link." };
   if (!res.ok) return { available: false, reason: "The provider didn't return a preview.", retryable: true };
   let body = null;
   try { body = await res.json(); } catch { body = null; }

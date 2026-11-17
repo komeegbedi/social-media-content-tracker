@@ -15,6 +15,7 @@ import { Markdown } from "./academyShared.jsx";
 import { MenuButton } from "./academyMenu.jsx";
 import { isSafeHref, MARKDOWN_HELP, MARKDOWN_HELP_V2, MD_LEGACY, MD_CURRENT } from "./academyMarkdown.js";
 import { markdownToHtml, htmlToMarkdown, canEditVisually } from "./academyRichText.js";
+import { LinkPopover, linkContext, createLink, updateLink, removeLink, unlinkRange, relinkRange, openLinkSafely } from "./academyLinkEditor.jsx";
 import { newId, DEFAULT_PASS_MARK } from "./academyProgress.js";
 import { isMeaningfulCourse } from "./academyDrafts.js";
 import { isOnline, isOfflineError } from "./useOnline.js";
@@ -160,7 +161,7 @@ export function useCourseDraft(cid, me, { blank = null, onFirstSave } = {}) {
       const r = await loadCourseWorkspace(cid);
       commit({ ...m.current, head: { ...m.current.head, ...r.head }, liveCourse: r.liveCourse, liveLessons: r.liveLessons, draftExists: r.draftExists || m.current.draftExists });
     },
-    ensureSaved: async () => { if (!m.current.draftExists) await flush({ force: true }); if (!m.current.draftExists) throw new Error("Couldn't create the draft yet — check your connection and try again."); return { courseId: cid }; },
+    ensureSaved: async () => { if (!m.current.draftExists) await flush({ force: true }); if (!m.current.draftExists) throw new Error("Couldn't create the draft yet. Check your connection and try again."); return { courseId: cid }; },
     reloadFromServer: () => load(),
     overwriteRemote: async () => { const r = Number(head.data?.rev || 0); commit({ ...m.current, head: { ...m.current.head, rev: r } }); dirty.current.writeAll = true; dirty.current.course = true; setSave({ state: "pending", message: "" }); await flush(); },
     afterPublish: (rev, liveCourse, liveLessons) => commit({ ...m.current, head: { rev, publishedRev: rev }, liveCourse, liveLessons }),
@@ -185,14 +186,14 @@ export function useCourseDraft(cid, me, { blank = null, onFirstSave } = {}) {
 /* Saving… / Saved / Couldn't save — Retry. Never "saved" while edits are pending. */
 /* Course draft save state. "Draft saved" means saved to the PRIVATE draft —
    the header's Published / Unpublished changes pills say what learners see. */
-export function SaveStatus({ save, onRetry, onReload, onOverwrite, idleText = "Not saved yet — start typing" }) {
+export function SaveStatus({ save, onRetry, onReload, onOverwrite, idleText = "Not saved yet. Start typing to create a draft." }) {
   const s = save.state;
   if (s === "idle") return <span className="ac-savestate muted">{idleText}</span>;
   if (s === "pending") return <span className="ac-savestate muted" role="status">Unsaved changes…</span>;
   if (s === "saving") return <span className="ac-savestate muted" role="status"><ArrowPathIcon className="hi hi-xs ac-spin" aria-hidden="true" />Saving draft…</span>;
   if (s === "saved") return <span className="ac-savestate ok" role="status"><CheckCircleIcon className="hi hi-xs" aria-hidden="true" />Draft saved</span>;
   if (s === "offline") return (
-    <span className="ac-savestate warn" role="status"><ExclamationTriangleIcon className="hi hi-xs" aria-hidden="true" />Offline — not saved yet. Your edits are kept in this tab and save when you reconnect.
+    <span className="ac-savestate warn" role="status"><ExclamationTriangleIcon className="hi hi-xs" aria-hidden="true" />You're offline, so your latest edits aren't saved yet. They're kept in this tab and will save when you reconnect.
       <button type="button" className="ac-link" onClick={onRetry}>Try now</button></span>
   );
   if (s === "conflict") return (
@@ -200,7 +201,18 @@ export function SaveStatus({ save, onRetry, onReload, onOverwrite, idleText = "N
       {onReload && <button type="button" className="ac-link" onClick={onReload}>Load their version</button>}
       {onOverwrite && <button type="button" className="ac-link" onClick={onOverwrite}>Keep mine…</button>}</span>
   );
-  return <span className="ac-savestate err" role="alert"><ExclamationTriangleIcon className="hi hi-xs" aria-hidden="true" />Couldn't save draft{save.message ? ` — ${save.message}` : ""}. Your edits are kept.<button type="button" className="ac-link" onClick={onRetry}>Retry</button></span>;
+  const why = saveErrorText(save.message);
+  return <span className="ac-savestate err" role="alert"><ExclamationTriangleIcon className="hi hi-xs" aria-hidden="true" />Couldn't save the draft{why ? `: ${why}` : ""}. Your edits are still here.<button type="button" className="ac-link" onClick={onRetry}>Retry</button></span>;
+}
+/* A save error in words people can act on. A refusal by the security rules
+   arrives as engine text ("evaluation error at L925…" / "Missing or insufficient
+   permissions") — never shown as is. */
+export function saveErrorText(message) {
+  const m = String(message || "").trim();
+  if (!m) return "";
+  if (/permission|PERMISSION_DENIED|evaluation error|insufficient/i.test(m)) return "the server refused the change. You may no longer have editing access, or its category is being deleted";
+  if (m.length > 160 || /\bL\d+:\d+\b|@ L\d+/.test(m)) return "";
+  return m.replace(/\.$/, "");
 }
 /* Formatted text: a VISUAL editor by default (bold, italic, heading, lists,
    links — no Markdown knowledge needed), stored in the same safe Markdown
@@ -208,9 +220,11 @@ export function SaveStatus({ save, onRetry, onReload, onOverwrite, idleText = "N
    secondary option, and existing text that the visual view can't show exactly
    opens there instead of being rewritten (see academyRichText.js). */
 const execOk = () => typeof document !== "undefined" && typeof document.execCommand === "function";
+/* The shortcut as the author presses it: on a Mac it's ⌘ (Ctrl+B there moves the caret). */
+const MOD = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "") ? "Cmd+" : "Ctrl+";
 const TOOLS = [
-  { cmd: "bold", label: "Bold", keys: "Ctrl+B", text: <b>B</b> },
-  { cmd: "italic", label: "Italic", keys: "Ctrl+I", text: <i>I</i> },
+  { cmd: "bold", label: "Bold", keys: `${MOD}B`, text: <b>B</b> },
+  { cmd: "italic", label: "Italic", keys: `${MOD}I`, text: <i>I</i> },
   { cmd: "heading", label: "Heading", text: "Heading" },
   { cmd: "insertUnorderedList", label: "Bulleted list", text: "• List" },
   { cmd: "insertOrderedList", label: "Numbered list", text: "1. List" },
@@ -227,8 +241,9 @@ export function RichTextField({ id, label, value, format = MD_LEGACY, onChange, 
   const [mode, setMode] = useState(() => (canEditVisually(value || "", format) ? "visual" : "source"));
   const [forcedSource] = useState(() => !canEditVisually(value || "", format));
   const [empty, setEmpty] = useState(!(value || "").trim());
-  const [linking, setLinking] = useState(null);    // { range }
-  const [url, setUrl] = useState("");
+  const [linking, setLinking] = useState(null);    // { ctx, range } — the open link popover
+  const [inLink, setInLink] = useState(false);     // caret/selection inside a link → toolbar shows "Edit link"
+  const linkBtn = useRef(null);
   const [modeNote, setModeNote] = useState("");
   const lblId = `${id}-lbl`;
 
@@ -261,26 +276,60 @@ export function RichTextField({ id, label, value, format = MD_LEGACY, onChange, 
     } else document.execCommand(cmd, false, null);
     emit();
   };
-  const startLink = () => {
+  /* ---- links: contextual popover (academyLinkEditor.jsx) ---- */
+  const currentRange = () => {
     const sel = window.getSelection();
-    const range = sel && sel.rangeCount && ed.current?.contains(sel.anchorNode) ? sel.getRangeAt(0).cloneRange() : null;
-    setLinking({ range }); setUrl("");
+    return sel && sel.rangeCount && ed.current?.contains(sel.getRangeAt(0).commonAncestorContainer) ? sel.getRangeAt(0).cloneRange() : null;
   };
-  const insertLink = (e) => {
+  const openLink = (forceAnchor = null) => {
+    if (!ed.current) return;
+    let range = currentRange();
+    if (forceAnchor) { range = document.createRange(); range.selectNodeContents(forceAnchor); range.collapse(true); }
+    if (!range) {                                   // nothing selected in the editor: caret at the end
+      range = document.createRange(); range.selectNodeContents(ed.current); range.collapse(false);
+    }
+    setLinking({ ctx: linkContext(ed.current, range), range });   // reading only — content untouched
+  };
+  const linkRect = () => {
+    const l = linking; if (!l) return null;
+    if (l.ctx.anchor?.isConnected) return l.ctx.anchor.getBoundingClientRect();
+    try { const r = l.range.getClientRects(); const rr = r.length ? r[r.length - 1] : l.range.getBoundingClientRect(); if (rr && (rr.width || rr.height)) return rr; } catch { /* detached */ }
+    return linkBtn.current?.getBoundingClientRect() || ed.current?.getBoundingClientRect();
+  };
+  const closeLink = (restore = true) => {
+    const l = linking; setLinking(null);
+    if (!ed.current) return;
+    ed.current.focus({ preventScroll: true });
+    if (restore && l?.range) { try { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(l.range); } catch { /* range gone */ } }
+  };
+  const applyLink = ({ url, text }) => {
+    const l = linking; if (!l || !ed.current) return;
+    if (l.ctx.mode === "edit") updateLink(ed.current, l.ctx.anchor, url, text);
+    else if (l.ctx.mode === "mixed") relinkRange(ed.current, l.range, l.ctx.links, url);
+    else createLink(ed.current, l.range, url, text);
+    setLinking(null); emit(true); ed.current.focus({ preventScroll: true });
+  };
+  const removeThisLink = () => { const l = linking; if (!l?.ctx.anchor) return; removeLink(ed.current, l.ctx.anchor); setLinking(null); emit(true); ed.current.focus({ preventScroll: true }); };
+  const unlinkSelection = () => { const l = linking; if (!l) return; unlinkRange(ed.current, l.range, l.ctx.links || []); setLinking(null); emit(true); ed.current.focus({ preventScroll: true }); };
+  // Toolbar state follows the caret.
+  useEffect(() => {
+    if (mode !== "visual") return undefined;
+    const onSel = () => { const r = currentRange(); setInLink(!!r && linkContext(ed.current, r).mode === "edit"); };
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Clicking a link while authoring edits it — it never navigates away.
+  const onEditorClick = (e) => {
+    const a = e.target.closest?.("a");
+    if (!a || !ed.current?.contains(a)) return;
     e.preventDefault();
-    const u = normalizeLinkInput(url);
-    if (!isSafeHref(u) || !ed.current) return;
-    ed.current.focus();
-    const sel = window.getSelection();
-    if (linking?.range) { sel.removeAllRanges(); sel.addRange(linking.range); }
-    if (execOk() && sel && sel.rangeCount && !sel.isCollapsed) document.execCommand("createLink", false, u);
-    else if (execOk()) document.execCommand("insertHTML", false, `<a href="${u.replace(/"/g, "&quot;")}">${(sourceLabel(u) || u).replace(/[<>&]/g, "")}</a>&nbsp;`);
-    setLinking(null);
-    emit();
+    const r = currentRange();
+    const ctx = r ? linkContext(ed.current, r) : null;
+    setLinking(ctx && ctx.mode === "edit" && ctx.anchor === a ? { ctx, range: r } : (() => { const rr = document.createRange(); rr.selectNodeContents(a); rr.collapse(true); return { ctx: linkContext(ed.current, rr), range: rr }; })());
   };
   const onKey = (e) => {
     if (!(e.metaKey || e.ctrlKey)) return;
-    if (e.key.toLowerCase() === "k") { e.preventDefault(); startLink(); }
+    if (e.key.toLowerCase() === "k") { e.preventDefault(); e.stopPropagation(); openLink(); }   // not the app's global search
   };
   // Pasting never brings in foreign HTML — plain text only.
   const onPaste = (e) => {
@@ -310,21 +359,15 @@ export function RichTextField({ id, label, value, format = MD_LEGACY, onChange, 
               <button key={t.cmd} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => run(t.cmd)}
                 aria-label={t.keys ? `${t.label} (${t.keys})` : t.label} title={t.keys ? `${t.label} (${t.keys})` : t.label}>{t.text}</button>
             ))}
-            <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={startLink} aria-label="Link (Ctrl+K)" title="Link (Ctrl+K)"><LinkIcon className="hi hi-xs" aria-hidden="true" />Link</button>
+            <button ref={linkBtn} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => openLink()} aria-pressed={inLink}
+              aria-label={inLink ? `Edit link (${MOD}K)` : `Link (${MOD}K)`} title={inLink ? `Edit link (${MOD}K)` : `Link (${MOD}K)`} className={inLink ? "on" : undefined}><LinkIcon className="hi hi-xs" aria-hidden="true" />{inLink ? "Edit link" : "Link"}</button>
           </div>
           <div id={id} ref={ed} className={"ac-rte ac-md" + (empty ? " is-empty" : "")} contentEditable suppressContentEditableWarning
             role="textbox" aria-multiline="true" aria-labelledby={lblId} tabIndex={0} data-placeholder={placeholder}
             style={{ minHeight: `${Math.max(3, rows) * 1.55}em` }}
-            onInput={() => emit(true)} onBlur={() => emit(false)} onKeyDown={onKey} onPaste={onPaste} />
-          {linking && (
-            <form className="ac-linkpop" onSubmit={insertLink} noValidate>
-              <label htmlFor={`${id}-link`} className="sb-vh">Link address</label>
-              <input id={`${id}-link`} autoFocus type="url" inputMode="url" placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setLinking(null); ed.current?.focus(); } }} />
-              <button type="submit" className="sb-btn compact" disabled={!isSafeHref(normalizeLinkInput(url))}>Add link</button>
-              <button type="button" className="sb-btn quiet compact" onClick={() => { setLinking(null); ed.current?.focus(); }}>Cancel</button>
-            </form>
-          )}
+            onInput={() => emit(true)} onBlur={() => emit(false)} onKeyDown={onKey} onPaste={onPaste} onClick={onEditorClick} onAuxClick={(e) => { if (e.target.closest?.("a")) e.preventDefault(); }} />
+          {linking && <LinkPopover key={linking.ctx.mode + (linking.ctx.anchor ? "a" : "") } ctx={linking.ctx} getRect={linkRect} idBase={id}
+            onApply={applyLink} onRemove={removeThisLink} onUnlinkAll={unlinkSelection} onOpen={openLinkSafely} onCancel={(restore = true) => closeLink(restore)} />}
         </>
       ) : (
         <>
@@ -386,7 +429,7 @@ export function LinkList({ id, label, hint, items = [], onChange, emptyText = "N
               ) : (
                 <span className="ac-linkmain">
                   <a href={l.url} target="_blank" rel="noopener noreferrer" className="ac-linktitle">{l.label || l.url}</a>
-                  <span className="ac-cardsub">{loading[l.url] ? "Looking up…" : [l.source || sourceLabel(l.url), l.fileType, l.restricted ? "Private link — details not available" : ""].filter(Boolean).join(" · ")}</span>
+                  <span className="ac-cardsub">{loading[l.url] ? "Looking up…" : [l.source || sourceLabel(l.url), l.fileType, l.restricted ? "Private link, so no details are available" : ""].filter(Boolean).join(" · ")}</span>
                 </span>
               )}
               {renaming !== i && <span className="ac-linkactions">
@@ -413,7 +456,20 @@ export function LinkList({ id, label, hint, items = [], onChange, emptyText = "N
    Quiz (learner-readable questions + private answer key)
    ===================================================================== */
 const blankQ = () => ({ id: newId(), prompt: "", multi: false, options: [{ id: newId(), text: "" }, { id: newId(), text: "" }] });
-export function QuizEditor({ idBase, quiz, quizKey, onChange }) {
+/* Publish checks for the workspace: which issues exist, and whether to SHOW
+   them yet (only after the author touched that control or tried to publish —
+   an untouched new form never opens covered in errors). */
+export const PublishCheckCtx = React.createContext(null);
+export function usePublishErr(item) {
+  const ctx = React.useContext(PublishCheckCtx);
+  return (field, controlId) => {
+    if (!ctx) return "";
+    const i = ctx.issues.find((x) => x.item === item && x.field === field);
+    return i && (ctx.attempted || ctx.touched.has(controlId)) ? i.message : "";
+  };
+}
+
+export function QuizEditor({ idBase, quiz, quizKey, onChange, err = () => "" }) {
   const q = quiz || { mode: "none", passMark: DEFAULT_PASS_MARK, retryLimit: 0, questions: [] };
   const key = quizKey || { answers: {}, explanations: {} };
   const setQuiz = (patch) => onChange({ ...q, ...patch }, key);
@@ -422,43 +478,74 @@ export function QuizEditor({ idBase, quiz, quizKey, onChange }) {
   const correctOf = (qq) => key.answers?.[qq.id] || [];
   if (q.mode === "none") return (
     <div className="ac-quizoff"><button type="button" className="sb-btn ghost compact" onClick={() => setQuiz({ mode: "practice", questions: q.questions.length ? q.questions : [blankQ()] })}><ClipboardDocumentCheckIcon className="hi hi-sm" aria-hidden="true" />Add a quiz</button>
-      <span className="ac-cardsub">Optional — a short check after the lesson.</span></div>
+      <span className="ac-cardsub">Optional. A short check after the lesson.</span></div>
   );
   return (
     <div className="ac-quizedit">
       <div className="ac-row2">
         <div className="sb-field"><label htmlFor={`${idBase}-qm`}>Quiz</label>
           <select id={`${idBase}-qm`} value={q.mode} onChange={(e) => setQuiz({ mode: e.target.value })}>
-            <option value="practice">Practice — doesn't affect completion</option><option value="required">Required — must pass to complete the lesson</option><option value="none">Remove quiz</option>
+            <option value="practice">Practice: doesn't affect completion</option><option value="required">Required: must pass to complete</option><option value="none">Remove quiz</option>
           </select></div>
         <div className="sb-field"><label htmlFor={`${idBase}-pm`}>Pass mark (%)</label><input id={`${idBase}-pm`} type="number" min="1" max="100" value={q.passMark} onChange={(e) => setQuiz({ passMark: e.target.value })} /></div>
       </div>
+      {/* Attempts: unlimited by default; a limit is a deliberate choice (Academy
+          editors can give a learner more from the course page's Quiz attempts). */}
+      <div className="ac-row2">
+        <div className="sb-field"><label htmlFor={`${idBase}-al`}>Attempts</label>
+          <select id={`${idBase}-al`} value={Number(q.retryLimit) > 0 ? "limited" : "unlimited"} onChange={(e) => setQuiz({ retryLimit: e.target.value === "limited" ? 3 : 0 })}>
+            <option value="unlimited">Unlimited attempts</option><option value="limited">Limited attempts</option>
+          </select></div>
+        {Number(q.retryLimit) > 0 && (
+          <div className="sb-field"><label htmlFor={`${idBase}-an`}>Attempts allowed</label>
+            <input id={`${idBase}-an`} type="number" min="1" max="20" value={q.retryLimit} aria-describedby={`${idBase}-an-hint`} onChange={(e) => setQuiz({ retryLimit: Math.min(20, Math.max(1, Math.round(Number(e.target.value) || 1))) })} />
+            <span className="ac-fieldhint" id={`${idBase}-an-hint`}>Academy editors can give a learner extra attempts from <b>Quiz attempts</b> on the course page.</span></div>
+        )}
+      </div>
       <ol className="ac-edquestions">
-        {q.questions.map((qq, i) => (
-          <li key={qq.id} className="ac-edq">
-            <div className="ac-edqhead">
-              <label htmlFor={`${idBase}-q-${qq.id}`} className="sb-vh">Question {i + 1}</label>
-              <input id={`${idBase}-q-${qq.id}`} placeholder={`Question ${i + 1}`} value={qq.prompt} onChange={(e) => setQuestion(i, { prompt: e.target.value })} maxLength={1000} />
-              <button type="button" className="ac-iconbtn" aria-label={`Remove question ${i + 1}`} onClick={() => setQuiz({ questions: q.questions.filter((_, j) => j !== i) })}><TrashIcon className="hi hi-sm" aria-hidden="true" /></button>
-            </div>
-            <Toggle label="More than one correct answer" v={qq.multi} on={() => { setQuestion(i, { multi: !qq.multi }); if (qq.multi) setKey({ answers: { ...key.answers, [qq.id]: correctOf(qq).slice(0, 1) } }); }} />
-            <div className="ac-edopts" role="group" aria-label={`Answers for question ${i + 1} — tick the correct ones`}>
-              {qq.options.map((o, oi) => (
-                <div key={o.id} className="ac-edopt">
-                  <input type={qq.multi ? "checkbox" : "radio"} name={`${idBase}-c-${qq.id}`} checked={correctOf(qq).includes(o.id)} aria-label={`Answer ${oi + 1} is correct`}
-                    onChange={() => setKey({ answers: { ...key.answers, [qq.id]: qq.multi ? (correctOf(qq).includes(o.id) ? correctOf(qq).filter((x) => x !== o.id) : [...correctOf(qq), o.id]) : [o.id] } })} />
-                  <input placeholder={`Answer ${oi + 1}`} value={o.text} aria-label={`Answer ${oi + 1}`} onChange={(e) => setQuestion(i, { options: qq.options.map((x, j) => j === oi ? { ...x, text: e.target.value } : x) })} maxLength={300} />
-                  <button type="button" className="ac-iconbtn" aria-label={`Remove answer ${oi + 1}`} disabled={qq.options.length <= 2} onClick={() => setQuestion(i, { options: qq.options.filter((_, j) => j !== oi) })}><XMarkIcon className="hi hi-sm" aria-hidden="true" /></button>
+        {q.questions.map((qq, i) => {
+          const qid = `${idBase}-q-${qq.id}`;
+          const name = (qq.prompt || "").trim();
+          const qErr = err(`q:${qq.id}`, qid);                         // the question text
+          const aErr = err(`qo:${qq.id}`, qid) || err(`qa:${qq.id}`, qid);   // options / correct answer (shown once the question was touched)
+          const howId = `${idBase}-how-${qq.id}`;
+          return (
+            <li key={qq.id} className="ac-edq">
+              <div className={"sb-field ac-edqfield" + (qErr ? " has-err" : "")}>
+                <div className="ac-edqlabelrow">
+                  <label htmlFor={qid}>Question {i + 1}<span className="ac-req">Required to publish</span></label>
+                  <button type="button" className="sb-btn ghost subtle-danger compact ac-edqremove" aria-label={`Remove question ${i + 1}${name ? `: ${name}` : ""}`} onClick={() => setQuiz({ questions: q.questions.filter((_, j) => j !== i) })}><TrashIcon className="hi hi-sm" aria-hidden="true" /><span>Remove</span></button>
                 </div>
-              ))}
-              {qq.options.length < 8 && <button type="button" className="sb-btn quiet compact" onClick={() => setQuestion(i, { options: [...qq.options, { id: newId(), text: "" }] })}><PlusIcon className="hi hi-sm" aria-hidden="true" />Add answer</button>}
-            </div>
-            <div className="sb-field"><label htmlFor={`${idBase}-ex-${qq.id}`}>Explanation (shown after answering)</label>
-              <textarea id={`${idBase}-ex-${qq.id}`} rows={2} value={key.explanations?.[qq.id] || ""} onChange={(e) => setKey({ explanations: { ...key.explanations, [qq.id]: e.target.value } })} maxLength={2000} /></div>
-          </li>
-        ))}
+                <input id={qid} placeholder="e.g. Which setting controls depth of field?" value={qq.prompt} onChange={(e) => setQuestion(i, { prompt: e.target.value })} maxLength={1000}
+                  aria-invalid={qErr ? true : undefined} aria-describedby={qErr ? `${qid}-err` : undefined} />
+                {qErr && <div className="ac-fielderr" id={`${qid}-err`}>{qErr}</div>}
+              </div>
+              <Toggle label="More than one correct answer" v={qq.multi} on={() => { setQuestion(i, { multi: !qq.multi }); if (qq.multi) setKey({ answers: { ...key.answers, [qq.id]: correctOf(qq).slice(0, 1) } }); }} />
+              <fieldset className={"ac-edopts" + (aErr ? " has-err" : "")} id={`${qid}-opts`} aria-describedby={[aErr ? `${qid}-aerr` : "", howId].filter(Boolean).join(" ")} aria-invalid={aErr ? true : undefined}>
+                <legend className="ac-fieldlabel">Answer options</legend>
+                <p className="ac-fieldhint" id={howId}>{qq.multi ? "Tick every correct answer. Learners must choose all of them." : "Select the correct answer."} At least two options; marking the correct {qq.multi ? "answers" : "answer"} is required to publish.</p>
+                {qq.options.map((o, oi) => {
+                  const text = (o.text || "").trim();
+                  return (
+                    <div key={o.id} className="ac-edopt">
+                      <input type={qq.multi ? "checkbox" : "radio"} name={`${idBase}-c-${qq.id}`} checked={correctOf(qq).includes(o.id)} aria-label={`Answer option ${oi + 1}${text ? ` (${text})` : ""} is correct`}
+                        onChange={() => setKey({ answers: { ...key.answers, [qq.id]: qq.multi ? (correctOf(qq).includes(o.id) ? correctOf(qq).filter((x) => x !== o.id) : [...correctOf(qq), o.id]) : [o.id] } })} />
+                      <input type="text" className="ac-input" placeholder={`Answer option ${oi + 1}`} value={o.text} aria-label={`Answer option ${oi + 1}`} onChange={(e) => setQuestion(i, { options: qq.options.map((x, j) => j === oi ? { ...x, text: e.target.value } : x) })} maxLength={300} />
+                      <button type="button" className="ac-iconbtn" aria-label={`Remove answer option ${oi + 1}${text ? ` (${text})` : ""}`} disabled={qq.options.length <= 2} title={qq.options.length <= 2 ? "A question needs at least two options" : undefined} onClick={() => setQuestion(i, { options: qq.options.filter((_, j) => j !== oi) })}><XMarkIcon className="hi hi-sm" aria-hidden="true" /></button>
+                    </div>
+                  );
+                })}
+                {aErr && <div className="ac-fielderr" id={`${qid}-aerr`}>{aErr}</div>}
+                {qq.options.length < 8 && <button type="button" className="sb-btn quiet compact ac-addopt" onClick={() => setQuestion(i, { options: [...qq.options, { id: newId(), text: "" }] })}><PlusIcon className="hi hi-sm" aria-hidden="true" /><span>Add answer option</span></button>}
+              </fieldset>
+              <div className="sb-field"><label htmlFor={`${idBase}-ex-${qq.id}`}>Explanation (optional)</label>
+                <textarea id={`${idBase}-ex-${qq.id}`} rows={2} value={key.explanations?.[qq.id] || ""} aria-describedby={`${idBase}-ex-${qq.id}-hint`} onChange={(e) => setKey({ explanations: { ...key.explanations, [qq.id]: e.target.value } })} maxLength={2000} />
+                <div className="ac-hint" id={`${idBase}-ex-${qq.id}-hint`}>Shown to learners after they answer.</div></div>
+            </li>
+          );
+        })}
       </ol>
-      <button type="button" className="sb-btn ghost compact" onClick={() => setQuiz({ questions: [...q.questions, blankQ()] })}><PlusIcon className="hi hi-sm" aria-hidden="true" />Add question</button>
+      <button type="button" className="sb-btn ghost compact" onClick={() => setQuiz({ questions: [...q.questions, blankQ()] })}><PlusIcon className="hi hi-sm" aria-hidden="true" /><span>Add question</span></button>
     </div>
   );
 }

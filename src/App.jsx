@@ -67,7 +67,8 @@ import { SaveBanner } from "./saveBanner.jsx";
 import { BusyButton } from "./loading.jsx";
 import { classifyExisting } from "./importPlan.js";
 import { formatEventDate, formatDueDate, formatRelativeTime, formatRelativeShort, formatDateTime, formatReminderDateTime, formatRelativeDays, enCount } from "./dateFormat.js";
-import { ProfileDrawer } from "./ProfileDrawer.jsx";
+import { AppMenu } from "./AppMenu.jsx";
+import { clearAcademySession } from "./academyCache.js";
 import { Toggle, Switch, PasswordField } from "./controls.jsx";
 export { Toggle } from "./controls.jsx";   // re-export so AdminScreen keeps importing it from here
 import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM, notificationDestination } from "./nav.js";
@@ -77,13 +78,28 @@ import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM, notif
 const Admin = lazy(() => import("./AdminScreen.jsx"));
 // IFC Creative Academy ("Learn") — its own chunk: player, quiz, discussion and
 // the course editor only download when someone opens Learn.
-const Academy = lazy(() => import("./Academy.jsx"));
+const loadAcademy = () => import("./Academy.jsx");
+const Academy = lazy(loadAcademy);
+/* Fetch the Learn code ahead of the first visit (idle time after the shell has
+   loaded, or the moment someone points at / touches Learn). Code only: no
+   Academy data is read until Learn actually opens. */
+let academyPrefetched = false;
+const prefetchAcademy = () => { if (academyPrefetched) return; academyPrefetched = true; loadAcademy().catch(() => { academyPrefetched = false; }); };
 
 /* Sign out AND reset the URL to a canonical route first, so a transient overlay
    in the query (?panel=profile|notifications|search, an open editor, a filter)
    can never survive the session and reopen for whoever signs in next. Every
    sign-out path routes through here. replaceState is enough: the authenticated
    shell unmounts on sign-out and re-reads window.location when it remounts. */
+/* One attention-count badge for the header (round 7): the bell's unread count
+   and the avatar's accounts-awaiting-approval count share position, size, type,
+   ring and the 9+ cap. The meaning lives in each control's accessible name;
+   the badge itself is decorative. Zero → no badge. */
+function HeaderBadge({ count }) {
+  if (!(count > 0)) return null;
+  return <span className="sb-belldot sb-hbadge" aria-hidden="true">{count > 9 ? "9+" : count}</span>;
+}
+
 function signOutClean() {
   resetUrlToCanonical();
   // Internal, potentially shared-device workspace: don't leave one person's
@@ -195,44 +211,6 @@ const APPEARANCE_OPTIONS = [
   { key:"light",  label:"Light",        help:"Always use light appearance",      Icon: SunIcon },
   { key:"dark",   label:"Dark",         help:"Always use dark appearance",       Icon: MoonIcon },
 ];
-const appearanceOption = (p) => APPEARANCE_OPTIONS.find(o=>o.key===p) || APPEARANCE_OPTIONS[0];
-
-/* Bottom sheet (mobile) / centred dialog (desktop) with a radio list. */
-function AppearanceSheet({ current, onChoose, onClose }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return (
-    <Portal>
-    <div className="sb-scrim" onMouseDown={onClose}>
-      <div className="sb-sheet" onMouseDown={e=>e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Appearance">
-        <div className="hd"><b className="sb-serif" style={{fontSize:18}}>Appearance</b>
-          <button className="sb-x" onClick={onClose} aria-label="Close"><XMarkIcon className="hi" aria-hidden="true" /></button></div>
-        <div className="bd">
-          <div className="sb-optlist" role="radiogroup" aria-label="Appearance">
-            {APPEARANCE_OPTIONS.map(o => {
-              const active = current === o.key;
-              return (
-                <button key={o.key} role="radio" aria-checked={active}
-                  className={"sb-optrow"+(active?" on":"")} onClick={()=>onChoose(o.key)}>
-                  <span className="sb-optrow-ic"><o.Icon className="hi" aria-hidden="true"/></span>
-                  <span className="sb-optrow-txt">
-                    <span className="sb-optrow-l">{o.label}</span>
-                    <span className="sb-optrow-h">{o.help}</span>
-                  </span>
-                  {active && <CheckIcon className="hi sb-optrow-chk" aria-hidden="true"/>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </div>
-    </Portal>
-  );
-}
 
 /* Mobile account drawer — opened from the header avatar. Pulls the profile,
    theme, report and sign-out off every screen and into one slide-up sheet. */
@@ -931,6 +909,20 @@ export default function App() {
     if (!user?.uid) return;
     for (const c of ["tasks", "users", "eventSeries"]) getDocs(collection(db, c)).catch(() => {});
   }, [user?.uid]);
+  // Account change (sign-out, or a different person signing in) or a change to
+  // what this account may access (role, approval, editor flag, disabled): start a
+  // new Academy session, dropping shared listeners and cached images, so nothing
+  // read under the old identity or access carries over. A layout effect, so it
+  // runs before the new session's screens subscribe (their effects run later).
+  const lastAccess = useRef(undefined);
+  const accessKey = user === undefined ? undefined
+    : !user ? "signed-out"
+    : `${user.uid}|${profile ? [profile.role, profile.status, profile.academyEditor === true, profile.lead === true, profile.disabled === true].join(",") : "-"}`;
+  useLayoutEffect(() => {
+    if (accessKey === undefined) return;
+    if (lastAccess.current !== undefined && lastAccess.current !== accessKey && !(lastAccess.current.endsWith("|-") && accessKey.startsWith(lastAccess.current.slice(0, -1)))) clearAcademySession();
+    lastAccess.current = accessKey;
+  }, [accessKey]);
 
   // First sign-in: create the pending profile doc if it doesn't exist yet.
   // Properly awaited + caught so an offline failure can never become an
@@ -1304,6 +1296,12 @@ function Board({ profile, isAdmin }) {
   const searchOpen = nav.overlay.panel === "search";
   const showDrawer = nav.overlay.panel === "profile";
   const notifOpenPanel = nav.overlay.panel === "notifications";
+  // Header Search: global app search. Omitted only where the page already shows a
+  // prominent Academy search field (the Learn landing and the Academy catalogue);
+  // every other page, Learn sub-pages included, keeps it.
+  const academySearchOnPage = nav.screen === "learn" && (nav.browse
+    ? nav.browse.view !== "categories"   // the catalogue has its own search field; All categories doesn't
+    : (!nav.courseId && !nav.guideId && !nav.pathId && !nav.categoryId && !nav.manage && !nav.preview)); // the Learn landing
   // Memoised so its identity changes ONLY when the section changes — otherwise
   // Admin's [secReq] effect would re-fire every render and override the user's
   // in-panel tab clicks (which stay local, non-shareable).
@@ -1322,9 +1320,16 @@ function Board({ profile, isAdmin }) {
   const viewEvent = (occ) => R.setEventFilter(occ.eventOccurrenceId, occ);
   const setBoardEvent = (v) => { if (!v) R.clearEventFilter(); };
   const setAdminSecReq = (req) => R.setAdminSection(req?.sec || null);
-  const setSearchOpen = (v) => v ? R.openPanel("search") : R.closeOverlay();
-  const setShowDrawer = (v) => v ? R.openPanel("profile") : R.closeOverlay();
-  const setNotifOpen = (v) => v ? R.openPanel("notifications") : R.closeOverlay();
+  // One URL panel at a time: opening a panel while another is open SWAPS it
+  // (replace), so closing the new one returns to the page, not the old panel.
+  const showPanel = (name) => nav.overlay.panel ? R.replacePanel(name) : R.openPanel(name);
+  const setSearchOpen = (v) => v ? showPanel("search") : R.closeOverlay();
+  const setShowDrawer = (v) => v ? showPanel("profile") : R.closeOverlay();
+  const setNotifOpen = (v) => v ? showPanel("notifications") : R.closeOverlay();
+  // The global shortcut listener is registered once; it calls through this ref
+  // so it always acts on the CURRENT page (not the one first rendered).
+  const openSearchRef = useRef(null);
+  openSearchRef.current = () => setSearchOpen(true);
   const notifOpen = notifOpenPanel;
 
   // A non-URL utility sheet (admin) — stays local, never in history.
@@ -1368,11 +1373,14 @@ function Board({ profile, isAdmin }) {
   // typing in a field, so "/" stays usable in inputs).
   useEffect(() => {
     const onKey = (e) => {
+      // A component that handles the shortcut itself (e.g. the Academy editor's
+      // Ctrl/Cmd+K = insert link) claims it with preventDefault.
+      if (e.defaultPrevented) return;
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
       if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault(); setSearchOpen(true);
+        e.preventDefault(); openSearchRef.current?.();
       } else if (e.key === "/" && !typing && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault(); setSearchOpen(true);
+        e.preventDefault(); openSearchRef.current?.();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -1380,6 +1388,9 @@ function Board({ profile, isAdmin }) {
   }, []);
 
   const pendingCount = allUsers.filter(u => u.status === "pending").length;
+  // The floating New action creates WORKFLOW content. Not on Learn (Academy has its
+  // own contextual Add actions) and not on Admin (it has an in-page button).
+  const showFab = isAdmin && !isReviewer && tab!=="admin" && tab!=="learn";
 
   // Notification Center (reads my notifications; backend writes them in Slice 3).
   // `notifOpen` is derived from the URL (?panel=notifications) up top — not
@@ -1388,14 +1399,11 @@ function Board({ profile, isAdmin }) {
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   const [featureReqOpen, setFeatureReqOpen] = useState(false);
-  // Appearance is a LOCAL modal launched from the Profile menu. Its state lives
-  // here (App level), NOT inside ProfileDrawer — so dropping ?panel=profile (which
-  // unmounts the drawer) can never destroy an open Appearance sheet.
-  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  // Appearance is chosen inline in the account menu (one tap; no second sheet).
   const [appearancePref, setAppearancePref] = useState(getThemePref());
   useEffect(() => subscribeTheme(() => setAppearancePref(getThemePref())), []);
   const chooseAppearance = (p) => {
-    setThemePref(p); setAppearancePref(p); setAppearanceOpen(false);
+    setThemePref(p); setAppearancePref(p);
     if (me?.id) updateDoc(doc(db, "users", me.id), { appearance: p }).catch(() => {});
   };
   // Launch a LOCAL (App-state) modal from a URL-backed panel (Profile OR
@@ -1452,6 +1460,15 @@ function Board({ profile, isAdmin }) {
   const navIco = (Out) => <Out className="hi hi-nav" aria-hidden="true" />;
   // QA reviewers get a REVIEW-centric app: their queue leads, then a read-only
   // review-filtered Workflow — no production dashboards (Home / My Day).
+  // Prefetch the Learn code once the shell has settled (idle time, a few
+  // seconds after load), so the first Learn visit doesn't wait for it.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(prefetchAcademy, { timeout: 5000 });
+      else prefetchAcademy();
+    }, 2500);
+    return () => clearTimeout(t);
+  }, []);
   const mainNav = isReviewer
     ? [
         { id:"mine",  label:"Reviews",  ico:()=>navIco(ClipboardDocumentCheckIcon) },
@@ -1489,7 +1506,7 @@ function Board({ profile, isAdmin }) {
     place();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
-  }, [tab, isAdmin, pendingCount]);
+  }, [tab, isAdmin, isReviewer, pendingCount]);   // isReviewer: the nav items change when the QA flag does (live profile)
 
   /* ---- task writes ---- */
   const saveTask = async (t) => {
@@ -1848,14 +1865,16 @@ function Board({ profile, isAdmin }) {
           <nav className="sb-snav" aria-label="Main" ref={navRef}>
             <span className="sb-snav-ind" aria-hidden="true" />
             {mainNav.map(n => (
-              <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
+              <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}
+                onPointerEnter={n.id==="learn"?prefetchAcademy:undefined} onFocus={n.id==="learn"?prefetchAcademy:undefined}>
                 <span className="ico">{n.ico(tab===n.id)}</span><span className="lbl">{n.label}</span>
                 {n.badge>0 && <span className="pill">{n.badge}</span>}
               </button>
             ))}
             <div className="sb-navgroup lbl">Management</div>
             {mgmtNav.map(n => (
-              <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
+              <button key={n.id} className={tab===n.id?"on":""} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}
+                onPointerEnter={n.id==="learn"?prefetchAcademy:undefined} onFocus={n.id==="learn"?prefetchAcademy:undefined}>
                 <span className="ico">{n.ico(tab===n.id)}</span><span className="lbl">{n.label}</span>
                 {n.badge>0 && <span className="pill">{n.badge}</span>}
               </button>
@@ -1867,11 +1886,12 @@ function Board({ profile, isAdmin }) {
           <div className="sb-sfoot">
             <button className="sb-report" onClick={()=>setNotifOpen(true)} aria-label="Notifications">
               <span className="sb-bellwrap"><BellIcon className="hi hi-sm" aria-hidden="true"/>
-                {notif.unread>0 && <span className="sb-belldot">{notif.unread>9?"9+":notif.unread}</span>}</span>
+                <HeaderBadge count={notif.unread} /></span>
               <span className="lbl">Notifications</span>
             </button>
-            {/* Profile menu holds Theme, Team/Admin, Report, Sign out */}
-            <button className="sb-suser sb-suserbtn" onClick={()=>setShowDrawer(true)} aria-label="Open profile menu" title="Profile & settings">
+            {/* The same account menu as the mobile avatar (appearance, notification
+                preferences, Team/Admin, help, sign out) */}
+            <button className="sb-suser sb-suserbtn" onClick={()=>setShowDrawer(true)} aria-label="Open account menu" aria-haspopup="dialog" aria-expanded={showDrawer} title="Account and settings">
               <span className="sb-av" style={{width:34,height:34,fontSize:12}}>{initials(me.name)}</span>
               <span className="lbl"><div className="nm">{me.name}</div><div className="rl">{isAdmin?"Admin":"Member"}</div></span>
               <ChevronRightIcon className="chev lbl hi hi-sm" aria-hidden="true"/>
@@ -1881,19 +1901,29 @@ function Board({ profile, isAdmin }) {
         </aside>
 
         <div className="sb-main">
+          {/* Mobile header: brand, then Search (except on Learn pages that already
+              have an Academy search field), Notifications (the inbox) and the avatar,
+              which opens the one account menu. The pending-approvals count rides on
+              the avatar, apart from the bell. The full name shows where it fits;
+              narrow phones get the compact IFC mark. */}
           <header className="sb-top">
-            <span className="brand"><span className="brandwm"><span className="ifc-sm">IFC</span>Creatives Board</span></span>
+            <span className="brand"><span className="brandwm" aria-label="IFC Creatives Board"><span className="ifc-sm">IFC</span><span className="brandname" aria-hidden="true">Creatives Board</span></span></span>
             <div className="sb-topactions">
-              <button className="sb-hbtn" onClick={()=>setSearchOpen(true)} aria-label="Search"><MagnifyingGlassIcon className="hi" aria-hidden="true"/></button>
+              {!academySearchOnPage && <button className="sb-hbtn" onClick={()=>setSearchOpen(true)} aria-label="Search"><MagnifyingGlassIcon className="hi" aria-hidden="true"/></button>}
               <button className="sb-hbtn sb-bellbtn" onClick={()=>setNotifOpen(true)}
                 aria-label={notif.unread>0?`Notifications, ${notif.unread} unread`:"Notifications"}>
                 <BellIcon className="hi" aria-hidden="true"/>
-                {notif.unread>0 && <span className="sb-belldot">{notif.unread>9?"9+":notif.unread}</span>}
+                <HeaderBadge count={notif.unread} />
+              </button>
+              <button className="sb-avbtn" onClick={()=>setShowDrawer(true)} aria-haspopup="dialog" aria-expanded={showDrawer}
+                aria-label={isAdmin && pendingCount>0 ? `Open account menu. ${pendingCount} account${pendingCount===1?"":"s"} waiting for approval` : "Open account menu"}>
+                <span className="sb-av">{initials(me.name)}</span>
+                {isAdmin && <HeaderBadge count={pendingCount} />}
               </button>
             </div>
           </header>
 
-          <main id="sb-main" role="main" className={"sb-content"+(["home","board","team","admin","learn"].includes(tab)?" wide":"")} ref={contentRef} tabIndex={-1}>
+          <main id="sb-main" role="main" className={"sb-content"+(["home","board","team","admin","learn"].includes(tab)?" wide":"")+(showFab?" has-fab":"")} ref={contentRef} tabIndex={-1}>
             <BetaBanner onReport={()=>setShowReport(true)} />
             <div className="sb-pageshow">
             {tab==="home"  && <Home tasks={activeTasks} tasksLoaded={tasksLoaded} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
@@ -1930,44 +1960,41 @@ function Board({ profile, isAdmin }) {
               Admin has its own in-page "New content" button; QA reviewers never
               create content — so the FAB row only renders when it's genuinely used. */}
           <div className="sb-dock">
-            {isAdmin && !isReviewer && tab!=="admin" && (
+            {showFab && (
               <div className="sb-fabrow">
                 <button className="sb-fab" onClick={()=>setEditTask("new")} aria-label="New content"><PlusIcon className="hi hi-nav" aria-hidden="true"/></button>
               </div>
             )}
-            <nav className="sb-nav" aria-label="Main" style={{ "--nav-i": mainNav.findIndex(n=>n.id===tab) >= 0 ? mainNav.findIndex(n=>n.id===tab) : mainNav.length, "--nav-cols": mainNav.length + 1 }}>
+            <nav className={"sb-nav"+(mainNav.some(n=>n.id===tab)?"":" noactive")} aria-label="Main" style={{ "--nav-i": Math.max(0, mainNav.findIndex(n=>n.id===tab)), "--nav-cols": mainNav.length }}>
               <span className="sb-nav-ind" aria-hidden="true" />
               {mainNav.map(n => (
-                <button key={n.id} className={"sb-navbtn"+(tab===n.id?" on":"")} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}>
+                <button key={n.id} className={"sb-navbtn"+(tab===n.id?" on":"")} onClick={()=>setTab(n.id)} aria-current={tab===n.id?"page":undefined}
+                  onPointerDown={n.id==="learn"?prefetchAcademy:undefined} onFocus={n.id==="learn"?prefetchAcademy:undefined}>
                   <span className="ico">{n.ico(tab===n.id)}</span><span className="lblx">{n.label}</span>
                   {n.badge>0 && <span className="pill">{n.badge}</span>}
                 </button>
               ))}
-              <button className={"sb-navbtn"+(["team","admin"].includes(tab)?" on":"")} onClick={()=>setShowDrawer(true)} aria-current={["team","admin"].includes(tab)?"page":undefined} aria-label="Profile and more">
-                <span className="ico"><span className="sb-av sb-navav">{initials(me.name)}</span></span><span className="lblx">Profile</span>
-                {isAdmin && pendingCount>0 && <span className="pill">{pendingCount}</span>}
-              </button>
             </nav>
           </div>
         </div>
       </div>
 
       {showDrawer && (
-        // Path/panel-changing actions navigate directly — the new URL replaces
-        // ?panel=profile in ONE entry, so no redundant close-then-navigate.
-        // The drawer is a LAUNCHER: jumping to a primary destination (Team/Admin)
-        // replaces the ?panel=profile entry, so Back from there returns to the
-        // underlying page, not the drawer.
-        <ProfileDrawer me={me} isAdmin={isAdmin} unread={notif.unread} pendingCount={pendingCount}
-          appearanceLabel={appearanceOption(appearancePref).label} PrefIcon={appearanceOption(appearancePref).Icon}
-          whatsNewIsNew={seenRelease()!==LATEST_RELEASE} onSignOut={signOutClean}
-          onClose={()=>setShowDrawer(false)} onGoTab={R.launchScreen}
-          onNotifications={()=>R.replacePanel("notifications")}
+        // THE account menu (one implementation for phones and desktop). A LAUNCHER:
+        // destinations replace the ?panel=profile entry, so Back from them returns
+        // to the underlying page; local settings (preferences, what's new, report)
+        // drop the panel and open their own form.
+        <AppMenu me={me} roleLabel={isAdmin?"Admin":isReviewer?"QA reviewer":"Member"} isAdmin={isAdmin} canCreate={isAdmin && !isReviewer} pendingCount={pendingCount}
+          appearance={appearancePref} appearanceOptions={APPEARANCE_OPTIONS} onAppearance={chooseAppearance}
+          whatsNewIsNew={seenRelease()!==LATEST_RELEASE}
+          onClose={()=>R.closeOverlay()}
+          onNewContent={()=>R.launch({ pathname: R.location.pathname, search: openComposeNew(R.location.search) })}
+          onGoTab={R.launchScreen}
           onNotifPrefs={()=>openLocalFromPanel(()=>setNotifSettingsOpen(true))}
           onWhatsNew={()=>openLocalFromPanel(()=>setWhatsNewOpen(true))}
           onFeatureRequest={()=>openLocalFromPanel(()=>setFeatureReqOpen(true))}
-          onAppearance={()=>openLocalFromPanel(()=>setAppearanceOpen(true))}
-          onReport={()=>openLocalFromPanel(()=>setShowReport(true))} />
+          onReport={()=>openLocalFromPanel(()=>setShowReport(true))}
+          onSignOut={signOutClean} />
       )}
 
       {notifOpen && (
@@ -1988,7 +2015,6 @@ function Board({ profile, isAdmin }) {
       {whatsNewOpen && <WhatsNew onClose={()=>setWhatsNewOpen(false)} />}
       {featureReqOpen && <FeatureRequestModal onClose={()=>setFeatureReqOpen(false)} />}
       {/* Appearance owned at App level so it survives the Profile drawer closing. */}
-      {appearanceOpen && <AppearanceSheet current={appearancePref} onChoose={chooseAppearance} onClose={()=>setAppearanceOpen(false)} />}
 
       {toast && (
         <button className="sb-toast" onClick={()=>{ setToast(null); setNotifOpen(true); }}><BellIcon className="hi hi-sm" aria-hidden="true"/> {toast}</button>
@@ -2654,8 +2680,13 @@ function Reviews({ tasks, me, openTask }) {
 }
 
 function Mine({ tasks, me, openTask }) {
-  // QA reviewers see Reviews, never a producer's assignment list.
-  if (isQA(me)) return <Reviews tasks={tasks} me={me} openTask={openTask} />;
+  // QA reviewers see Reviews, never a producer's assignment list. The choice is
+  // its own component boundary (no hooks here): `me` is a live profile, so the
+  // QA flag can change while this screen is open, and a hook-calling component
+  // must never return early before its hooks.
+  return isQA(me) ? <Reviews tasks={tasks} me={me} openTask={openTask} /> : <MyAssignments tasks={tasks} me={me} openTask={openTask} />;
+}
+function MyAssignments({ tasks, me, openTask }) {
   const sections = useMemo(() => myWorkSections(tasks, me), [tasks, me]);
   const total = sections.reduce((n, s) => n + s.items.length, 0);
   // Only the urgent buckets start expanded; the rest stay collapsed so the
@@ -3203,7 +3234,8 @@ export function KebabMenu({ items }) {
    Focus starts on the SAFE (cancel) action, so Enter can't trigger deletion
    unless the user deliberately tabs to the destructive button. */
 export function ConfirmDialog({ title, body, consequences, note, confirmLabel = "Delete", cancelLabel = "Cancel",
-                         tone, icon, danger = true, busyLabel, onConfirm, onClose }) {
+                         tone, icon, danger = true, busyLabel, onConfirm, onClose,
+                         confirmDisabled = false, blockedReason = "", retry = null }) {   // e.g. until an impact check succeeds
   const t = tone || (danger ? "danger" : "neutral");
   const ic = icon || (t === "danger" ? "danger" : t === "warning" ? "warning" : "neutral");
   const [busy, setBusy] = useState(false);
@@ -3216,7 +3248,7 @@ export function ConfirmDialog({ title, body, consequences, note, confirmLabel = 
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, busy]);
   const confirm = async () => {
-    if (busy) return;                                          // block duplicate submits
+    if (busy || confirmDisabled) return;                       // block duplicate / premature submits
     try { setErr(null); setBusy(true); await onConfirm(); onClose(); }
     catch (e) { setBusy(false); setErr(e?.message || "Something went wrong. Please try again."); }
   };
@@ -3236,9 +3268,12 @@ export function ConfirmDialog({ title, body, consequences, note, confirmLabel = 
           <ul className="sb-confirm-list">{consequences.map((c,i)=><li key={i}>{c}</li>)}</ul>}
         {note && <p className="sb-confirm-note">{note}</p>}
         {err && <div className="sb-lerr" role="alert" style={{marginTop:12,marginBottom:0}}>{err}</div>}
+        {blockedReason && <p id="sb-confirm-why" className="sb-confirm-note" role="status">{blockedReason}</p>}
         <div className="sb-btnrow" style={{marginTop:16}}>
           <button ref={cancelRef} className="sb-btn ghost" onClick={onClose} disabled={busy}>{cancelLabel}</button>
-          <button className={confirmClass} onClick={confirm} disabled={busy} aria-busy={busy}>
+          {retry && <button className="sb-btn ghost" onClick={retry.onClick} disabled={busy}>{retry.label || "Retry"}</button>}
+          <button className={confirmClass} onClick={confirm} disabled={busy || confirmDisabled} aria-busy={busy}
+            aria-describedby={blockedReason ? "sb-confirm-why" : undefined}>
             {busy ? (busyLabel || "Working…") : confirmLabel}</button>
         </div>
       </div>
@@ -4708,7 +4743,7 @@ function UserEditor({ user, onClose, onSave, onApprove }) {
               <Toggle label="Department lead: leads their team" v={f.lead} on={()=>set("lead",!f.lead)} />
               <Toggle label="Captions & upload: handles posting after approval" v={f.captions} on={()=>set("captions",!f.captions)} />
             </>}
-            <Toggle label="Academy editor: creates and publishes courses, quick guides and learning paths in Learn" v={f.academyEditor} on={()=>set("academyEditor",!f.academyEditor)} />
+            <Toggle label="Academy editor: creates and publishes courses, tips & resources and learning paths in Learn" v={f.academyEditor} on={()=>set("academyEditor",!f.academyEditor)} />
           </div>
 
           {qaMode ? (

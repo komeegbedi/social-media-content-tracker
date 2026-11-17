@@ -22,7 +22,7 @@ test("exactly six categories with the agreed names; one intro + five practical; 
   // Reels/TikTok/software are NOT categories (they're topics)
   assert.ok(!ACADEMY_CATEGORIES.some((c) => /reel|tiktok|capcut|lightroom/i.test(c.label)));
   assert.deepEqual(CONTENT_FORMATS.map((f) => f.id), ["course", "guide", "path"]);
-  assert.equal(formatLabel("guide"), "Quick guide");
+  assert.equal(formatLabel("guide"), "Tip or resource");
 });
 
 test("legacy ids read as the new categories (videography → Filmmaking, social-media → Social Media & Storytelling)", () => {
@@ -59,7 +59,8 @@ test("topics: trimmed, de-duplicated case-insensitively, bounded; filter + searc
   assert.deepEqual(filterCourses(items, { format: "guide" }).map((i) => i.id), [2]);
   assert.deepEqual(filterCourses(items, { category: "social-media-storytelling" }).map((i) => i.id), [2], "legacy id matches new filter");
   assert.deepEqual(filterCourses(items, { q: "reel" }).map((i) => i.id), [1, 3]);
-  assert.deepEqual(filterCourses(items, { q: "quick guide" }).map((i) => i.id), [2], "format label is searchable");
+  assert.deepEqual(filterCourses(items, { q: "resource" }).map((i) => i.id), [2], "format label is searchable");
+  assert.deepEqual(filterCourses(items, { q: "guide" }).map((i) => i.id), [2], "the old word still finds them");
   assert.deepEqual(filterCourses(items, { category: "filmmaking", format: "path" }).map((i) => i.id), [], "category and format are independent");
 });
 
@@ -87,7 +88,7 @@ test("validatePathItems: duplicates and course/lesson overlap are rejected; inco
   assert.deepEqual(validatePathItems([{ type: "course", courseId: "c1" }, { type: "guide", guideId: "g1" }]), []);
   assert.match(validatePathItems([{ type: "course", courseId: "c1" }, { type: "course", courseId: "c1" }])[0], /already in this path/);
   assert.match(validatePathItems([{ type: "guide", guideId: "g1" }, { type: "guide", guideId: "g1" }])[0], /already/);
-  assert.match(validatePathItems([{ type: "course", courseId: "c1" }, { type: "lesson", courseId: "c1", lessonId: "l1" }])[0], /lesson of a course that's already/);
+  assert.match(validatePathItems([{ type: "course", courseId: "c1" }, { type: "lesson", courseId: "c1", lessonId: "l1" }])[0], /lesson from a course that's already/);
   assert.match(validatePathItems([{ type: "lesson", courseId: "c1" }])[0], /incomplete/);
   assert.match(validatePathItems([{ type: "video", id: "x" }])[0], /incomplete/);
   assert.equal(pathItemKey({ type: "lesson", courseId: "c1", lessonId: "l1" }), "lesson:c1/l1");

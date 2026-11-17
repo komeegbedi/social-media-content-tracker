@@ -6,6 +6,7 @@
 
    Used by: AcademyWorkspace.jsx (primary authoring), the Learn page (intro
    video, guide/path edit buttons) and /learn/manage/more (secondary tools). */
+import { trackUpload } from "./academyUploads.js";
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -20,7 +21,7 @@ import { learnPath } from "./nav.js";
 import { formatDateTime } from "./dateFormat.js";
 import {
   ACADEMY_CATEGORIES, ACADEMY_LEVELS, CONTENT_FORMATS, categoryById, categoryLabel, categoryShort, levelLabel,
-  mergeCategories, categoryIn, categoryNameIn, INTRO_CATEGORY_ID, nameKey, topicNamesFor, matchTopicIds,
+  mergeCategories, categoryIn, categoryNameIn, categoryShortIn, INTRO_CATEGORY_ID, nameKey, topicNamesFor, matchTopicIds,
   orderedCurriculum, publishBlockers, guidePublishBlockers, pathPublishBlockers, validatePathItems, pathItemKey,
   canEditCourse, canEditContent, isAcademyAdmin, newId, quizMode, toMs, DEFAULT_PASS_MARK, normalizeTopics, normalizeCategory,
   LESSON_KINDS, lessonKind, lessonKindMeta,
@@ -29,17 +30,19 @@ import { parseVideoLink, videoFromRecord, VIDEO_PROVIDERS } from "./academyVideo
 import { MARKDOWN_HELP, isSafeHref } from "./academyMarkdown.js";
 import { validateImageFile, defaultCrop, cropFromControls, imagePath, processImage, imageDimensions, IMAGE_KINDS } from "./academyImage.js";
 import {
-  useCourses, useCourse, useLessons, useImageUrl, createCourse, updateCourse, setCourseStatus, setContentStatus, deleteCourseHard,
-  saveLesson, deleteLesson, getQuizKey, uploadImage, deleteImage, savePurposeVideo,
-  useGuides, usePaths, useGuide, usePathDoc, useManyDocs, createGuide, updateGuide, deleteGuideHard, createPath, updatePath, deletePathHard,
+  useCourses, useCourse, useLessons, useImageUrl, setCourseStatus, setContentStatus, deleteCourseHard,
+  uploadImage, deleteImage, savePurposeVideo,
+  useGuides, usePaths, useGuide, usePathDoc, useManyDocs, useGuideDrafts, createPath, updatePath, deletePathHard,
   useCategoryRecords, useTopicRecords, useCategoryIndex, useCategoryArt, createCategory, updateCategory, setCategoryHidden, reorderCategories,
-  createDefaultCategories, categoryReferences, reassignAndDeleteCategory, createTopic, updateTopic, topicReferences, deleteTopic,
+  createDefaultCategories, categoryReferences, createTopic, updateTopic, topicReferences, deleteTopic,
   usePendingCleanup, pathsUsingCourse,
   fetchVideoMetadata,
 } from "./academyData.js";
 import { CategoryArt, VideoThumb, sourceThumbUrl, isLandscapeRef } from "./academyShared.jsx";
 import { VideoPreview } from "./academyVideoPreview.jsx";
-import { learnGuidePath, learnPathwayPath } from "./nav.js";
+import { learnGuidePath, learnPathwayPath, learnManagePath } from "./nav.js";
+import { guideRow, pathPickerGuides } from "./academyGuides.js";
+import { SearchPicker } from "./academyPicker.jsx";
 
 export const Sheet = ({ title, onClose, children, wide = false, foot }) => {
   useEffect(() => {
@@ -61,13 +64,30 @@ export const Sheet = ({ title, onClose, children, wide = false, foot }) => {
   );
 };
 
-export const Field = ({ id, label, hint, children }) => (
-  <div className="sb-field">
-    <label htmlFor={id}>{label}</label>
-    {children}
-    {hint && <div className="ac-hint">{hint}</div>}
-  </div>
-);
+/* "Required to publish": shown on fields Publish checks (publishIssues). Drafts
+   always save without them — this never blocks saving. */
+export const RequiredTag = () => <span className="ac-req">Required to publish</span>;
+/* A labelled field. `required` adds the tag; `error` (shown only once the
+   author has touched the field or tried to publish) and `hint` are tied to
+   the control with aria-describedby, and the control gets aria-invalid. */
+export const Field = ({ id, label, hint, children, required = false, error = "" }) => {
+  const hintId = hint ? `${id}-hint` : undefined, errId = error ? `${id}-err` : undefined;
+  const desc = [errId, hintId].filter(Boolean).join(" ");
+  let wired = false;
+  const kids = React.Children.map(children, (c) => {
+    if (wired || !React.isValidElement(c) || c.props.id !== id) return c;
+    wired = true;
+    return React.cloneElement(c, { "aria-describedby": [c.props["aria-describedby"], desc].filter(Boolean).join(" ") || undefined, "aria-invalid": error ? true : c.props["aria-invalid"] });
+  });
+  return (
+    <div className={"sb-field" + (error ? " has-err" : "")}>
+      <label htmlFor={id}>{label}{required && <RequiredTag />}</label>
+      {kids}
+      {error && <div className="ac-fielderr" id={errId}>{error}</div>}
+      {hint && <div className="ac-hint" id={hintId}>{hint}</div>}
+    </div>
+  );
+};
 const linesToList = (s) => String(s || "").split("\n").map((x) => x.trim()).filter(Boolean);
 
 /* Category <select> — the six categories from academyProgress.js. A legacy id on
@@ -90,48 +110,41 @@ export const CategorySelect = ({ id, value, onChange, allowNone = false }) => {
    suggestions (hidden topics excluded from new assignment), and inline create
    (slug id, duplicate names refused). Legacy free-text `topics` on an older doc
    are shown as "(legacy)" chips until they're matched or removed. */
-export function TopicsField({ id, value, onChange, legacy = [], onLegacyChange, category }) {
+export function TopicsField({ id, value, onChange, legacy = [], onLegacyChange }) {
   const topics = useTopicRecords();
-  const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const me = useMeForTopics();
   const selected = (value || []).map((tid) => topics.byId[tid]).filter(Boolean);
-  const cat = categoryById(category);
-  // Compact: matches appear only while typing (no wall of suggestion chips).
-  const suggestions = !q.trim() ? [] : Object.values(topics.byId).filter((t) => !t.hidden && !(value || []).includes(t.id) && nameKey(t.name).includes(nameKey(q)))
-    .sort((a, b) => a.name.localeCompare(b.name)).slice(0, 6);
-  const catSuggest = [];
-  const add = (tid) => { onChange([...new Set([...(value || []), tid])]); setQ(""); };
+  const all = Object.values(topics.byId);
+  const add = (tid) => { setErr(""); onChange([...new Set([...(value || []), tid])]); };
   const create = async (name) => {
     setBusy(true); setErr("");
     try { const tid = await createTopic(me, { name }, topics.byId); add(tid); }
     catch (x) { setErr(x?.message || "Couldn't create the topic."); }
     finally { setBusy(false); }
   };
-  const exact = Object.values(topics.byId).find((t) => nameKey(t.name) === nameKey(q));
+  const exactOf = (q) => all.find((t) => nameKey(t.name) === nameKey(q));
   return (
     <div className="sb-field">
       <label htmlFor={id}>Topics (optional)</label>
-      <div className="ac-topics">
-        {selected.map((t) => <span key={t.id} className={"sb-tag ac-topicchip" + (t.hidden ? " hidden" : "")}>{t.name}{t.hidden ? " (hidden)" : ""}<button type="button" aria-label={`Remove topic ${t.name}`} onClick={() => onChange((value || []).filter((x) => x !== t.id))}>×</button></span>)}
+      {(selected.length > 0 || legacy.length > 0) && <div className="ac-topics">
+        {selected.map((t) => <span key={t.id} className={"sb-tag ac-topicchip" + (t.hidden ? " hidden" : "")}>{t.name}{t.hidden ? " (hidden)" : ""}<button type="button" aria-label={`Remove topic ${t.name}`} onClick={() => { onChange((value || []).filter((x) => x !== t.id)); requestAnimationFrame(() => document.getElementById(id)?.focus()); }}>×</button></span>)}
         {legacy.map((n) => <span key={"l" + n} className="sb-tag ac-topicchip legacy">{n} <em>(legacy tag)</em>
-          {topics.byId && Object.values(topics.byId).some((t) => nameKey(t.name) === nameKey(n))
-            ? <button type="button" onClick={() => { const t = Object.values(topics.byId).find((x) => nameKey(x.name) === nameKey(n)); add(t.id); onLegacyChange?.(legacy.filter((x) => x !== n)); }}>link</button>
+          {exactOf(n)
+            ? <button type="button" onClick={() => { add(exactOf(n).id); onLegacyChange?.(legacy.filter((x) => x !== n)); }}>link</button>
             : <button type="button" disabled={busy} onClick={async () => { await create(n); onLegacyChange?.(legacy.filter((x) => x !== n)); }}>create</button>}
           <button type="button" aria-label={`Remove legacy tag ${n}`} onClick={() => onLegacyChange?.(legacy.filter((x) => x !== n))}>×</button></span>)}
-      </div>
-      <input id={id} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search or add a topic" autoComplete="off"
-        onKeyDown={(e) => { if (e.key === "Enter" && q.trim()) { e.preventDefault(); exact ? (exact.hidden ? setErr(`“${exact.name}” is hidden — restore it under Topics first.`) : add(exact.id)) : create(q.trim()); } }} />
-      <div className="ac-hint">Help people find this by subject. Software, platforms and techniques belong here rather than as categories. Press Enter to add.</div>
+      </div>}
+      {/* the shared searchable picker: closes after a pick, on Escape, an outside click or focus leaving */}
+      <SearchPicker id={id} label="Topics: search or add a topic" placeholder="Search or add a topic" describedBy={`${id}-hint`} listLabel="Topics"
+        items={all.filter((t) => !t.hidden && !(value || []).includes(t.id)).sort((a, b) => a.name.localeCompare(b.name))} getText={(t) => t.name}
+        selected={selected} selectedText={(t) => `“${t.name}” is already added.`} loading={!topics.loaded}
+        emptyText="No topics yet. Type a name to create one." noMatchText="No topic matches."
+        extraItem={(q) => { const name = q.trim(); if (!name || busy) return null; const ex = exactOf(name); return ex ? null : { id: "__create", name: `Create “${name}”`, createName: name }; }}
+        onPick={(t) => { if (t.id === "__create") create(t.createName); else add(t.id); }} />
+      <div className="ac-hint" id={`${id}-hint`}>Help people find this by subject. Software, platforms and techniques belong here rather than as categories.</div>
       {err && <div className="ac-err" role="alert">{err}</div>}
-      {(suggestions.length > 0 || (q.trim() && !exact) || catSuggest.length > 0) && (
-        <div className="ac-topicsugg" role="group" aria-label="Topic suggestions">
-          {suggestions.map((t) => <button type="button" key={t.id} className="sb-tag ac-tagbtn" onClick={() => add(t.id)}>+ {t.name}</button>)}
-          {q.trim() && !exact && <button type="button" className="sb-tag ac-tagbtn create" disabled={busy} onClick={() => create(q.trim())}>Create “{q.trim()}”</button>}
-          {!q.trim() && catSuggest.slice(0, 6).map((n) => <button type="button" key={n} className="sb-tag ac-tagbtn" disabled={busy} onClick={() => create(n)}>+ {n}</button>)}
-        </div>
-      )}
     </div>
   );
 }
@@ -156,45 +169,57 @@ function StatusFilter({ items, filter, setFilter }) {
   );
 }
 
-export function ManageGuides({ me, users }) {
+/* All Tips & resources (stored as "guides"), across categories — published,
+   draft-only and archived. Editing happens in the full-page workspace. */
+export function ManageGuides({ me }) {
   const { guides, loaded, error } = useGuides(me);
+  const drafts = useGuideDrafts(me);
+  const recs = useCategoryRecords();
+  const cats = useMemo(() => mergeCategories(recs.docs), [recs.docs]);
   const [filter, setFilter] = useState("all");
-  const [editId, setEditId] = useState(null);   // "new" | id
   const navigate = useNavigate();
-  const list = guides.filter((c) => filter === "all" || c.status === filter);
+  const rows = useMemo(() => {
+    const byId = new Map();
+    for (const g of guides) byId.set(g.id, { live: g, draft: null });
+    for (const d of drafts.docs) byId.set(d.id, { ...(byId.get(d.id) || { live: null }), draft: d });
+    return [...byId.entries()].map(([id, x]) => guideRow(id, x.live, x.draft)).sort((a, b) => a.title.localeCompare(b.title));
+  }, [guides, drafts.docs]);
+  const statusOf = (r) => (r.status === "draft-only" || r.status === "unpublished" ? "draft" : r.status === "published-edits" ? "published" : r.status);
+  const list = rows.filter((r) => filter === "all" || statusOf(r) === filter);
   return (
     <div>
       <div className="sb-shead">
-        <div><h2 className="ac-h2">Quick guides</h2><p className="sb-sub" style={{ marginBottom: 0 }}>Short, standalone help someone can open mid-assignment — a video with notes, or a written guide.</p></div>
-        <button type="button" className="sb-btn compact" onClick={() => setEditId("new")}><PlusIcon className="hi hi-sm" aria-hidden="true" />New guide</button>
+        <div><h2 className="ac-h2">Tips & resources</h2><p className="sb-sub" style={{ marginBottom: 0 }}>Short, standalone help someone can open in the middle of an assignment, such as a video with notes or a written guide. Each one belongs to a category.</p></div>
+        <button type="button" className="sb-btn compact" onClick={() => navigate(learnManagePath({ view: "guide", id: "new" }))}><PlusIcon className="hi hi-sm" aria-hidden="true" />Add tip or resource</button>
       </div>
-      <StatusFilter items={guides} filter={filter} setFilter={setFilter} />
-      {!loaded ? <Skeleton lines={4} />
-        : error ? <div className="sb-empty" role="alert">Couldn't load guides.</div>
-        : list.length === 0 ? <div className="sb-empty">{guides.length ? "No guides with that status." : "No quick guides yet."}</div>
+      <StatusFilter items={rows.map((r) => ({ status: statusOf(r) }))} filter={filter} setFilter={setFilter} />
+      {!loaded || !drafts.loaded ? <Skeleton lines={4} />
+        : error ? <div className="sb-empty" role="alert">Couldn't load tips & resources.</div>
+        : list.length === 0 ? <div className="sb-empty">{rows.length ? "Nothing with that status." : "No tips or resources yet."}</div>
         : (
           <ul className="ac-mlist">
-            {list.map((g) => (
-              <li key={g.id} className="ac-mrow">
-                <div className="ac-mthumb wide"><VideoThumb item={g} /></div>
+            {list.map((r) => (
+              <li key={r.id} className="ac-mrow">
+                <div className="ac-mthumb wide"><VideoThumb item={r} /></div>
                 <div className="ac-mmain">
-                  <div className="ac-mtitle">{g.title || "Untitled guide"} <StatusPill status={g.status} /></div>
-                  <div className="ac-cardsub">{categoryLabel(g.category)} · {g.video ? VIDEO_PROVIDERS[g.video.provider]?.label || "video" : "text only"}{g.updatedAt ? ` · updated ${formatDateTime(toMs(g.updatedAt))}` : ""}</div>
+                  <div className="ac-mtitle">{r.title} <StatusPill status={statusOf(r)} />{r.changes && <span className="ac-pill accent">Unpublished changes</span>}</div>
+                  <div className="ac-cardsub">{categoryShortIn(cats, r.category)} · {r.kind === "video" ? VIDEO_PROVIDERS[r.video?.provider]?.label || "Video" : "Written"}</div>
                 </div>
                 <div className="ac-mactions">
-                  <button type="button" className="sb-btn ghost compact" onClick={() => navigate(learnGuidePath(g.id))}><EyeIcon className="hi hi-sm" aria-hidden="true" />Preview</button>
-                  <button type="button" className="sb-btn compact" onClick={() => setEditId(g.id)}><PencilSquareIcon className="hi hi-sm" aria-hidden="true" />Edit</button>
+                  {(r.status === "published" || r.status === "published-edits") && <button type="button" className="sb-btn ghost compact" onClick={() => navigate(learnGuidePath(r.id))}><EyeIcon className="hi hi-sm" aria-hidden="true" />View</button>}
+                  <button type="button" className="sb-btn compact" onClick={() => navigate(learnManagePath({ view: "guide", id: r.id }))} aria-label={`Edit ${r.title}`}><PencilSquareIcon className="hi hi-sm" aria-hidden="true" />Edit</button>
                 </div>
               </li>
             ))}
           </ul>
         )}
-      {editId && <GuideEditor me={me} users={users} guideId={editId === "new" ? null : editId} onClose={() => setEditId(null)} />}
     </div>
   );
 }
 
 export function ManagePaths({ me, users }) {
+  const catRecs = useCategoryRecords();
+  const cats = useMemo(() => mergeCategories(catRecs.docs), [catRecs.docs]);
   const { paths, loaded, error } = usePaths(me);
   const [filter, setFilter] = useState("all");
   const [editId, setEditId] = useState(null);
@@ -203,7 +228,7 @@ export function ManagePaths({ me, users }) {
   return (
     <div>
       <div className="sb-shead">
-        <div><h2 className="ac-h2">Learning paths</h2><p className="sb-sub" style={{ marginBottom: 0 }}>An ordered journey through existing courses, lessons and guides, built around a role or goal. Progress made in a path also counts in the original course or guide.</p></div>
+        <div><h2 className="ac-h2">Learning paths</h2><p className="sb-sub" style={{ marginBottom: 0 }}>An ordered journey through existing courses, lessons and tips & resources, built around a role or goal. Progress made in a path also counts in the original course or resource.</p></div>
         <button type="button" className="sb-btn compact" onClick={() => setEditId("new")}><PlusIcon className="hi hi-sm" aria-hidden="true" />New path</button>
       </div>
       <StatusFilter items={paths} filter={filter} setFilter={setFilter} />
@@ -217,7 +242,7 @@ export function ManagePaths({ me, users }) {
                 <CoverThumb imageRef={p.cover} />
                 <div className="ac-mmain">
                   <div className="ac-mtitle">{p.title || "Untitled path"} <StatusPill status={p.status} /></div>
-                  <div className="ac-cardsub">{(p.items || []).length} step{(p.items || []).length === 1 ? "" : "s"}{p.category ? ` · ${categoryLabel(p.category)}` : ""}{p.updatedAt ? ` · updated ${formatDateTime(toMs(p.updatedAt))}` : ""}</div>
+                  <div className="ac-cardsub">{(p.items || []).length} step{(p.items || []).length === 1 ? "" : "s"}{p.category ? ` · ${categoryShortIn(cats, p.category)}` : ""}{p.updatedAt ? ` · updated ${formatDateTime(toMs(p.updatedAt))}` : ""}</div>
                 </div>
                 <div className="ac-mactions">
                   <button type="button" className="sb-btn ghost compact" onClick={() => navigate(learnPathwayPath(p.id))}><EyeIcon className="hi hi-sm" aria-hidden="true" />Preview</button>
@@ -234,45 +259,6 @@ export function ManagePaths({ me, users }) {
 
 /* Delete flow: shows what references the category and requires a destination
    (or an empty category). Content is moved, never deleted. */
-export function DeleteCategoryDialog({ me, cat, others, hidden, onClose }) {
-  const [refs, setRefs] = useState(null);
-  const [to, setTo] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  useEffect(() => { categoryReferences(cat.id).then(setRefs).catch(() => setRefs({ courses: [], guides: [], paths: [], error: true })); }, [cat.id]);
-  const total = refs ? refs.courses.length + refs.guides.length + refs.paths.length : 0;
-  const go = async () => {
-    setBusy(true); setErr("");
-    try { await reassignAndDeleteCategory(me, cat.id, to || null, hidden); onClose(); }
-    catch (x) { setErr(x?.message || "Couldn't delete."); setBusy(false); }
-  };
-  return (
-    <Sheet title={`Delete “${cat.label}”`} onClose={onClose}>
-      {!refs ? <Skeleton lines={3} /> : (
-        <>
-          {refs.error && <div className="ac-err" role="alert">Couldn't check what uses this category. Try again.</div>}
-          {total === 0
-            ? <p className="sb-sub">Nothing references this category. Deleting it removes the record and its cover only.</p>
-            : (
-              <>
-                <p className="sb-sub">This category is used by <b>{refs.courses.length}</b> course{refs.courses.length === 1 ? "" : "s"}, <b>{refs.guides.length}</b> quick guide{refs.guides.length === 1 ? "" : "s"} and <b>{refs.paths.length}</b> learning path{refs.paths.length === 1 ? "" : "s"}. Choose where to move them — nothing is deleted.</p>
-                <ul className="ac-plainlist">{[...refs.courses, ...refs.guides, ...refs.paths].slice(0, 12).map((x) => <li key={x.id}>{x.title} <span className="ac-cardsub">({x.status})</span></li>)}{total > 12 && <li className="ac-cardsub">…and {total - 12} more</li>}</ul>
-                <Field id="cat-moveto" label="Move everything to">
-                  <select id="cat-moveto" value={to} onChange={(e) => setTo(e.target.value)}><option value="">Choose a category…</option>{others.map((c) => <option key={c.id} value={c.id}>{c.label}{c.hidden ? " (hidden)" : ""}</option>)}</select>
-                </Field>
-              </>
-            )}
-          {cat.intro && <p className="ac-note">This is the featured “Start here” category. After deleting it the introduction video stays on the home page; its “More from…” link disappears.</p>}
-          {err && <div className="ac-err" role="alert">{err}</div>}
-          <div className="ac-actions">
-            <BusyButton className="sb-btn danger compact" busy={busy} disabled={total > 0 && !to} onClick={go}>{total ? `Move ${total} item${total === 1 ? "" : "s"} and delete` : "Delete category"}</BusyButton>
-            <button type="button" className="sb-btn quiet compact" onClick={onClose}>Cancel</button>
-          </div>
-        </>
-      )}
-    </Sheet>
-  );
-}
 
 /* ===================================================================
    Topics — editable records
@@ -354,7 +340,7 @@ function DeleteTopicDialog({ me, topic, others, onClose }) {
     <Sheet title={`Delete topic “${topic.name}”`} onClose={onClose}>
       {!refs ? <Skeleton lines={2} /> : (
         <>
-          <p className="sb-sub">{refs.length ? <>Used by <b>{refs.length}</b> item{refs.length === 1 ? "" : "s"}. Courses and lessons are never deleted — only the tag changes.</> : "Nothing uses this topic."}</p>
+          <p className="sb-sub">{refs.length ? <>Used by <b>{refs.length}</b> item{refs.length === 1 ? "" : "s"}. Courses and lessons are never deleted. Only the tag changes.</> : "Nothing uses this topic."}</p>
           {refs.length > 0 && <ul className="ac-plainlist">{refs.slice(0, 10).map((r) => <li key={r.coll + r.id}>{r.title} <span className="ac-cardsub">({r.coll.slice(0, -1)})</span></li>)}{refs.length > 10 && <li className="ac-cardsub">…and {refs.length - 10} more</li>}</ul>}
           {refs.length > 0 && (
             <div className="sb-field" role="radiogroup" aria-label="What happens to the associations">
@@ -388,7 +374,7 @@ export const blankQuestion = () => ({ id: newId(), prompt: "", multi: false, opt
 /* ===================================================================
    Image picker: choose → preview + crop → process → upload
    =================================================================== */
-export function ImagePicker({ kind, label, value, courseId, lessonId, guideId, pathId, categoryId, onChange, ensureTarget, compact = false }) {
+export function ImagePicker({ kind, label, value, courseId, lessonId, guideId, pathId, categoryId, onChange, ensureTarget, compact = false, required = false, optional = false, error = "" }) {
   const spec = IMAGE_KINDS[kind];
   const current = useImageUrl(value);
   const [file, setFile] = useState(null);
@@ -397,41 +383,59 @@ export function ImagePicker({ kind, label, value, courseId, lessonId, guideId, p
   const [ctl, setCtl] = useState({ scale: 1, cx: 0.5, cy: 0.5 });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // one upload attempt at a time: a newer attempt (or Cancel, or a new image)
+  // makes an older one's late result irrelevant — it's ignored, never saved
+  const attempt = useRef({ n: 0, ctrl: null });
+  useEffect(() => () => { attempt.current.ctrl?.abort(); attempt.current.n += 1; }, []);
+  const cancelUpload = () => { attempt.current.ctrl?.abort(); attempt.current.n += 1; setBusy(false); setErr("Upload cancelled. Your image is still selected."); };
   const inputId = `ac-img-${kind}-${lessonId || courseId || guideId || pathId || categoryId || "x"}`;
   useEffect(() => () => { if (src) URL.revokeObjectURL(src); }, [src]);
 
   const pick = async (e) => {
     const f = e.target.files && e.target.files[0];
     e.target.value = "";
+    if (busy) { attempt.current.ctrl?.abort(); attempt.current.n += 1; setBusy(false); }   // a new image replaces an upload in progress
     setErr("");
     const v = validateImageFile(f);
     if (!v.ok) { setErr(v.reason); return; }
     try {
       const d = await imageDimensions(f);
-      if (d.width < 300 || d.height < 300) { setErr("That image is too small — use at least 600 px on the short side."); return; }
+      if (d.width < 300 || d.height < 300) { setErr("That image is too small. Use one that's at least 600 pixels on its shorter side."); return; }
       setFile(f); setDims(d); setCtl({ scale: 1, cx: 0.5, cy: 0.5 }); setSrc(URL.createObjectURL(f));
     } catch { setErr("Couldn't read that image."); }
   };
   const crop = dims ? cropFromControls(dims.width, dims.height, spec.ratio, ctl) : null;
-  const use = async () => {
+  const use = () => trackUpload(uploadNow());
+  const uploadNow = async () => {
+    const my = attempt.current.n + 1; const ctrl = new AbortController();
+    attempt.current = { n: my, ctrl };
+    const current = () => attempt.current.n === my;
     setBusy(true); setErr("");
+    let path = null, uploaded = false;
     try {
       const out = await processImage(file, kind, crop || defaultCrop(dims.width, dims.height, spec.ratio));
       // Storage rules need the owning record to exist — the workspace creates
       // its private draft first, so uploads work before any manual save.
       const target = ensureTarget ? await ensureTarget() : {};
-      const path = imagePath(kind, { courseId, lessonId, guideId, pathId, categoryId, ...target });
-      const meta = await uploadImage(path, out.blob, out.contentType);
+      if (!current()) return;
+      path = imagePath(kind, { courseId, lessonId, guideId, pathId, categoryId, ...target });
+      const meta = await uploadImage(path, out.blob, out.contentType, { signal: ctrl.signal });
+      uploaded = true;
+      // an abandoned attempt finishing late must not overwrite a newer choice
+      if (!current()) { deleteImage(path).catch(() => {}); return; }
       onChange({ path, version: path.split("/").pop().replace(/\.jpg$/, ""), contentType: out.contentType, bytes: meta.bytes, w: out.width, h: out.height }, value);
       setFile(null); setDims(null); if (src) URL.revokeObjectURL(src); setSrc(null);
     } catch (x) {
-      // Network / chunk-load / storage errors → plain words; keep the chosen image so "Use this image" can be retried.
-      const net = !navigator.onLine || /fetch|network|offline|timeout|dynamically imported|retry-limit|storage\/(unknown|retry)/i.test(`${x?.code || ""} ${x?.message || ""}`);
-      setErr(net ? "Couldn't upload the image — the connection dropped or is too slow. Your text is safe; press “Use this image” to try again."
+      if (!current() || x?.code === "canceled") return;                    // cancelled: cancelUpload already said so
+      if (uploaded && path) deleteImage(path).catch(() => {});             // uploaded but couldn't be saved: don't leave a stray file
+      // plain words; the chosen (cropped) image stays so "Try again" re-sends it
+      const code = `${x?.code || ""} ${x?.message || ""}`;
+      setErr(/stalled|timeout/.test(code) ? "The upload stopped responding, so the image wasn't saved. Your image is still selected. Try again."
+        : !navigator.onLine || /fetch|network|offline|dynamically imported|retry-limit|storage\/(unknown|retry)/i.test(code) ? "Couldn't upload the image because the connection dropped. Your image is still selected. Try again when you're back online."
         : x?.code === "storage/unauthorized" ? "You don't have permission to upload images here."
-        : x?.message || "Upload failed. Check your connection and try again.");
+        : x?.message || "The upload failed, so the image wasn't saved. Try again.");
     }
-    finally { setBusy(false); }
+    finally { if (current()) setBusy(false); }
   };
   const previewStyle = crop && dims ? {
     aspectRatio: `${spec.width} / ${spec.height}`,
@@ -442,7 +446,7 @@ export function ImagePicker({ kind, label, value, courseId, lessonId, guideId, p
 
   return (
     <div className={"ac-imgpick" + (compact ? " is-compact" : "")}>
-      <span className="ac-fieldlabel">{label}</span>
+      <span className="ac-fieldlabel" id={`${inputId}-label`}>{label}{required && <RequiredTag />}{optional && <span className="ac-optional"> (optional)</span>}</span>
       {!file && (
         <div className="ac-imgcur" style={{ aspectRatio: `${spec.width} / ${spec.height}` }}>
           {current.url ? <img src={current.url} alt={`Current ${spec.label.toLowerCase()}`} /> : <div className="ac-img-empty"><PhotoIcon className="hi" aria-hidden="true" /><span>No image yet</span></div>}
@@ -455,18 +459,21 @@ export function ImagePicker({ kind, label, value, courseId, lessonId, guideId, p
           <label className="ac-slider"><span>Horizontal</span><input type="range" min="0" max="1" step="0.01" value={ctl.cx} onChange={(e) => setCtl({ ...ctl, cx: Number(e.target.value) })} aria-label="Horizontal position" /></label>
           <label className="ac-slider"><span>Vertical</span><input type="range" min="0" max="1" step="0.01" value={ctl.cy} onChange={(e) => setCtl({ ...ctl, cy: Number(e.target.value) })} aria-label="Vertical position" /></label>
           <div className="ac-actions">
-            <BusyButton className="sb-btn compact" busy={busy} busyLabel="Uploading…" onClick={use}>Use this image</BusyButton>
-            <button type="button" className="sb-btn quiet compact" onClick={() => { setFile(null); setDims(null); }}>Cancel</button>
+            <BusyButton className="sb-btn compact" busy={busy} busyLabel="Uploading…" onClick={use}>{err ? "Try again" : "Use this image"}</BusyButton>
+            {busy && <button type="button" className="sb-btn ghost compact" onClick={cancelUpload}>Cancel upload</button>}
+            <button type="button" className="sb-btn quiet compact" onClick={() => { attempt.current.ctrl?.abort(); attempt.current.n += 1; setBusy(false); setErr(""); setFile(null); setDims(null); }}>{busy ? "Discard image" : "Cancel"}</button>
           </div>
         </div>
       )}
       <div className="ac-actions">
-        <label htmlFor={inputId} className="sb-btn ghost compact ac-filebtn"><PhotoIcon className="hi hi-sm" aria-hidden="true" /><span>{value ? "Replace image" : "Choose image"}</span></label>
-        <input id={inputId} type="file" accept="image/jpeg,image/png,image/webp" onChange={pick} className="sb-vh" />
+        <label htmlFor={inputId} id={`${inputId}-btn`} className="sb-btn ghost compact ac-filebtn"><PhotoIcon className="hi hi-sm" aria-hidden="true" /><span>{value ? "Replace image" : "Choose image"}</span></label>
+        <input id={inputId} type="file" accept="image/jpeg,image/png,image/webp" onChange={pick} className="sb-vh"
+          aria-labelledby={`${inputId}-label ${inputId}-btn`} aria-describedby={error ? `${inputId}-err` : undefined} aria-invalid={error ? true : undefined} />
         {value && !file && <button type="button" className="sb-btn ghost compact" onClick={() => onChange(null, value)}><span>Remove</span></button>}
       </div>
       {/* Size/compression details are implementation detail: kept in the tooltip only. */}
       <div className="ac-hint" title={`Resized to ${spec.width}×${spec.height} and compressed to roughly 100–250 KB.`}>JPEG, PNG or WebP, up to 5 MB.</div>
+      {error && !value && !file && <div className="ac-fielderr" id={`${inputId}-err`}>{error}</div>}
       {err && <div className="ac-err" role="alert">{err}</div>}
     </div>
   );
@@ -514,132 +521,8 @@ export function PurposeVideoEditor({ me, current, onClose }) {
 /* ===================================================================
    Quick guide editor
    =================================================================== */
-export function GuideEditor({ me, users, guideId, onClose }) {
-  const guide = useGuide(guideId);
-  const [f, setF] = useState(null);
-  const [dirty, setDirty] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [confirmDel, setConfirmDel] = useState(false);
-  const uploaded = useRef(new Set());
-  const toDelete = useRef(new Set());
-  const navigate = useNavigate();
-  const admin = isAcademyAdmin(me);
-  const isNew = !guideId;
-  useEffect(() => {
-    if (f) return;
-    if (isNew) setF({ title: "", category: "", topicIds: [], legacyTopics: [], videoUrl: "", videoMeta: null, thumbMode: "source", body: "", resources: [{ label: "", url: "" }], thumb: null, durationMinutes: "" });
-    else if (guide.data) setF({
-      title: guide.data.title || "", category: guide.data.category || "", topicIds: guide.data.topicIds || [], legacyTopics: guide.data.topics || [],
-      videoUrl: guide.data.video ? (videoFromRecord(guide.data.video)?.url || "") : "", videoMeta: guide.data.videoMeta || null, thumbMode: guide.data.thumb && (guide.data.thumbMode === "custom" || guide.data.thumbMode == null) ? "custom" : "source", body: guide.data.body || "",
-      resources: guide.data.resources?.length ? guide.data.resources : [{ label: "", url: "" }], thumb: guide.data.thumb || null, durationMinutes: guide.data.durationMinutes || "",
-    });
-  }, [guide.data, f, isNew, me.id]);
-  const parsed = useMemo(() => f?.videoUrl?.trim() ? parseVideoLink(f.videoUrl) : null, [f?.videoUrl]);
-  const set = (p) => { setF((x) => ({ ...x, ...p })); setDirty(true); };
-  const close = async () => { for (const p of uploaded.current) { try { await deleteImage(p); } catch {} } uploaded.current.clear(); onClose(); };
-  const payload = () => ({ ...f, topics: f.legacyTopics, video: parsed?.ok ? parsed : null, videoMeta: parsed?.ok && f.videoMeta && f.videoMeta.id === parsed.id ? f.videoMeta : null, resources: f.resources.filter((r) => r.url.trim()) });
-  const validate = () => {
-    if (!f.title.trim()) return "Add a title.";
-    if (!categoryById(f.category)) return "Choose a category.";
-    if (f.videoUrl.trim() && !parsed?.ok) return parsed?.reason || "Check the video link.";
-    for (const r of f.resources) if (r.url && !isSafeHref(r.url)) return "Resource links must start with https://.";
-    return "";
-  };
-  const save = async () => {
-    const v = validate(); if (v) { setErr(v); return null; }
-    setBusy(true); setErr("");
-    try {
-      let id = guideId;
-      if (isNew) {
-        // A new guide is created as a draft FIRST so its thumbnail can be uploaded
-        // under a real id (storage.rules check the guide doc); then edited in place.
-        id = await createGuide(me, payload());
-      } else await updateGuide(me, id, payload());
-      for (const p of toDelete.current) { try { await deleteImage(p); } catch {} }
-      toDelete.current.clear(); uploaded.current.clear(); setDirty(false);
-      return id;
-    } catch (x) { setErr(x?.message || "Couldn't save."); return null; }
-    finally { setBusy(false); }
-  };
-  const [createdId, setCreatedId] = useState(null);
-  const effectiveId = guideId || createdId;
-  const saveClick = async () => { const id = await save(); if (id && isNew && !createdId) setCreatedId(id); };
-  const status = async (next) => {
-    const id = dirty || isNew ? await save() : effectiveId;
-    if (!id) return;
-    setBusy(true); setErr("");
-    try { await setContentStatus("guides", me, id, next); if (isNew) setCreatedId(id); } catch (x) { setErr(x?.message || "Couldn't change the status."); }
-    finally { setBusy(false); }
-  };
-  const current = useGuide(createdId);   // after a create, follow the real doc
-  const g = guideId ? guide.data : current.data;
-
-  if (!f || (!isNew && !guide.loaded)) return <Sheet title="Quick guide" onClose={onClose} wide><Skeleton lines={6} /></Sheet>;
-  if (!isNew && (!guide.data || !canEditContent(me, guide.data))) return <Sheet title="Quick guide" onClose={onClose}><div className="sb-empty">You can't edit this guide.</div></Sheet>;
-  const blockers = guidePublishBlockers({ ...f, video: parsed?.ok ? parsed : null });
-  const foot = (
-    <>
-      {g && admin && g.status !== "published" && <button type="button" className="sb-btn ghost subtle-danger compact" onClick={() => setConfirmDel(true)}><TrashIcon className="hi hi-sm" aria-hidden="true" />Delete</button>}
-      <span style={{ flex: 1 }} />
-      <span className="ac-cardsub">{isNew && !createdId ? "Not saved yet" : dirty ? "Unsaved changes" : "All changes saved"}</span>
-      {err && <span className="ac-err" role="alert">{err}</span>}
-      <button type="button" className="sb-btn quiet compact" onClick={close}>Close</button>
-      <BusyButton className="sb-btn compact" busy={busy} onClick={saveClick} disabled={!dirty && !(isNew && !createdId)}>{isNew && !createdId ? "Save draft" : "Save"}</BusyButton>
-    </>
-  );
-  return (
-    <Sheet title={isNew ? "New quick guide" : `Edit: ${g?.title || "guide"}`} onClose={close} wide foot={foot}>
-      <div className="ac-edgrid">
-        <div>
-          <Field id="ge-title" label="Title"><input id="ge-title" value={f.title} onChange={(e) => set({ title: e.target.value })} maxLength={120} autoFocus /></Field>
-          <Field id="ge-cat" label="Category"><CategorySelect id="ge-cat" value={f.category} onChange={(v) => set({ category: v })} /></Field>
-          <TopicsField id="ge-topics" value={f.topicIds} onChange={(v) => set({ topicIds: v })} legacy={f.legacyTopics} onLegacyChange={(v) => set({ legacyTopics: v })} category={f.category} />
-          <Field id="ge-video" label="Video link (optional)" hint="YouTube, Vimeo or Google Drive. Leave empty for a text-only guide.">
-            <input id="ge-video" type="url" inputMode="url" value={f.videoUrl} onChange={(e) => set({ videoUrl: e.target.value })} placeholder="https://youtu.be/…" />
-            {parsed && (parsed.ok ? <div className="ac-ok"><CheckCircleIcon className="hi hi-sm" aria-hidden="true" />{parsed.capabilities.label}</div> : <div className="ac-err" role="alert">{parsed.reason}</div>)}
-          </Field>
-          <VideoPreview parsed={parsed} meta={f.videoMeta} onMeta={(m) => set({ videoMeta: m })} />
-          <Field id="ge-body" label="Guide text" hint={MARKDOWN_HELP}><textarea id="ge-body" rows={10} value={f.body} onChange={(e) => set({ body: e.target.value })} maxLength={20000} /></Field>
-        </div>
-        <div>
-          <div className="sb-field">
-            <span className="ac-fieldlabel" id="ge-res-lbl">Resource links</span>
-            <div role="group" aria-labelledby="ge-res-lbl">
-              {f.resources.map((r, i) => (
-                <div key={i} className="ac-resrow">
-                  <label htmlFor={`ge-rl-${i}`} className="sb-vh">Resource label</label>
-                  <input id={`ge-rl-${i}`} placeholder="Label" value={r.label} onChange={(e) => set({ resources: f.resources.map((x, j) => j === i ? { ...x, label: e.target.value } : x) })} />
-                  <label htmlFor={`ge-ru-${i}`} className="sb-vh">Resource URL</label>
-                  <input id={`ge-ru-${i}`} type="url" inputMode="url" placeholder="https://…" value={r.url} onChange={(e) => set({ resources: f.resources.map((x, j) => j === i ? { ...x, url: e.target.value } : x) })} />
-                  <button type="button" className="sb-btn quiet compact" aria-label="Remove resource" onClick={() => set({ resources: f.resources.filter((_, j) => j !== i) })}><XMarkIcon className="hi hi-sm" aria-hidden="true" /></button>
-                </div>
-              ))}
-              <button type="button" className="sb-btn quiet compact" onClick={() => set({ resources: [...f.resources, { label: "", url: "" }] })}><PlusIcon className="hi hi-sm" aria-hidden="true" />Add link</button>
-            </div>
-          </div>
-          <Field id="ge-dur" label="Duration (minutes, optional)"><input id="ge-dur" type="number" min="0" inputMode="numeric" value={f.durationMinutes} onChange={(e) => set({ durationMinutes: e.target.value })} /></Field>
-          {effectiveId
-            ? <ThumbnailChoice f={f} set={set} parsed={parsed} uploaded={uploaded} toDelete={toDelete} picker={{ kind: "guideThumb", guideId: effectiveId }} />
-            : <div className="ac-hint">Save the draft once to add a custom thumbnail.</div>}
-          <h3 className="ac-h3">Publish</h3>
-          <div className="ac-statusrow"><StatusPill status={g?.status || "draft"} /></div>
-          {(g?.status || "draft") !== "published" && (blockers.length
-            ? <div className="ac-blockers"><b>Before publishing:</b><ul>{blockers.map((b, i) => <li key={i}><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true" />{b}</li>)}</ul></div>
-            : <p className="ac-ok"><CheckCircleIcon className="hi hi-sm" aria-hidden="true" />Ready to publish.</p>)}
-          <div className="ac-actions">
-            {effectiveId && <button type="button" className="sb-btn ghost compact" onClick={() => { close(); navigate(learnGuidePath(effectiveId)); }}><EyeIcon className="hi hi-sm" aria-hidden="true" />Preview</button>}
-            {(g?.status || "draft") !== "published" && <BusyButton className="sb-btn compact" busy={busy} disabled={blockers.length > 0} onClick={() => status("published")}>Publish</BusyButton>}
-            {g?.status === "published" && <BusyButton className="sb-btn ghost compact" busy={busy} onClick={() => status("draft")}>Unpublish</BusyButton>}
-            {g && g.status !== "archived" && <BusyButton className="sb-btn quiet compact" busy={busy} onClick={() => status("archived")}>Archive</BusyButton>}
-            {g?.status === "archived" && <BusyButton className="sb-btn quiet compact" busy={busy} onClick={() => status("draft")}>Restore to draft</BusyButton>}
-          </div>
-        </div>
-      </div>
-      {confirmDel && g && <ConfirmDialog title="Delete this guide permanently?" body={`“${g.title}” and its discussion will be removed. Learners' “reviewed” records are kept but no longer shown.`} confirmLabel="Delete guide" onConfirm={async () => { await deleteGuideHard(effectiveId); onClose(); }} onClose={() => setConfirmDel(false)} />}
-    </Sheet>
-  );
-}
+/* (v6.11) The quick-guide dialog editor was replaced by the full-page Tips &
+   resources workspace (AcademyGuideWorkspace.jsx). */
 
 /* ===================================================================
    Learning path editor
@@ -647,7 +530,9 @@ export function GuideEditor({ me, users, guideId, onClose }) {
 export function PathEditor({ me, users, pathId, onClose }) {
   const path = usePathDoc(pathId);
   const { courses } = useCourses(me);
-  const { guides } = useGuides(me);
+  const { guides: liveGuides } = useGuides(me);
+  const guideDrafts = useGuideDrafts(me);   // editors only (rules): never-published resources live here
+  const guides = useMemo(() => pathPickerGuides(liveGuides, guideDrafts.docs || []), [liveGuides, guideDrafts.docs]);
   const [f, setF] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -711,7 +596,7 @@ export function PathEditor({ me, users, pathId, onClose }) {
   const describe = (it) => {
     if (it.type === "course") { const c = courses.find((x) => x.id === it.courseId); return c ? `${c.title}${c.status !== "published" ? ` (${c.status})` : ""}` : "Course not found / not visible to you"; }
     if (it.type === "lesson") { const c = courses.find((x) => x.id === it.courseId); const l = lessonDocs.byPath[`courses/${it.courseId}/lessons/${it.lessonId}`]; return l ? `${l.title} · ${c?.title || "course"}${c && c.status !== "published" ? ` (${c.status})` : ""}` : lessonDocs.loaded ? "Lesson not found" : "…"; }
-    const g = guides.find((x) => x.id === it.guideId); return g ? `${g.title}${g.status !== "published" ? ` (${g.status})` : ""}` : "Guide not found / not visible to you";
+    const g = guides.find((x) => x.id === it.guideId); return g ? `${g.title}${g.statusLabel ? ` (${g.statusLabel})` : ""}` : "Resource not found / not visible to you";
   };
   const foot = (
     <>
@@ -733,13 +618,13 @@ export function PathEditor({ me, users, pathId, onClose }) {
           <TopicsField id="pe-topics" value={f.topicIds} onChange={(v) => set({ topicIds: v })} legacy={f.legacyTopics} onLegacyChange={(v) => set({ legacyTopics: v })} category={f.category} />
 
           <h3 className="ac-h3">Steps</h3>
-          {f.items.length === 0 && <div className="sb-empty">No steps yet. Add a course, a single lesson, or a quick guide.</div>}
+          {f.items.length === 0 && <div className="sb-empty">No steps yet. Add a course, a single lesson, or a tip or resource.</div>}
           <ol className="ac-edlessons ac-edsteps">
             {f.items.map((it, i) => (
               <li key={it.id || i} className="ac-edstep">
                 <div className="ac-edlesson">
                   <span className="ac-edidx" aria-hidden="true">{i + 1}</span>
-                  <span className="ac-edltitle"><b>{it.type === "course" ? "Course" : it.type === "lesson" ? "Lesson" : "Guide"}</b> <span className="ac-cardsub">{describe(it)}</span></span>
+                  <span className="ac-edltitle"><b>{it.type === "course" ? "Course" : it.type === "lesson" ? "Lesson" : "Tip or resource"}</b> <span className="ac-cardsub">{describe(it)}</span></span>
                   <button type="button" className="sb-btn quiet compact" onClick={() => move(i, -1)} disabled={i === 0} aria-label="Move step up"><ChevronUpIcon className="hi hi-sm" aria-hidden="true" /></button>
                   <button type="button" className="sb-btn quiet compact" onClick={() => move(i, 1)} disabled={i === f.items.length - 1} aria-label="Move step down"><ChevronDownIcon className="hi hi-sm" aria-hidden="true" /></button>
                   <button type="button" className="sb-btn quiet compact" onClick={() => set({ items: f.items.filter((_, j) => j !== i) })} aria-label="Remove step"><TrashIcon className="hi hi-sm" aria-hidden="true" /></button>
@@ -756,10 +641,10 @@ export function PathEditor({ me, users, pathId, onClose }) {
           <div className="ac-actions">
             <button type="button" className="sb-btn ghost compact" onClick={() => setPicker({ type: "course" })}><PlusIcon className="hi hi-sm" aria-hidden="true" />Add course</button>
             <button type="button" className="sb-btn ghost compact" onClick={() => setPicker({ type: "lesson" })}><PlusIcon className="hi hi-sm" aria-hidden="true" />Add lesson</button>
-            <button type="button" className="sb-btn ghost compact" onClick={() => setPicker({ type: "guide" })}><PlusIcon className="hi hi-sm" aria-hidden="true" />Add guide</button>
+            <button type="button" className="sb-btn ghost compact" onClick={() => setPicker({ type: "guide" })}><PlusIcon className="hi hi-sm" aria-hidden="true" />Add tip or resource</button>
           </div>
           {picker && <ItemPicker type={picker.type} courses={courses} guides={guides} onPick={addItem} onClose={() => setPicker(null)} />}
-          <p className="ac-note">Steps open the original course, lesson or guide, so progress counts in both places. Unpublished or hidden steps show to learners as unavailable — and a required one stops the path being completed until it's back.</p>
+          <p className="ac-note">Steps open the original course, lesson or resource, so progress counts in both places. Unpublished or hidden steps show to learners as unavailable, and a required one stops learners completing the path until it's back.</p>
         </div>
         <div>
           {effectiveId
@@ -778,29 +663,34 @@ export function PathEditor({ me, users, pathId, onClose }) {
             {p && p.status !== "archived" && <BusyButton className="sb-btn quiet compact" busy={busy} onClick={() => status("archived")}>Archive</BusyButton>}
             {p?.status === "archived" && <BusyButton className="sb-btn quiet compact" busy={busy} onClick={() => status("draft")}>Restore to draft</BusyButton>}
           </div>
-          <p className="ac-note">Editing a path never resets anyone's progress — completion is read from the referenced content.</p>
+          <p className="ac-note">Editing a path never resets anyone's progress. Completion comes from the courses, lessons and tips & resources it links to.</p>
         </div>
       </div>
-      {confirmDel && p && <ConfirmDialog title="Delete this path permanently?" body={`“${p.title}” will be removed. The courses, lessons and guides it points to are untouched.`} confirmLabel="Delete path" onConfirm={async () => { await deletePathHard(effectiveId); onClose(); }} onClose={() => setConfirmDel(false)} />}
+      {confirmDel && p && <ConfirmDialog title="Delete this path permanently?" body={`“${p.title}” will be removed. The courses, lessons and tips & resources it points to are untouched.`} confirmLabel="Delete path" onConfirm={async () => { await deletePathHard(effectiveId); onClose(); }} onClose={() => setConfirmDel(false)} />}
     </Sheet>
   );
 }
 
 /* Pick a course / lesson / guide the editor can see. */
 function ItemPicker({ type, courses, guides, onPick, onClose }) {
+  const catRecs = useCategoryRecords();
+  const cats = useMemo(() => mergeCategories(catRecs.docs), [catRecs.docs]);
   const [courseId, setCourseId] = useState("");
   const lessons = useLessons(type === "lesson" ? courseId : null, type === "lesson" && !!courseId);
   const [q, setQ] = useState("");
   const needle = q.trim().toLowerCase();
   const match = (t) => !needle || String(t || "").toLowerCase().includes(needle);
   return (
-    <div className="ac-picker" role="group" aria-label={`Add ${type}`}>
+    <div className="ac-picker" role="group" aria-label={`Add ${type === "guide" ? "a tip or resource" : `a ${type}`}`}>
       <div className="ac-pickerhead">
-        <label className="ac-search"><input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${type === "guide" ? "guides" : "courses"}`} aria-label="Search" /></label>
+        <label className="ac-search"><input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${type === "guide" ? "tips & resources" : "courses"}`} aria-label="Search" /></label>
         <button type="button" className="sb-btn quiet compact" onClick={onClose}>Cancel</button>
       </div>
-      {type === "course" && <ul className="ac-pickerlist">{courses.filter((c) => match(c.title)).map((c) => <li key={c.id}><button type="button" className="ac-pickrow" onClick={() => onPick({ type: "course", courseId: c.id })}>{c.title} <span className="ac-cardsub">{categoryShort(c.category)}{c.status !== "published" ? ` · ${c.status}` : ""}</span></button></li>)}</ul>}
-      {type === "guide" && <ul className="ac-pickerlist">{guides.filter((g) => match(g.title)).map((g) => <li key={g.id}><button type="button" className="ac-pickrow" onClick={() => onPick({ type: "guide", guideId: g.id })}>{g.title} <span className="ac-cardsub">{categoryShort(g.category)}{g.status !== "published" ? ` · ${g.status}` : ""}</span></button></li>)}</ul>}
+      {type === "course" && <ul className="ac-pickerlist">{courses.filter((c) => match(c.title)).map((c) => <li key={c.id}><button type="button" className="ac-pickrow" onClick={() => onPick({ type: "course", courseId: c.id })}>{c.title} <span className="ac-cardsub">{categoryShortIn(cats, c.category)}{c.status !== "published" ? ` · ${c.status}` : ""}</span></button></li>)}</ul>}
+      {type === "guide" && <>
+        <ul className="ac-pickerlist">{guides.filter((g) => match(g.title)).map((g) => <li key={g.id}><button type="button" className="ac-pickrow" onClick={() => onPick({ type: "guide", guideId: g.id })}>{g.title} <span className="ac-cardsub">{[categoryShortIn(cats, g.category), g.statusLabel].filter(Boolean).join(" · ")}</span></button></li>)}</ul>
+        {guides.some((g) => g.status !== "published") && <p className="ac-cardsub">Learners see a step as unavailable until its resource is published.</p>}
+      </>}
       {type === "lesson" && (
         <>
           <label htmlFor="pe-pick-course" className="sb-vh">Course</label>
@@ -830,13 +720,13 @@ export function ThumbnailChoice({ f, set, parsed, uploaded, toDelete, picker, en
     <div className="sb-field">
       <span className="ac-fieldlabel">Thumbnail (16:9)</span>
       <div className="ac-thumbchoice" role="radiogroup" aria-label="Thumbnail source">
-        <label className={"ac-opt" + (mode === "source" ? " on" : "")}><input type="radio" name={`thumbmode-${picker.lessonId || picker.guideId || "x"}`} checked={mode === "source"} onChange={() => set({ thumbMode: "source" })} /><span>Use source thumbnail{hasSource ? "" : " (none available — a placeholder is shown)"}</span></label>
+        <label className={"ac-opt" + (mode === "source" ? " on" : "")}><input type="radio" name={`thumbmode-${picker.lessonId || picker.guideId || "x"}`} checked={mode === "source"} onChange={() => set({ thumbMode: "source" })} /><span>Use source thumbnail{hasSource ? "" : " (none available, so a placeholder is shown)"}</span></label>
         <label className={"ac-opt" + (mode === "custom" ? " on" : "")}><input type="radio" name={`thumbmode-${picker.lessonId || picker.guideId || "x"}`} checked={mode === "custom"} disabled={!f.thumb} onChange={() => set({ thumbMode: "custom" })} /><span>Upload custom thumbnail{!f.thumb ? " (upload one below first)" : ""}</span></label>
       </div>
       <div className="ac-thumbprev"><VideoThumb item={previewItem} /></div>
       <ImagePicker kind={picker.kind} label="Custom thumbnail" value={f.thumb} courseId={picker.courseId} lessonId={picker.lessonId} guideId={picker.guideId} ensureTarget={ensureTarget}
         onChange={(ref, old) => { set({ thumb: ref, thumbMode: ref ? "custom" : "source" }); if (ref) uploaded?.current?.add(ref.path); if (old?.path) toDelete?.current?.add(old.path); }} />
-      <div className="ac-hint">Controls this lesson's cards and the pre-play image in the app. The embedded provider player shows its own artwork once playing.</div>
+      <div className="ac-hint">{picker.guideId ? "Shown on this resource's card and, for a video, before it plays. The embedded player shows its own artwork once playing." : "Controls this lesson's cards and the pre-play image in the app. The embedded provider player shows its own artwork once playing."}</div>
     </div>
   );
 }

@@ -124,7 +124,7 @@ describe("Portal — nested modals", () => {
 describe("useMediaQuery (drives desktop popover vs mobile sheet)", () => {
   function Harness() {
     const desktop = useMediaQuery("(min-width:900px)");
-    // mirrors ProfileDrawer: modal on mobile, non-modal (no aria-modal) on desktop
+    // mirrors AppMenu (the account menu): modal on mobile, non-modal (no aria-modal) on desktop
     return (
       <Portal modal={!desktop}>
         <div role="dialog" aria-modal={desktop ? undefined : "true"} aria-label="Profile menu">

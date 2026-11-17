@@ -63,7 +63,7 @@ export function YouTubeProbe({ id, onResult, title = "Video preview" }) {
               else report({ state: "unknown", reason: "YouTube didn't report a duration." });
             }, 2500);
           },
-          onError: (e) => report({ state: "error", code: e.data, reason: e.data === 100 ? "YouTube says this video doesn't exist or is private." : (e.data === 101 || e.data === 150) ? "The owner doesn't allow this video to be played in other sites — learners will have to open it on YouTube." : "This video can't be played here." }),
+          onError: (e) => report({ state: "error", code: e.data, reason: e.data === 100 ? "YouTube says this video doesn't exist or is private." : (e.data === 101 || e.data === 150) ? "The owner doesn't allow this video to play on other sites, so learners will have to open it on YouTube." : "This video can't be played here." }),
         },
       });
     });
@@ -145,7 +145,7 @@ export function VideoPreview({ parsed, meta, onMeta, fetcher = fetchVideoMetadat
         <span className="ac-vprevdur ac-cardsub">
           <ClockIcon className="hi hi-xs" aria-hidden="true" />
           {dur.state === "ok" ? `Duration ${fmt(dur.sec)}`
-            : dur.state === "live" ? "Live stream — no fixed duration"
+            : dur.state === "live" ? "Live stream, so there's no fixed length"
             : dur.state === "measuring" ? (parsed.provider === "youtube" ? "Measuring duration (the preview plays muted for a moment)…" : "Checking duration…")
             : dur.state === "error" ? dur.reason
             : (dur.reason || "Duration unknown")}

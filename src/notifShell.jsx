@@ -19,11 +19,13 @@
    The data-driven body (filter chips + notification list) is supplied by the
    caller as a render function that receives { finish } so a notification tap can
    fade out before navigating: open(n) → finish(() => onNavigate(dest)). */
-import { useState, useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Cog6ToothIcon, XMarkIcon, CheckCircleIcon } from "@heroicons/react/24/outline";
-import { Portal, useSheetDrag } from "./overlay.jsx";
+import { Portal, useSheet, useMediaQuery, SHEET_EXIT_MS } from "./overlay.jsx";
 
-export const NOTIF_EXIT_MS = 180;
+// Round 7: the panel uses the shared phone bottom-sheet foundation (the same as
+// the account menu): slide up, drag down from the handle or header, slide down.
+export const NOTIF_EXIT_MS = SHEET_EXIT_MS;
 
 export function NotifPanelShell({
   onClose, onSettings, unread = 0, onMarkAllRead,
@@ -31,16 +33,9 @@ export function NotifPanelShell({
 }) {
   // Animate the drawer out before closing / navigating, so the hand-off to the
   // destination isn't a hard cut. `finish(action)` fades, then runs the action.
-  const [closing, setClosing] = useState(false);
-  const closeT = useRef(null);
-  useEffect(() => () => clearTimeout(closeT.current), []);
-  const finish = (action) => {
-    if (closing) return;
-    setClosing(true);
-    clearTimeout(closeT.current);
-    closeT.current = setTimeout(() => (action || onClose)(), NOTIF_EXIT_MS);
-  };
-  const drag = useSheetDrag(onClose);
+  const sheet = useSheet(onClose);
+  const { closing, finish } = sheet;
+  const phone = !useMediaQuery("(min-width:900px)");
   // Escape fades out too (never a hard cut, and never a second unmount path).
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") finish(); };
@@ -52,10 +47,10 @@ export function NotifPanelShell({
   // differently-managed body mutation is exactly what risks a stuck page.
   return (
     <Portal>
-      <div className={"sb-scrim sb-scrim-right" + (closing ? " closing" : "")} onMouseDown={() => finish()}>
-        <div className="sb-notifpanel" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={ariaLabel} style={drag.sheetStyle}>
-          <div className="sb-grab" {...drag.handleProps}><span/></div>
-          <div className="sb-notifhd">
+      <div className={"sb-scrim sb-scrim-right sb-bscrim" + (closing ? " closing" : "")} onMouseDown={() => finish()}>
+        <div className="sb-notifpanel sb-bsheet" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={ariaLabel} style={sheet.sheetStyle}>
+          <div className="sb-grab" {...sheet.handleProps} aria-hidden="true"><span/></div>
+          <div className="sb-notifhd" {...(phone ? sheet.headerProps : {})}>
             <div className="sb-notifttl">
               <b className="sb-serif" style={{fontSize:17}}>Notifications</b>
               {unread > 0 && <span className="sb-unreadct">{unread} unread</span>}

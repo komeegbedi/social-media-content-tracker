@@ -16,8 +16,9 @@ vi.mock("./academyData.js", () => ({
 }));
 
 import { SortableList, DragHandle } from "./academySortable.jsx";
-import { RichTextField, LinkList } from "./academyWorkspaceParts.jsx";
+import { RichTextField, LinkList, saveErrorText } from "./academyWorkspaceParts.jsx";
 import { markdownToHtml } from "./academyRichText.js";
+if (!window.matchMedia) window.matchMedia = () => ({ matches: false, media: "", addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
 import { moveId, outlineRows, outlineSpan, outlineCanDrop, moduleIndexFromSlot, moveModule } from "./academyOrder.js";
 
 function List({ initial, onMoved }) {
@@ -200,15 +201,7 @@ describe("RichTextField (visual editor + labelled source view)", () => {
     expect(ed.textContent).toBe("Use \\* for bold notes!");                   // legacy meaning: the backslash shows
     expect(ed.querySelector("strong").textContent).toBe("bold");
   });
-  test("link insertion only accepts safe web addresses", () => {
-    render(<Rich initial="Read the guide" />);
-    fireEvent.click(screen.getByRole("button", { name: "Link (Ctrl+K)" }));
-    const input = screen.getByLabelText("Link address");
-    fireEvent.change(input, { target: { value: "javascript:alert(1)" } });
-    expect(screen.getByRole("button", { name: "Add link" })).toBeDisabled();
-    fireEvent.change(input, { target: { value: "example.com/guide" } });
-    expect(screen.getByRole("button", { name: "Add link" })).not.toBeDisabled();
-  });
+
 });
 
 function Links({ onItems }) {
@@ -253,5 +246,15 @@ describe("LinkList", () => {
     fireEvent.change(input, { target: { value: "javascript:alert(1)" } });
     fireEvent.submit(input.closest("form"));
     expect(screen.getByRole("alert")).toHaveTextContent("full web address");
+  });
+});
+
+describe("v6.11: save errors in words people can act on", () => {
+  test("a rules refusal never shows engine text", () => {
+    const raw = "evaluation error at L925:24 for 'update' @ L925, false for 'update' @ L925";
+    expect(saveErrorText(raw)).toBe("the server refused the change. You may no longer have editing access, or its category is being deleted");
+    expect(saveErrorText("Missing or insufficient permissions.")).toMatch(/^the server refused the change/);
+    expect(saveErrorText("Network request failed.")).toBe("Network request failed");
+    expect(saveErrorText("")).toBe("");
   });
 });

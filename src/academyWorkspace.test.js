@@ -218,3 +218,25 @@ test("Markdown format version: new courses start at v2; legacy docs stay unversi
   assert.equal(plan.course.mdVersion, 2);
   assert.equal(plan.upserts[0].live.mdVersion, 2);
 });
+
+// round 7: the course time summary never presents a partial total as complete
+import { courseTimeFacts } from "./academyDrafts.js";
+test("courseTimeFacts: video time and reading estimates stay separate; unknowns are said, never invented", () => {
+  // the reported case: video lessons without a measured length + reading estimates
+  let f = courseTimeFacts([{ video: {}, videoMeta: null }, { video: {}, videoMeta: {} }, { durationMinutes: 12 }, { durationMinutes: 15 }]);
+  assert.deepEqual(f.required, ["2 videos (length not known yet)", "~27 min reading & exercises"]);
+  assert.equal(f.bonus, null);
+  // some videos measured → "At least"
+  f = courseTimeFacts([{ video: {}, videoMeta: { durationSec: 600 } }, { video: {}, videoMeta: null }]);
+  assert.deepEqual(f.required, ["At least 10 min of video"]);
+  // all measured → plain total; a lesson without an estimate makes reading "At least"
+  f = courseTimeFacts([{ video: {}, videoMeta: { durationSec: 300 } }, { durationMinutes: 5 }, { kind: "written" }]);
+  assert.deepEqual(f.required, ["5 min of video", "At least ~5 min reading & exercises"]);
+  // live videos are counted, not timed
+  f = courseTimeFacts([{ video: {}, videoMeta: { isLive: true } }]);
+  assert.deepEqual(f.required, ["1 live video"]);
+  // bonus lessons stay out of the required figures
+  f = courseTimeFacts([{ durationMinutes: 10 }, { bonus: true, video: {}, videoMeta: { durationSec: 120 } }]);
+  assert.deepEqual(f.required, ["~10 min reading & exercises"]);
+  assert.equal(f.bonus, "1 bonus lesson: 2 min of video");
+});

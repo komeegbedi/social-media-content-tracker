@@ -50,30 +50,41 @@ test("new learner without a department: onboarding categories first, then a neut
   assert.deepEqual(recommendations({ me, courses: [], progressByCourse: {}, lessonsById: {} }), []);
 });
 
-test("everything completed → review suggestions, clearly labelled; a QA member maps to Creating Together", () => {
-  const done = { startedAt: 1, lastViewedAt: 9, lessons: { l1: { videoWatched: true }, l2: { manualDone: true }, l3: { videoWatched: true } } };
-  const recs = recommendations({ me, courses: [course("a")], progressByCourse: { a: done }, lessonsById: {} });
+test("requirements done but not finished → 'Ready to finish' (to the course page); finished → review suggestions; a QA member maps to Creating Together", () => {
+  // progressModel 2 = written by v6.5 server functions (not a legacy completion)
+  const done = { startedAt: 1, lastViewedAt: 9, progressModel: 2, lessons: { l1: { videoWatched: true }, l2: { manualDone: true }, l3: { videoWatched: true } } };
+  const legacy = recommendations({ me, courses: [course("a")], progressByCourse: { a: { ...done, progressModel: undefined } }, lessonsById: {} });
+  assert.equal(legacy[0].kind, "review", "a legacy completion (no marker) is completed, never 'ready to finish'");
+  const ready = recommendations({ me, courses: [course("a")], progressByCourse: { a: done }, lessonsById: {} });
+  assert.equal(ready[0].kind, "continue"); assert.equal(ready[0].ready, true); assert.equal(ready[0].reason, "Ready to finish");
+  assert.equal(ready[0].lessonId, null, "a ready course opens its overview (Finish course), not a bonus lesson");
+  const recs = recommendations({ me, courses: [course("a")], progressByCourse: { a: { ...done, finishedAt: 10 } }, lessonsById: {} });
   assert.equal(recs[0].kind, "review"); assert.match(recs[0].reason, /^Completed/);
   assert.deepEqual(departmentCategories({ departments: ["QA", "Videography", "Nope"] }), ["creating-together", "filmmaking"]);
   assert.deepEqual(departmentCategories({}), []);
 });
 
-test("continueTargets: most recent first, bounded, finished courses dropped", () => {
+test("continueTargets: most recent first, bounded; finished courses dropped, ready-to-finish ones kept", () => {
   const courses = [course("a"), course("b"), course("c"), course("d")];
   const p = (lv, extra = {}) => ({ startedAt: 1, lastViewedAt: lv, lessons: {}, ...extra });
-  const t = continueTargets(courses, { a: p(1), b: p(4), c: p(3), d: p(9, { lessons: { l1: { videoWatched: true }, l2: { videoWatched: true }, l3: { videoWatched: true } } }) });
-  assert.deepEqual(t.map((x) => x.course.id), ["b", "c", "a"]);
+  const all3 = { progressModel: 2, lessons: { l1: { videoWatched: true }, l2: { videoWatched: true }, l3: { videoWatched: true } } };
+  const finished = continueTargets(courses, { a: p(1), b: p(4), c: p(3), d: p(9, { ...all3, finishedAt: 10 }) });
+  assert.deepEqual(finished.map((x) => x.course.id), ["b", "c", "a"]);
+  const ready = continueTargets(courses, { a: p(1), b: p(4), c: p(3), d: p(9, all3) });
+  assert.deepEqual(ready.map((x) => [x.course.id, x.ready]), [["d", true], ["b", false], ["c", false]]);
 });
 
-test("nextLessonIdFromModules follows the saved module order; skips done; prefers required over bonus; respects required quizzes", () => {
+test("nextLessonIdFromModules: course order as a suggestion; prerequisites (from prerequisiteMap) are the only locks", () => {
   const c = course("a", { modules: [{ id: "m1", lessonIds: ["l1", "l2"] }, { id: "m2", lessonIds: ["q", "bonus"] }], bonusLessonIds: ["bonus"], requiredQuizLessonIds: ["q"] });
   assert.equal(nextLessonIdFromModules(c, null), "l1");
-  assert.equal(nextLessonIdFromModules(c, { lastLessonId: "l2", lessons: {} }), "l2", "last viewed, unfinished");
+  assert.equal(nextLessonIdFromModules(c, { lastLessonId: "l2", lessons: {} }), "l2", "no prerequisites → the last viewed lesson is open");
   assert.equal(nextLessonIdFromModules(c, { lastLessonId: "l2", lessons: { l1: { manualDone: true }, l2: { videoWatched: true } } }), "q");
   assert.equal(nextLessonIdFromModules(c, { lessons: { l1: { videoWatched: true }, l2: { videoWatched: true }, q: { videoWatched: true } } }), "q", "watching doesn't finish a required-quiz lesson");
   assert.equal(nextLessonIdFromModules(c, { lessons: { l1: { videoWatched: true }, l2: { videoWatched: true } }, earned: { q: {} } }), "bonus");
   assert.equal(nextLessonIdFromModules(c, { lessons: { l1: { videoWatched: true }, l2: { videoWatched: true }, bonus: { manualDone: true } }, earned: { q: {} } }), null);
-  // reordering the modules changes what comes next (stable ids, new sequence)
+  const withPre = { ...c, prerequisiteMap: { l2: ["l1"] } };
+  assert.equal(nextLessonIdFromModules(withPre, { lastLessonId: "l2", lessons: {} }), "l1", "a LOCKED last-viewed lesson isn't offered");
+  assert.equal(nextLessonIdFromModules({ ...withPre, prerequisiteMap: { l1: ["l2"] } }, { lastLessonId: "l1", lessons: {} }), "l2", "broken data (l1 needs a LATER lesson) isn't treated as satisfied: l1 is skipped");
   const reordered = { ...c, modules: [{ id: "m2", lessonIds: ["q"] }, { id: "m1", lessonIds: ["l2", "l1"] }, { id: "m3", lessonIds: ["bonus"] }] };
   assert.equal(nextLessonIdFromModules(reordered, null), "q");
 });

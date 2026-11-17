@@ -10,6 +10,15 @@
    only — nothing touches production.
    =================================================================== */
 
+// An ISOLATED test project may be seeded instead of the dev emulators — but only a
+// throwaway demo-* project, and only with explicit emulator hosts that aren't the
+// dev ones (this script deletes existing tasks/notifications before seeding).
+const SEED_PROJECT = process.env.SEED_PROJECT_ID || "";
+if (SEED_PROJECT) {
+  if (!/^demo-[a-z0-9-]+$/.test(SEED_PROJECT)) throw new Error(`seed: SEED_PROJECT_ID must be a demo-* project (got "${SEED_PROJECT}")`);
+  const hosts = [process.env.FIRESTORE_EMULATOR_HOST, process.env.FIREBASE_AUTH_EMULATOR_HOST, process.env.FIREBASE_STORAGE_EMULATOR_HOST];
+  if (hosts.some((h) => !h) || hosts.some((h) => /:(8080|9099|9199)$/.test(h))) throw new Error("seed: an isolated project needs explicit, non-dev emulator hosts (FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, FIREBASE_STORAGE_EMULATOR_HOST)");
+}
 // Point the Admin SDK at the running emulators BEFORE importing firebase-admin.
 process.env.FIRESTORE_EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8080";
 process.env.FIREBASE_AUTH_EMULATOR_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOST || "127.0.0.1:9099";
@@ -22,13 +31,14 @@ import { getStorage } from "firebase-admin/storage";
 import { deflateSync } from "node:zlib";
 import { autoAssign } from "../src/data.js";
 
-const PROJECT_ID = "ifc-social-media-tracker";
+const PROJECT_ID = SEED_PROJECT || "ifc-social-media-tracker";
 const PASSWORD = "password123"; // shared login password for every seeded user
 
 // Upload to the SAME bucket the web app reads (VITE_FIREBASE_STORAGE_BUCKET in
 // .env). Using a different default bucket made every seeded image 404 in the app.
 import { readFileSync as _readEnv } from "node:fs";
 const STORAGE_BUCKET = (() => {
+  if (SEED_PROJECT) return process.env.SEED_STORAGE_BUCKET || `${SEED_PROJECT}.appspot.com`;
   try { const m = _readEnv(new URL("../.env", import.meta.url), "utf8").match(/^VITE_FIREBASE_STORAGE_BUCKET=(.+)$/m); if (m && m[1].trim()) return m[1].trim(); } catch {}
   return `${PROJECT_ID}.appspot.com`;
 })();
@@ -265,7 +275,7 @@ const COURSES = [
   {
     id: "seed-course-light", title: "Light & Composition for Sunday (demo)", category: "photography", level: "beginner", topics: ["Exposure, composition, and lighting", "Service and event coverage"],
     hue: [94, 106, 210],
-    about: "*Local demo content — not official IFC material.*\n\n# Why this matters\n\nGreat photos of our gatherings start with **seeing light**. This short course walks through the three things that make a frame feel intentional: light, framing and timing.\n\n- Shoot in the room you actually have\n- Make the subject obvious\n- Capture moments, not poses",
+    about: "*Local demo content. Not official IFC material.*\n\n# Why this matters\n\nGreat photos of our gatherings start with **seeing light**. This short course walks through the three things that make a frame feel intentional: light, framing and timing.\n\n- Shoot in the room you actually have\n- Make the subject obvious\n- Capture moments, not poses",
     outcomes: ["Read the light in the auditorium before the first song", "Frame a speaker without the lectern taking over", "Pick a moment worth posting from 200 frames"],
     requirements: ["Any camera (a phone is fine)", "Access to a Sunday gathering"],
     modules: [
@@ -291,7 +301,7 @@ const COURSES = [
     // Production side of short-form video → Filmmaking (was "social-media" in the first build).
     id: "seed-course-reels", title: "Filming Short-Form Video (demo)", category: "filmmaking", level: "intermediate", topics: ["Short-form video production", "Instagram Reels", "Video editing and colour grading"],
     hue: [197, 139, 27],
-    about: "*Local demo content — not official IFC material.*\n\nShooting and cutting vertical video for a church audience: the hook shot, pacing and a clean edit.",
+    about: "*Local demo content. Not official IFC material.*\n\nShooting and cutting vertical video for a church audience: the hook shot, pacing and a clean edit.",
     outcomes: ["Shoot a 3-second hook", "Cut to the beat without losing the message", "Export a vertical master"],
     modules: [
       { id: "m1", title: "", lessons: [
@@ -306,7 +316,7 @@ const COURSES = [
     // Publishing / strategy side → Social Media & Storytelling.
     id: "seed-course-captions", title: "Captions, Hooks & Publishing (demo)", category: "social-media-storytelling", level: "beginner", topics: ["Captions and hooks", "Testing posting times for our audience", "Understanding results and improving future content"],
     hue: [94, 160, 120],
-    about: "*Local demo content — not official IFC material.*\n\nDeciding what to say, writing it for sound-off viewing, and learning from what happened after you posted.",
+    about: "*Local demo content. Not official IFC material.*\n\nDeciding what to say, writing it for sound-off viewing, and learning from what happened after you posted.",
     outcomes: ["Write a caption that stands on its own", "Pick a posting time on purpose", "Read the response without chasing numbers"],
     modules: [
       { id: "m1", title: "", lessons: [
@@ -318,7 +328,7 @@ const COURSES = [
   {
     id: "seed-course-heart", title: "Why We Serve: An Introduction (demo)", category: "heart-of-serving", level: "beginner", topics: ["Why we serve", "Receiving feedback"],
     hue: [120, 90, 170],
-    about: "*Local demo content — not official IFC material. Example values here are placeholders, not approved statements.*\n\nA short orientation for anyone joining the creative team.",
+    about: "*Local demo content. Not official IFC material. Example values here are placeholders, not approved statements.*\n\nA short orientation for anyone joining the creative team.",
     outcomes: ["Describe who our content serves", "Know how feedback works on this team"],
     modules: [{ id: "m1", title: "", lessons: [
       { id: "l1", title: "People first", video: yt("dQw4w9WgXcQ"), durationMinutes: 5, description: "The camera is in the room for the people in the room." },
@@ -328,7 +338,7 @@ const COURSES = [
   {
     id: "seed-course-worship", title: "Lyric Slides That Don't Distract (demo)", category: "worship-visuals", level: "beginner", topics: ["Layout, typography, and colour"],
     hue: [90, 60, 150],
-    about: "*Local demo content.* Published, but filed under a HIDDEN category — learners can't see it until the category is restored.",
+    about: "*Local demo content.* Published, but filed under a HIDDEN category, so learners can't see it until the category is shown again.",
     outcomes: ["Keep lyric slides legible from the back row"],
     modules: [{ id: "m1", title: "", lessons: [{ id: "l1", title: "Contrast and line length", kind: "written", video: null, durationMinutes: 4, description: "Two lines per slide; never centred body text over a busy background." }] }],
   },
@@ -336,7 +346,7 @@ const COURSES = [
   {
     id: "seed-course-camera", title: "Camera Fundamentals (demo)", category: "filmmaking", level: "beginner", topics: ["Digital cameras and exposure"],
     hue: [60, 70, 120],
-    about: "*Local demo content — not official IFC training.*\n\nHow a camera turns light into an image, and the three settings you'll touch on every shoot.",
+    about: "*Local demo content. Not official IFC training.*\n\nHow a camera turns light into an image, and the three settings you'll touch on every shoot.",
     outcomes: ["Set exposure by hand", "Choose a frame rate for the job", "Nail focus on a moving subject"],
     previewVideo: yt("dQw4w9WgXcQ"),
     modules: [
@@ -354,7 +364,7 @@ const COURSES = [
   {
     id: "seed-course-lighting", title: "Lighting Fundamentals (demo)", category: "filmmaking", level: "beginner", topics: ["Cinematography, lighting, framing, and movement"],
     hue: [160, 110, 40],
-    about: "*Local demo content — not official IFC training.*\n\nOne light, then two, then the room you actually have on a Sunday.",
+    about: "*Local demo content. Not official IFC training.*\n\nOne light, then two, then the room you actually have on a Sunday.",
     outcomes: ["Place a key light for an interview", "Control contrast with negative fill"],
     modules: [{ id: "m1", title: "", lessons: [
       { id: "l1", title: "One light, one face", kind: "video", video: yt("dQw4w9WgXcQ"), durationMinutes: 11, description: "Key light position and what it says about the subject." },
@@ -364,7 +374,7 @@ const COURSES = [
   {
     id: "seed-course-resolve", title: "DaVinci Resolve Essentials (demo)", category: "filmmaking", level: "intermediate", topics: ["Video editing and colour grading", "DaVinci Resolve"],
     hue: [40, 90, 110],
-    about: "*Local demo content — not official IFC training.*\n\nImport, cut, grade and export a short piece in Resolve.",
+    about: "*Local demo content. Not official IFC training.*\n\nImport, cut, grade and export a short piece in Resolve.",
     outcomes: ["Organise media and a timeline", "Apply a basic primary grade", "Export for Instagram and YouTube"],
     modules: [{ id: "m1", title: "", lessons: [
       { id: "l1", title: "Project setup and media", kind: "video", video: yt("dQw4w9WgXcQ"), durationMinutes: 10, description: "" },
@@ -376,7 +386,7 @@ const COURSES = [
   {
     id: "seed-course-story", title: "Storytelling Through Film (demo)", category: "filmmaking", level: "intermediate", topics: ["Storyboarding and shot planning", "Sound and interviews"],
     hue: [90, 60, 130],
-    about: "*Local demo content — not official IFC training.*\n\nFrom a testimony interview to a finished three-minute film.",
+    about: "*Local demo content. Not official IFC training.*\n\nFrom a testimony interview to a finished three-minute film.",
     outcomes: ["Plan a shot list from a story beat", "Record a clean interview"],
     modules: [{ id: "m1", title: "", lessons: [
       { id: "l1", title: "Finding the story", kind: "written", video: null, durationMinutes: 6, description: "Every testimony has a before, a turn and an after. Find the turn first." },
@@ -386,14 +396,14 @@ const COURSES = [
   {
     id: "seed-course-brand", title: "Designing Inside the Brand (demo)", category: "graphic-design", level: "beginner", topics: ["Brand consistency", "Event artwork"],
     hue: [13, 148, 136],
-    about: "*Local demo content — not official IFC material.*\n\nType, colour and layout for event graphics that still look like us.", outcomes: ["Use the type scale", "Build a poster from the template"],
+    about: "*Local demo content. Not official IFC material.*\n\nType, colour and layout for event graphics that still look like us.", outcomes: ["Use the type scale", "Build a poster from the template"],
     modules: [{ id: "m1", title: "", lessons: [{ id: "l1", title: "The template, explained", video: yt("dQw4w9WgXcQ"), durationMinutes: 7, description: "Where everything lives and why." }] }],
   },
   {
     // Deliberately left on the LEGACY id to exercise backward-compatible reading (→ Filmmaking).
     id: "seed-course-draft", title: "Multi-cam Basics (demo draft)", category: "videography", level: "advanced", status: "draft",
     hue: [120, 120, 130],
-    about: "Work in progress — learners can't see this one.", outcomes: [],
+    about: "Work in progress. Learners can't see this one.", outcomes: [],
     modules: [{ id: "m1", title: "", lessons: [{ id: "l1", title: "Camera positions", video: null, durationMinutes: 0, description: "" }] }],
   },
 ];
@@ -459,8 +469,8 @@ async function seedAcademy() {
     // No portrait cover: shows the legacy LANDSCAPE upload letterboxed (see below).
     { id: "creating-together", name: "Creating Together", description: "The practical process that turns an idea into approved, published content.", hue: null },
     // Demo records exercising the new behaviour:
-    { id: "sound-and-audio", name: "Sound & Audio (demo, empty)", short: "Sound & Audio", description: "Local demo category with no courses yet — shows the empty state.", hue: null },
-    { id: "worship-visuals", name: "Worship Visuals (demo, hidden)", short: "Worship Visuals", description: "Local demo category that is HIDDEN — its published course is invisible to learners.", hue: [90, 60, 150], hidden: true },
+    { id: "sound-and-audio", name: "Sound & Audio (demo, empty)", short: "Sound & Audio", description: "Local demo category with no courses yet. It shows the empty state.", hue: null },
+    { id: "worship-visuals", name: "Worship Visuals (demo, hidden)", short: "Worship Visuals", description: "Local demo category that is HIDDEN. Its published course is invisible to learners.", hue: [90, 60, 150], hidden: true },
   ];
   for (const [i, c] of CATS.entries()) {
     let cover = null;
@@ -541,11 +551,11 @@ async function seedAcademy() {
   // ---- Quick guides (standalone help; video + notes, or text only) ----
   const GUIDES = [
     { id: "seed-guide-plan", title: "Planning a post: message first (demo)", category: "social-media-storytelling", topics: ["Content planning and storytelling", "Content ideas and audience needs"],
-      video: null, body: "*Local demo content — not official IFC material.*\n\n## Before you shoot anything\n\n1. Who is this for?\n2. What's the one thing they should take away?\n3. What format fits that — a Reel, a carousel, a photo?\n\nWrite the answer in one sentence and keep it visible while you work.", resources: [{ label: "Planning template (demo)", url: "https://example.org/academy/plan" }], durationMinutes: 4 },
+      video: null, body: "*Local demo content. Not official IFC material.*\n\n## Before you shoot anything\n\n1. Who is this for?\n2. What's the one thing they should take away?\n3. What format fits that — a Reel, a carousel, a photo?\n\nWrite the answer in one sentence and keep it visible while you work.", resources: [{ label: "Planning template (demo)", url: "https://example.org/academy/plan" }], durationMinutes: 4 },
     { id: "seed-guide-publish", title: "Publishing checklist (demo)", category: "social-media-storytelling", topics: ["Choosing formats", "Testing posting times for our audience"],
       video: yt("dQw4w9WgXcQ"), body: "*Local demo content.*\n\n- Caption reads without sound\n- Alt text added\n- Posting time chosen on purpose\n- Marked **Posted** on the Creatives Board", resources: [], durationMinutes: 3 },
     { id: "seed-guide-handover", title: "Organising files and handing over (demo)", category: "creating-together", topics: ["Organizing files and handing work over", "Using IFC Creatives Board"],
-      video: null, body: "*Local demo content — folder names below are examples, not an approved standard.*\n\n## Naming\n\n`YYYY-MM-DD_event_shortname` — one folder per shoot.\n\n## Hand-over\n\nPaste the folder link into the content's **Links** on the Board, then move it to **In Review**.", resources: [], durationMinutes: 3 },
+      video: null, body: "*Local demo content. Folder names below are examples, not an approved standard.*\n\n## Naming\n\n`YYYY-MM-DD_event_shortname` — one folder per shoot.\n\n## Hand-over\n\nPaste the folder link into the content's **Links** on the Board, then move it to **In Review**.", resources: [], durationMinutes: 3 },
     { id: "seed-guide-feedback", title: "Receiving feedback well (demo)", category: "heart-of-serving", topics: ["Receiving feedback", "Teamwork and preparation"],
       video: yt("dQw4w9WgXcQ"), body: "*Local demo content.*\n\nNotes are about the work, not the person. Ask what the note is protecting before you defend the cut.", resources: [], durationMinutes: 5 },
     { id: "seed-guide-export", title: "Exporting photos for the web (demo)", category: "photography", topics: ["Exporting and delivering images", "Lightroom"],
@@ -582,7 +592,7 @@ async function seedAcademy() {
       { id: "s4", type: "lesson", courseId: "seed-course-captions", lessonId: "l1",             required: true,  label: "Write the caption" },
       { id: "s5", type: "guide",  guideId: "seed-guide-publish",                                required: true,  label: "Publish the content" },
       { id: "s6", type: "lesson", courseId: "seed-course-captions", lessonId: "l2",             required: true,  label: "Review the response" },
-      { id: "s7", type: "guide",  guideId: "seed-guide-draft",                                  required: false, label: "Bonus: colour grading (unpublished demo — shows the unavailable state)" },
+      { id: "s7", type: "guide",  guideId: "seed-guide-draft",                                  required: false, label: "Bonus: colour grading (unpublished demo that shows the unavailable state)" },
     ],
     createdAt: now, createdBy: "seed-jane", updatedAt: now, updatedBy: "seed-jane", publishedAt: now,
   });

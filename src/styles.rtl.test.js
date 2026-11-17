@@ -11,7 +11,7 @@ const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
 const read = (f) => readFileSync(new URL("./" + f, import.meta.url), "utf8");
 const app = read("App.jsx");
 const admin = read("AdminScreen.jsx");
-const MODULES = ["App.jsx", "AdminScreen.jsx", "controls.jsx", "ProfileDrawer.jsx", "notifShell.jsx", "loading.jsx"];
+const MODULES = ["App.jsx", "AdminScreen.jsx", "controls.jsx", "AppMenu.jsx", "notifShell.jsx", "loading.jsx"];
 
 // Documented allowlist of INTENTIONAL physical inline styles (not reading-direction):
 // vertical/centering transforms, top/bottom, fixed square sizes, etc. Keep empty of
@@ -120,8 +120,8 @@ test("mixed-direction user content is bidi-isolated (dir=auto / <bdi>)", () => {
   assert.ok(/<bdi>\{u\.name\}<\/bdi>|dir="auto"><bdi>\{u\.name\}/.test(app), "user names in search should be bdi-isolated");
   assert.ok(/className="sb-detail-val" dir="auto"/.test(app), "detail values should use dir=auto");
   assert.ok(/dir="auto"[^>]*aria-label="Search tasks|value=\{q\}[^>]*dir="auto"/.test(app), "the search input should use dir=auto");
-  const pd = read("ProfileDrawer.jsx");
-  assert.ok(/<bdi>\{me\.name\}<\/bdi>/.test(pd) && /<bdi>\{me\.email\}<\/bdi>/.test(pd), "profile name + email should be bdi-isolated");
+  const pd = read("AppMenu.jsx");
+  assert.ok(/<bdi>\{me\??\.name\}<\/bdi>/.test(pd) && /<bdi>\{me\??\.email\}<\/bdi>/.test(pd), "account menu name + email should be bdi-isolated");
   // mention typeahead options isolate names too (MentionComposer)
   const mc = read("MentionComposer.jsx");
   assert.ok(/<bdi>\{item\.user\.name\}<\/bdi>/.test(mc), "mention option names should be bdi-isolated");

@@ -19,7 +19,11 @@ export function continueTargets(courses, progressByCourse, limit = 3) {
   return (courses || [])
     .filter((c) => c.status === "published" && progressByCourse[c.id] && (progressByCourse[c.id].startedAt || progressByCourse[c.id].lastLessonId))
     .map((c) => ({ course: c, progress: progressByCourse[c.id], summary: estimateProgress(c, progressByCourse[c.id]), lastViewedMs: toMs(progressByCourse[c.id].lastViewedAt) }))
-    .filter((e) => !e.summary.completed)
+    // finished courses drop out; "ready to finish" ones (all required lessons
+    // done, Finish course not pressed yet) stay so the learner can finish them
+    // (a legacy completion — all done, never touched by a v6.5 server write — is finished too)
+    .filter((e) => !e.progress.finishedAt && !(e.summary.completed && !e.progress.progressModel))
+    .map((e) => ({ ...e, ready: e.summary.completed }))
     .sort((a, b) => b.lastViewedMs - a.lastViewedMs)
     .slice(0, limit)
     .map((e) => ({ ...e, nextLessonId: nextLessonIdFromModules(e.course, e.progress) }));
@@ -56,8 +60,8 @@ export function recommendations({ me, courses = [], progressByCourse = {}, lesso
   for (const e of continueTargets(visible, progressByCourse)) {
     const lesson = e.nextLessonId ? lessonsById[`${e.course.id}/${e.nextLessonId}`] || null : null;
     const first = !e.progress.lastLessonId;
-    push({ kind: "continue", course: e.course, lesson, lessonId: e.nextLessonId, summary: e.summary,
-      reason: first ? `Because you started ${e.course.title}` : "Continue learning" });
+    push({ kind: "continue", course: e.course, lesson: e.ready ? null : lesson, lessonId: e.ready ? null : e.nextLessonId, summary: e.summary, ready: e.ready,
+      reason: e.ready ? "Ready to finish" : first ? `Because you started ${e.course.title}` : "Continue learning" });
   }
   const notStarted = (c) => !progressByCourse[c.id] || !(progressByCourse[c.id].startedAt || progressByCourse[c.id].lastLessonId);
   for (const catId of departmentCategories(me)) {

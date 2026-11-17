@@ -8,7 +8,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import React from "react";
 
 vi.mock("./firebase", () => ({ db: {}, callFunction: vi.fn(), getStorageInstance: vi.fn() }));
-vi.mock("./logging", () => ({ logIssue: vi.fn() }));
+vi.mock("./logging", () => ({ logIssue: vi.fn(), reportIssue: vi.fn() }));
 vi.mock("./academyData.js", async () => {
   const actual = await vi.importActual("./academyProgress.js");
   return {
@@ -19,7 +19,7 @@ vi.mock("./academyData.js", async () => {
     useLessons: () => ({ docs: [], loaded: true }), usePurposeVideo: () => ({ data: null, loaded: true }),
     useProgress: () => ({ data: null, loaded: true }), useAllProgress: () => ({ docs: [], loaded: true, byCourse: {} }),
     useComments: () => ({ docs: [], loaded: true }), useLeaderProgress: () => ({ docs: [], loaded: true }), useLeaderAttempts: () => ({ docs: [], loaded: true }),
-    recordLessonView: vi.fn(), startCourse: vi.fn(), savePlayback: vi.fn(), markVideoWatched: vi.fn(), setManualDone: vi.fn(),
+    recordLessonView: vi.fn(), startCourse: vi.fn(), savePlayback: vi.fn(), markVideoWatched: vi.fn(), setManualDone: vi.fn(), finishCourse: vi.fn(), requestQuizAttempt: vi.fn(), quizAttemptStatus: vi.fn(), grantQuizAttempts: vi.fn(),
     addComment: vi.fn(), editComment: vi.fn(), deleteComment: vi.fn(), pinComment: vi.fn(), _unused: actual,
   };
 });
@@ -64,7 +64,11 @@ describe("CourseCard", () => {
     const bar = screen.getByRole("progressbar");
     expect(bar).toHaveAttribute("aria-valuenow", "25");
     expect(bar).toHaveAccessibleName("Lighting Basics: 25% complete");
-    rerender(<CourseCard course={course} progress={{ startedAt: 1, lessons: { a: { videoWatched: true }, b: { videoWatched: true }, c: { manualDone: true }, d: { videoWatched: true } } }} onOpen={() => {}} />);
+    const all = { startedAt: 1, progressModel: 2, lessons: { a: { videoWatched: true }, b: { videoWatched: true }, c: { manualDone: true }, d: { videoWatched: true } } };
+    rerender(<CourseCard course={course} progress={all} onOpen={() => {}} />);
+    expect(screen.getByText("Ready to finish")).toBeInTheDocument();             // requirements done, Finish not pressed
+    expect(screen.getByRole("button", { name: /\(ready to finish\)/ })).toBeInTheDocument();
+    rerender(<CourseCard course={course} progress={{ ...all, finishedAt: 5 }} onOpen={() => {}} />);
     expect(screen.getByText("Completed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /\(completed\)/ })).toBeInTheDocument();
   });
@@ -105,21 +109,22 @@ describe("QuizPanel", () => {
     fireEvent.click(screen.getByRole("radio", { name: "f/2" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "x" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit answers" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith("c", "l1", { q1: ["a"], q2: ["a"] }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith("c", "l1", { q1: ["a"], q2: ["a"] }, expect.stringMatching(/^[a-z0-9]{8,}$/)));
     const status = await screen.findByRole("status");
     expect(status).toHaveTextContent("Not yet");
     expect(status).toHaveTextContent("1 of 2 correct (50%)");
     expect(screen.getByText("Smaller number, wider aperture.")).toBeInTheDocument();
-    expect(screen.getAllByText("correct")).toHaveLength(3);          // a, a, c
+    expect(screen.getAllByText("Your answer · correct")).toHaveLength(2);   // q1 a, q2 a
+    expect(screen.getByText("Correct answer · not selected")).toBeInTheDocument();   // q2 c, missed
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
   test("a failed submission shows the error and keeps the form", async () => {
-    const submit = vi.fn().mockRejectedValue(new Error("You've used all the attempts for this quiz."));
+    const submit = vi.fn().mockRejectedValue(Object.assign(new Error("You've used all the attempts for this quiz."), { code: "functions/resource-exhausted" }));
     render(<QuizPanel lesson={lesson} courseId="c" me={me} state={{}} submit={submit} />);
     fireEvent.click(screen.getByRole("radio", { name: "f/8" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "y" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit answers" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("used all the attempts");
+    expect(await screen.findByRole("alert")).toHaveTextContent("used all your attempts");
     expect(screen.getByRole("button", { name: "Submit answers" })).toBeInTheDocument();
   });
   test("retry limit reached → no form", () => {
@@ -145,8 +150,8 @@ describe("Library cards label their format and use the right artwork shape", () 
     expect(screen.getByText("Filmmaking")).toBeInTheDocument();   // legacy "videography" reads as Filmmaking
 
     rerender(<GuideCard guide={{ id: "g", title: "Export for web", category: "photography", status: "published", body: "x", thumb: { path: "academy/guideThumbs/g/v.jpg" } }} review={{ reviewed: true }} onOpen={() => {}} />);
-    expect(screen.getByRole("button", { name: "Export for web (quick guide) (reviewed)" })).toBeInTheDocument();
-    expect(screen.getByText("Quick guide")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export for web (resource) (reviewed)" })).toBeInTheDocument();
+    expect(screen.getByText(/Written resource|Video resource/)).toBeInTheDocument();
     expect(screen.getByText("Reviewed")).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(container.querySelector(".ac-guidethumb")).toHaveStyle({ aspectRatio: "16 / 9" });
@@ -168,13 +173,13 @@ describe("CategoryCard", () => {
     const filmmaking = { ...ACADEMY_CATEGORIES.find((c) => c.id === "filmmaking"), name: "Filmmaking" };
     const { container, rerender } = render(<CategoryCard category={filmmaking} count={4} onOpen={() => {}} />);
     expect(container.querySelector(".ac-catart")).toHaveStyle({ aspectRatio: "3 / 4" });
-    expect(screen.getByRole("button", { name: "Filmmaking — 4 courses" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filmmaking, 4 courses" })).toBeInTheDocument();
     expect(screen.getByText("Filmmaking")).toBeInTheDocument();
     expect(screen.getByText(filmmaking.purpose)).toBeInTheDocument();
     expect(container.querySelector(".ac-catart-fb.cat-filmmaking .ac-catart-mark svg")).toBeInTheDocument();   // centred icon mark, not an empty box
     expect(container.querySelector("img")).toBeNull();
     rerender(<CategoryCard category={filmmaking} count={1} imageRef={{ path: "academy/catCovers/filmmaking/v.jpg", w: 900, h: 1200 }} onOpen={() => {}} />);
-    expect(screen.getByRole("button", { name: "Filmmaking — 1 course" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filmmaking, 1 course" })).toBeInTheDocument();
     const img = container.querySelector("img.ac-catart");
     expect(img).toHaveAttribute("src", "blob:academy/catCovers/filmmaking/v.jpg");
     expect(img).not.toHaveClass("ac-img-contain");
@@ -182,7 +187,7 @@ describe("CategoryCard", () => {
     // a pre-v4 LANDSCAPE upload is shown whole (contain), never silently cropped
     rerender(<CategoryCard category={filmmaking} count={0} imageRef={{ path: "academy/categoryArt/filmmaking/old.jpg", w: 1600, h: 900 }} onOpen={() => {}} />);
     expect(container.querySelector("img.ac-catart")).toHaveClass("ac-img-contain");
-    expect(screen.getByRole("button", { name: "Filmmaking — 0 courses" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filmmaking, 0 courses" })).toBeInTheDocument();
     // a brand-new record with no artwork gets a single centred initial in the mark (no stray icon)
     rerender(<CategoryCard category={{ id: "sound-and-audio", name: "Sound & Audio", label: "Sound & Audio", purpose: "" }} count={0} onOpen={() => {}} />);
     expect(container.querySelector(".ac-catart-fb .ac-catart-mark .ac-catart-initial")).toHaveTextContent("S");

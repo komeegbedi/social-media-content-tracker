@@ -154,10 +154,44 @@ export function useSheetDrag(onClose) {
   };
 }
 
+/* The phone bottom-sheet foundation (round 7), shared by the account menu and
+   the notification panel so they enter, drag and close the same way:
+     • slides up from the bottom; closing slides it back down (instant when the
+       user prefers reduced motion) before `onClose` runs
+     • drag DOWN from the handle or the header to dismiss; a drag that starts on
+       a button, link, field or label is left alone, and the scrolling content
+       never starts a dismissal (so scrolling a list can't close the sheet)
+   Outside tap, the close button and Escape all go through `finish`; browser Back
+   is handled by the URL panel owner; focus return + inert by <Portal>. */
+export const SHEET_EXIT_MS = 200;
+const INTERACTIVE = "button,a,input,select,textarea,label,[role='radio'],[role='switch'],[contenteditable='true']";
+export function useSheet(onClose) {
+  const [closing, setClosing] = useState(false);
+  const timer = useRef(null);
+  const closingRef = useRef(false);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const finish = (action) => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    const reduce = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => (action || onClose)(), reduce ? 0 : SHEET_EXIT_MS);
+  };
+  const drag = useSheetDrag(() => finish());
+  const fromHeader = (h) => (e) => { if (e.target.closest && e.target.closest(INTERACTIVE)) return; h(e); };
+  const headerProps = {
+    onTouchStart: fromHeader(drag.handleProps.onTouchStart), onTouchMove: drag.handleProps.onTouchMove, onTouchEnd: drag.handleProps.onTouchEnd,
+    onPointerDown: fromHeader(drag.handleProps.onPointerDown), onPointerMove: drag.handleProps.onPointerMove, onPointerUp: drag.handleProps.onPointerUp,
+  };
+  return { closing, finish, handleProps: drag.handleProps, headerProps, sheetStyle: drag.sheetStyle };
+}
+
 /* Tracks a media query as a boolean (SSR-safe, updates on change). */
 export function useMediaQuery(query) {
-  const [match, setMatch] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+  const [match, setMatch] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches);
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") return undefined;
     const mq = window.matchMedia(query);
     const on = () => setMatch(mq.matches);
     on();

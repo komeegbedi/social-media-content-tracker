@@ -3421,8 +3421,11 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 
 /* Accessibility utilities: visually-hidden text (available to screen readers) and
    a Skip-to-main link that appears only when focused by keyboard. */
-.sb-vh{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
-  clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+/* visually hidden: !important so a field rule (e.g. `.sb-field input{width:100%}`,
+   which is more specific) can never give a hidden input a real box — that made
+   the guide thumbnail's file input 390px wide and the phone page scroll sideways */
+.sb-vh{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;
+  clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0!important;min-width:0!important;max-width:1px!important}
 .sb-skip{position:fixed;top:8px;inset-inline-start:8px;z-index:var(--z-modal);transform:translateY(-160%);
   background:var(--accent-fill);color:#fff;padding:10px 16px;border-radius:var(--r-control);
   font-size:0.875rem;font-weight:600;text-decoration:none;box-shadow:var(--shadow-lg);
@@ -3550,7 +3553,11 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .ac-pill.warn{background:var(--warning-muted);color:var(--warning-foreground)}
 .ac-pill.ok{background:var(--success-muted);color:var(--success-foreground)}
 .ac-pill.accent{background:var(--accent-muted);color:var(--accent-foreground)}
-.ac-back{display:inline-flex;align-items:center;gap:6px;background:none;border:0;color:var(--accent-foreground);font:inherit;font-size:var(--text-support);font-weight:500;padding:6px 4px;margin:0 0 8px -4px;border-radius:var(--r-control);cursor:pointer;min-height:36px}
+.ac-back{display:inline-flex;align-items:center;justify-content:flex-start;text-align:start;gap:6px;background:none;border:0;color:var(--accent-foreground);font:inherit;font-size:var(--text-support);font-weight:500;line-height:1.3;padding:6px 4px;margin:0 0 8px -4px;border-radius:var(--r-control);cursor:pointer;min-height:36px;max-width:100%}
+/* Icon and title start at the button's leading edge for any title length; a long
+   title wraps (two lines at most, then an ellipsis) instead of re-centring. */
+.ac-back .hi{flex:none}
+.ac-back-label{min-width:0;overflow:hidden;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 .ac-back:hover{background:var(--accent-muted)}
 .ac-link{background:none;border:0;color:var(--accent-foreground);font:inherit;font-size:var(--text-support);font-weight:500;padding:6px 6px;margin:0 -2px;border-radius:var(--r-control);cursor:pointer;min-height:32px}
 .ac-link:hover{background:var(--accent-muted)}
@@ -3687,6 +3694,12 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .ac-videomsg{display:flex;gap:10px;align-items:flex-start;background:var(--warning-muted);color:var(--warning-foreground);border-radius:var(--r-card);padding:14px;font-size:var(--text-support);line-height:1.5}
 .ac-videomsg .hi{flex:none;color:var(--warning-foreground)}
 .ac-videomsg a{color:inherit;font-weight:600}
+/* Vimeo recovery: the failure message's Retry, and the neutral slow-loading /
+   press-play notes under the player (never styled as an error). */
+.ac-videomsg > div{display:flex;flex-direction:column;align-items:flex-start;gap:10px;min-width:0}
+.ac-videomsg p{margin:0}
+.ac-videonote{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0}
+.ac-videonote p{margin:0;flex:1 1 16em}
 .ac-lessonhead{display:flex;flex-direction:column;gap:6px}
 .ac-complete{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 0 0}
 .ac-complete .sb-btn{width:auto}
@@ -4251,6 +4264,22 @@ body.ac-dragging,body.ac-dragging *{cursor:grabbing !important;-webkit-user-sele
 .ac-toolbar{display:flex;flex-wrap:wrap;gap:2px;border:1px solid var(--field-border);border-bottom:0;border-radius:var(--r-input) var(--r-input) 0 0;background:var(--surface-muted);padding:4px}
 .ac-toolbar button{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:36px;height:34px;padding:0 8px;border:0;background:none;border-radius:6px;font:inherit;font-size:var(--text-support);color:var(--text-secondary);cursor:pointer}
 .ac-toolbar button:hover{background:var(--surface);color:var(--text-primary)}
+/* contextual link editor (academyLinkEditor.jsx) */
+.ac-linkpop2{z-index:var(--z-popover);width:min(360px,calc(100vw - 16px));background:var(--surface-elevated);border:1px solid var(--border-strong);border-radius:var(--r-card);box-shadow:var(--shadow-lg);padding:12px;display:flex;flex-direction:column;gap:8px}
+.ac-linkpop2 .sb-field{margin:0}
+.ac-linkpop2 .sb-field label{font-size:var(--text-label)}
+.ac-linkpop2 input{width:100%}
+.ac-linkpop2-head b{font-size:var(--text-body)}
+.ac-linkpop2-note{margin:0}
+.ac-linkpop2-sel{margin:0;font-size:var(--text-support);overflow-wrap:anywhere}
+.ac-linkpop2-quote{color:var(--text-primary)}
+.ac-linkpop2-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.ac-linkpop2-actions .sb-btn{width:auto}
+.ac-linkpop2.is-sheet{position:fixed;inset-inline:0;width:100%;max-width:none;border-radius:var(--r-modal) var(--r-modal) 0 0;border-bottom:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom, 0px))}
+.ac-linkpop2.is-sheet .sb-btn{min-height:44px}
+.ac-linkscrim{align-items:stretch}
+.ac-toolbar button.on{background:var(--accent-muted);color:var(--accent-foreground)}
+.ac-rte a{cursor:pointer}
 .ac-linkpop{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0;padding:8px;border:1px solid var(--border-strong);border-radius:var(--r-control);background:var(--surface-elevated)}
 .ac-linkpop input{flex:1;min-width:180px}
 .ac-linkpop .sb-btn{width:auto}
@@ -4300,3 +4329,807 @@ body.ac-dragging,body.ac-dragging *{cursor:grabbing !important;-webkit-user-sele
   .ac-outline{padding:8px}
   .ac-handle{width:40px;height:44px}
 }
+
+/* ---- course end: completion panel / remaining work (Academy.jsx CourseEnd) ---- */
+.ac-courseend{margin:18px 0 6px;border-radius:var(--r-panel);border:1px solid var(--border);background:var(--surface);padding:16px 18px}
+.ac-savingdone{color:var(--text-muted);font-size:var(--text-support)}
+.ac-remaining{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 16px;background:var(--surface-muted)}
+.ac-remaining p{margin:0}
+.ac-remaining .sb-btn{width:auto}
+.ac-complete-panel{border-color:color-mix(in srgb,var(--success) 45%,var(--border));background:linear-gradient(180deg,var(--success-muted),var(--surface) 70%)}
+.ac-donehead{display:flex;gap:14px;align-items:flex-start}
+.ac-donehead .ac-h2{margin:0 0 4px}
+.ac-donehead p{margin:0 0 4px}
+.ac-donemark{flex:none;display:inline-flex;width:44px;height:44px;border-radius:50%;align-items:center;justify-content:center;background:var(--surface);color:var(--success-foreground);box-shadow:0 0 0 1px color-mix(in srgb,var(--success) 40%,transparent)}
+.ac-donemark .hi{width:30px;height:30px}
+.ac-complete-panel.is-new .ac-donemark{animation:ac-donepop 520ms var(--ease-enter) both}
+@keyframes ac-donepop{0%{transform:scale(.6);opacity:0}60%{transform:scale(1.08);opacity:1}100%{transform:scale(1)}}
+@media (prefers-reduced-motion: reduce){.ac-complete-panel.is-new .ac-donemark{animation:none}}
+.ac-donenext{margin-top:14px;display:flex;flex-direction:column;gap:6px}
+.ac-donecard{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:12px;align-items:center;text-align:start;border:1px solid var(--border);background:var(--surface);border-radius:var(--r-card);padding:8px 12px 8px 8px;cursor:pointer;font:inherit;color:inherit}
+.ac-donecard:not(:has(.ac-donecover)){grid-template-columns:minmax(0,1fr) auto;padding-inline-start:14px}
+.ac-donecard:hover{border-color:var(--border-strong)}
+.ac-donecard:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.ac-donecard > span:not(.sb-btn){display:flex;flex-direction:column;gap:2px;min-width:0}
+.ac-donecard b{overflow-wrap:anywhere}
+.ac-donecover{width:56px;border-radius:var(--r-control);overflow:hidden}
+.ac-donecta{width:auto;pointer-events:none}
+.ac-donelinks{margin-top:14px}
+.ac-donelinks .sb-btn{width:auto}
+@media(max-width:520px){.ac-donecard{grid-template-columns:48px minmax(0,1fr)}.ac-donecta{grid-column:1/-1;justify-self:start}}
+/* discussion feedback */
+.ac-discstatus{margin:0 0 6px;min-height:1.2em;font-size:var(--text-support);color:var(--success-foreground)}
+.ac-discstatus:empty{margin:0;min-height:0}
+.ac-comment:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:var(--r-card)}
+.ac-comment-gone{padding:10px 12px;border:1px dashed var(--border);border-radius:var(--r-card);font-style:italic}
+.ac-pinbtn{display:inline-flex;align-items:center;gap:4px}
+.ac-pinbtn:disabled{opacity:.7;cursor:default}
+.ac-pinned .hi{flex:none}
+.ac-pager > span:empty{display:block}
+
+/* ---- v6.4 progression: status, completion area, gated Next, locked lessons ---- */
+.ac-lessonstatus{margin:0;font-size:var(--text-support);color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px}
+.ac-lessonstatus.done{color:var(--success-foreground);font-weight:600}
+.ac-lessonstatus.done .hi{color:var(--success-foreground)}
+.ac-lessonstatus.warn{color:var(--warning-foreground);font-weight:500}
+.ac-completion{margin:20px 0 4px;display:flex;flex-direction:column;gap:8px;border:1px solid var(--accent-border);background:var(--accent-muted);border-radius:var(--r-panel);padding:16px 18px}
+.ac-completion > p{margin:0}
+.ac-completion-title{display:flex;align-items:center;gap:8px;margin:0;font-size:1rem;font-weight:600;line-height:1.35;text-wrap:balance}
+.ac-completion-title .hi{flex:none;width:22px;height:22px}
+.ac-completion.is-done{border-color:color-mix(in srgb,var(--success) 40%,var(--border));background:var(--success-muted)}
+.ac-completion.is-done .ac-completion-title,.ac-completion.is-done .ac-completion-title .hi{color:var(--success-foreground)}
+.ac-completion.is-blocked{border-color:color-mix(in srgb,var(--warning) 45%,var(--border));background:var(--warning-muted)}
+.ac-completion.is-blocked .ac-completion-title .hi{color:var(--warning-foreground)}
+.ac-completion.is-preview{background:var(--surface-muted);border-color:var(--border)}
+.ac-completion-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+.ac-completion-row .sb-btn{width:auto}
+.ac-completion-hint{margin:0;flex:1 1 220px;color:var(--text-secondary);font-size:var(--text-support);line-height:1.45}
+.ac-completion .ac-savestate{margin:0}
+.ac-watchbar{display:flex;flex-direction:column;gap:4px;max-width:420px}
+.ac-linkbtn{align-self:flex-start;background:none;border:0;padding:0;font:inherit;font-size:var(--text-support);color:var(--accent-foreground);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.ac-linkbtn:disabled{color:var(--text-muted);cursor:default;text-decoration:none}
+.ac-linkbtn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:3px}
+.ac-note .ac-linkbtn{font-size:inherit}
+.ac-quizoutcome{margin:10px 0 0;font-size:var(--text-support);color:var(--text-secondary);line-height:1.5}
+
+/* pager: "Previous" / "Next lesson" with the lesson title as supporting text */
+.ac-pager{align-items:flex-start}
+.ac-pagerbtn{display:inline-flex;align-items:center;gap:8px;min-height:48px;height:auto;padding-block:6px;text-align:start}
+.ac-pagerbtn.next{text-align:end}
+.ac-pagerlbl{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.ac-pagerlbl > span:first-child{font-weight:600}
+.ac-pager .ac-pagersub{font-size:var(--text-label);font-weight:400;opacity:.85}
+.ac-pagernext{display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:55%;min-width:0;margin-inline-start:auto}
+.ac-pager .ac-pagernext .sb-btn{max-width:100%}
+/* disabled Next: subdued but legible, with its reason in plain text below */
+.ac-pagerbtn.next:disabled{opacity:1;background:var(--surface-muted);color:var(--text-secondary);border-color:var(--border);box-shadow:none;cursor:not-allowed}
+.ac-pagerwhy{margin:0;font-size:var(--text-support);color:var(--text-secondary);text-align:end;line-height:1.4}
+@media(max-width:560px){
+  .ac-pager{flex-direction:column-reverse;align-items:stretch}
+  .ac-pager > span:empty{display:none}
+  .ac-pagernext{max-width:none;align-items:stretch;margin:0}
+  .ac-pager .sb-btn{max-width:none;width:100%;justify-content:space-between}
+  .ac-pagerwhy{text-align:start}
+  .ac-pagerbtn.next{text-align:start}
+  .ac-pagerlbl{align-items:flex-start;text-align:start;flex:1}
+}
+
+/* locked lessons */
+.ac-lesson.locked{cursor:default;color:var(--text-secondary)}
+.ac-lesson.locked:hover{background:none}
+.ac-lesson.locked .ac-lessonidx{background:var(--surface-muted);color:var(--text-muted)}
+.ac-lesson.locked .ac-lessonidx .hi{color:var(--text-muted)}
+.ac-lesson.locked.current{background:var(--surface-muted)}
+.ac-locked{margin-top:12px;display:flex;flex-direction:column;align-items:flex-start;gap:6px;border:1px solid var(--border);background:var(--surface);border-radius:var(--r-panel);padding:22px 20px}
+.ac-locked p{margin:0;max-width:62ch;line-height:1.5}
+.ac-locked .ac-h1{margin:0 0 4px}
+.ac-locked .ac-h1:focus{outline:none}
+.ac-locked .ac-actions{margin-top:8px}
+.ac-locked .ac-actions .sb-btn{width:auto}
+.ac-lockedmark{display:inline-flex;width:40px;height:40px;border-radius:50%;align-items:center;justify-content:center;background:var(--surface-muted);color:var(--text-secondary);margin-bottom:4px}
+.ac-ready{display:inline-flex;align-items:center;gap:5px;color:var(--accent-foreground);font-size:var(--text-support);font-weight:600}
+
+/* Finish course */
+.ac-finish{border-color:var(--accent-border);background:linear-gradient(180deg,var(--accent-muted),var(--surface) 80%);display:flex;flex-direction:column;gap:12px}
+.ac-finish > p{margin:0}
+.ac-finishhead{display:flex;gap:14px;align-items:flex-start}
+.ac-finishhead .ac-h2{margin:0 0 4px;text-wrap:balance}
+.ac-finishhead p{margin:0;color:var(--text-secondary)}
+.ac-finishmark{flex:none;display:inline-flex;width:44px;height:44px;border-radius:50%;align-items:center;justify-content:center;background:var(--accent-fill);color:var(--on-accent)}
+.ac-finishmark .hi{width:24px;height:24px;color:var(--on-accent)}
+.ac-finish .ac-actions{margin:0}
+.ac-finish .ac-actions .sb-btn{width:auto}
+
+/* the celebration (shown once, in the tab that finished) */
+.ac-celebrate{position:relative;overflow:hidden;scroll-margin-top:16px;border-color:var(--accent-border);background:radial-gradient(120% 90% at 50% 0%,var(--accent-muted),var(--surface) 70%);padding:28px 22px 20px}
+.ac-confetti{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
+.ac-celebrate > *:not(.ac-confetti){position:relative;z-index:1}
+.ac-celebrate-hero{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px}
+.ac-emblem{width:72px;height:72px;margin-bottom:4px}
+.ac-emblem-ring{fill:var(--accent-fill);stroke:none;transform-origin:36px 36px;animation:ac-emblem-pop 520ms var(--ease-enter) both}
+.ac-emblem-check{fill:none;stroke:var(--on-accent);stroke-width:6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:48;stroke-dashoffset:48;animation:ac-emblem-draw 420ms 300ms var(--ease-standard) forwards}
+@keyframes ac-emblem-pop{0%{transform:scale(.5);opacity:0}65%{transform:scale(1.06);opacity:1}100%{transform:scale(1)}}
+@keyframes ac-emblem-draw{to{stroke-dashoffset:0}}
+.ac-celebrate.is-static .ac-emblem-ring{animation:none}
+.ac-celebrate.is-static .ac-emblem-check{animation:none;stroke-dashoffset:0}
+@media (prefers-reduced-motion: reduce){.ac-emblem-ring{animation:none}.ac-emblem-check{animation:none;stroke-dashoffset:0}}
+.ac-celebrate-title{margin:0;font-size:1.75rem;line-height:1.15;letter-spacing:-.01em;text-wrap:balance}
+.ac-celebrate-title:focus{outline:none}
+.ac-celebrate-title:focus-visible{outline:2px solid var(--focus-ring);outline-offset:4px;border-radius:4px}
+.ac-celebrate-lead{margin:0;font-size:1.0625rem}
+.ac-celebrate-warm{margin:0;color:var(--text-secondary);max-width:52ch}
+.ac-celebrate-facts{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 28px;margin:10px 0 0;padding:10px 18px;border-radius:var(--r-card);background:color-mix(in srgb,var(--surface) 80%,transparent);border:1px solid var(--border)}
+.ac-celebrate-facts div{display:flex;flex-direction:column;align-items:center;gap:1px}
+.ac-celebrate-facts dt{font-size:var(--text-label);color:var(--text-muted);letter-spacing:.02em}
+.ac-celebrate-facts dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums}
+.ac-keepgrowing{margin-top:18px;border-top:1px solid var(--border);padding-top:14px}
+.ac-keephead{margin:0 0 6px}
+.ac-donenext-wait{min-height:74px}
+.ac-keepgrowing .ac-donenext{margin-top:0}
+
+/* ---- v6.5 prerequisites (editor) ---- */
+.ac-access{display:flex;flex-direction:column;gap:8px;margin:18px 0 6px;padding:14px 16px;border:1px solid var(--border);border-radius:var(--r-card);background:var(--surface)}
+.ac-access .ac-h3{margin:0}
+.ac-fieldhint{margin:0;font-size:var(--text-support);color:var(--text-muted);line-height:1.45}
+.ac-prereqs{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.ac-prereqs .ac-fieldlabel{margin:0}
+.ac-prereq-none{margin:0;padding:8px 10px;border:1px dashed var(--border);border-radius:var(--r-control);color:var(--text-secondary);font-size:var(--text-support)}
+.ac-prereqchips{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.ac-prereqchips li{display:inline-flex;align-items:center;gap:2px;max-width:100%;border:1px solid var(--accent-border);background:var(--accent-muted);border-radius:999px;padding:2px 4px 2px 10px}
+.ac-prereqchips li.missing{border-color:color-mix(in srgb,var(--danger) 45%,var(--border));background:var(--danger-muted);color:var(--danger-foreground)}
+.ac-chiplink{background:none;border:0;padding:4px 2px;font:inherit;font-size:var(--text-support);color:var(--accent-foreground);cursor:pointer;text-align:start;overflow-wrap:anywhere}
+.ac-chipx{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:0;border-radius:50%;background:none;color:inherit;cursor:pointer}
+.ac-chipx:hover{background:color-mix(in srgb,var(--accent-fill) 14%,transparent)}
+.ac-chiplink:focus-visible,.ac-chipx:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px;border-radius:6px}
+.ac-prereqpick input{width:100%}
+.ac-prereqopts{list-style:none;margin:6px 0 0;padding:4px;border:1px solid var(--border);border-radius:var(--r-control);background:var(--surface);max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:2px}
+.ac-prereqopts li > .ac-cardsub{display:block;padding:6px 8px}
+.ac-prereqopts button{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:start;background:none;border:0;border-radius:6px;padding:7px 8px;font:inherit;color:inherit;cursor:pointer;min-height:40px}
+.ac-prereqopts button:hover:not(:disabled){background:var(--surface-muted)}
+.ac-prereqopts button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.ac-prereqopts button:disabled{cursor:not-allowed;color:var(--text-muted)}
+
+/* ---- v6.5 prerequisites (learner) ---- */
+.ac-locked-why{font-size:var(--text-body)}
+.ac-prereqcheck{list-style:none;margin:4px 0 6px;padding:0;display:flex;flex-direction:column;gap:6px;width:100%;max-width:560px}
+.ac-prereqcheck li{display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--r-control);background:var(--surface)}
+.ac-prereqcheck li.done{background:var(--success-muted);border-color:color-mix(in srgb,var(--success) 35%,var(--border))}
+.ac-prereqcheck li.done .hi{color:var(--success-foreground)}
+.ac-prereqcheck .ac-linkbtn{align-self:center;text-align:start;font-size:var(--text-body)}
+.ac-checkdot{width:14px;height:14px;border-radius:50%;border:2px solid var(--border-strong);justify-self:center}
+.ac-pagerroute{margin:0;font-size:var(--text-support);text-align:end}
+@media(max-width:560px){.ac-pagerroute{text-align:start}.ac-prereqcheck li{grid-template-columns:20px minmax(0,1fr)}.ac-prereqcheck li > .ac-cardsub{grid-column:2}}
+
+/* ---- v6.5 quiz attempts + answer feedback ---- */
+.ac-attemptline{margin-top:0}
+.ac-qhow{display:block;font-weight:400;font-size:var(--text-support);color:var(--text-muted);margin-top:2px}
+.ac-qverdict{font-size:var(--text-label);font-weight:600;margin-inline-start:6px;padding:1px 6px;border-radius:6px}
+.ac-qverdict.ok{color:var(--success-foreground);background:var(--success-muted)}
+.ac-qverdict.bad{color:var(--danger-foreground);background:var(--danger-muted)}
+.ac-opts li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.ac-optmark{display:inline-flex;width:16px;justify-content:center;font-weight:700}
+.ac-opts li.ac-opt-hit{border-color:var(--success-foreground);color:var(--success-foreground);background:var(--success-muted)}
+.ac-opts li.ac-opt-wrong{border-color:var(--danger-foreground);color:var(--danger-foreground);background:var(--danger-muted)}
+.ac-opts li.ac-opt-missed{border-style:dashed;border-color:var(--warning-foreground);color:var(--text-primary);background:var(--warning-muted)}
+.ac-tag.ok{color:var(--success-foreground);background:var(--surface)}
+.ac-tag.bad{color:var(--danger-foreground);background:var(--surface)}
+.ac-tag.missed{color:var(--warning-foreground);background:var(--surface)}
+.ac-quizretry{margin:10px 0 4px}
+.ac-quizretry .sb-btn{width:auto}
+.ac-quizrecover,.ac-quizexhausted{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin:10px 0;padding:12px 14px;border:1px solid color-mix(in srgb,var(--warning) 40%,var(--border));border-radius:var(--r-card);background:var(--warning-muted)}
+.ac-quizrecover p,.ac-quizexhausted p{margin:0;line-height:1.5}
+.ac-quizexhausted .ac-quizrecover{margin:0;padding:0;border:0;background:none}
+.ac-quizrecover .sb-btn{width:auto}
+.ac-leaderdetail td{background:var(--surface-muted)}
+.ac-attemptlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.ac-attemptlist li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}
+.ac-attemptlist .sb-btn{width:auto}
+.sb-field.ac-prereqpick{margin:0}
+
+/* ---- v6.6 prerequisite order + recommended prior knowledge ---- */
+.ac-prereqnotice{margin:6px 8px 8px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--warning) 45%,var(--border));border-radius:var(--r-card);background:var(--warning-muted);font-size:var(--text-support)}
+.ac-prereqnotice p{margin:0 0 6px;line-height:1.45}
+.ac-prereqnotice p .hi{vertical-align:-3px;color:var(--warning-foreground)}
+.ac-prereqnotice ul{margin:0;padding-inline-start:18px;display:flex;flex-direction:column;gap:4px}
+.ac-prereqnotice .ac-linkbtn{text-align:start}
+.ac-outwarn{display:inline-flex;align-items:center;gap:3px;margin-inline-start:6px;color:var(--warning-foreground);font-weight:600}
+.ac-prereqissue{padding:10px 12px;border:1px solid color-mix(in srgb,var(--warning) 45%,var(--border));border-radius:var(--r-control);background:var(--warning-muted)}
+.ac-prereqissue p{margin:0 0 8px;font-size:var(--text-support);line-height:1.45;color:var(--text-primary)}
+.ac-prereqissue .ac-actions{margin:0;flex-wrap:wrap;gap:6px}
+.ac-prereqissue .sb-btn{width:auto}
+.ac-locked.is-broken .ac-lockedmark{background:var(--warning-muted);color:var(--warning-foreground)}
+.ac-editorflag{display:flex;gap:8px;align-items:flex-start;margin:0 0 12px;padding:10px 12px;border:1px dashed color-mix(in srgb,var(--warning) 55%,var(--border));border-radius:var(--r-control);background:var(--warning-muted);font-size:var(--text-support);line-height:1.45}
+.ac-editorflag .hi{flex:none;color:var(--warning-foreground);margin-top:1px}
+.ac-prior-learn{display:flex;flex-direction:column;gap:6px}
+.ac-prior-learn > p{margin:0}
+.ac-priorcourses{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.ac-priorcourses li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.ac-priorcourses .ac-linkbtn{font-size:var(--text-body);font-weight:550}
+.ac-priorcourses .ac-done{font-weight:500}
+.ac-priornote{margin:2px 0 0;padding-inline-start:10px;border-inline-start:2px solid var(--border-strong);color:var(--text-secondary);font-size:var(--text-support);line-height:1.5}
+.ac-priorlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.ac-priorlist li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 8px;padding:6px 6px 6px 10px;border:1px solid var(--accent-border);background:var(--accent-muted);border-radius:var(--r-control)}
+.ac-priorlist li.warn{border-color:color-mix(in srgb,var(--warning) 45%,var(--border));background:var(--warning-muted)}
+.ac-priortitle{min-width:0;overflow-wrap:anywhere}
+.ac-priorlist .ac-chipx{grid-column:2;grid-row:1}
+.ac-priorwarn{grid-column:1;display:inline-flex;align-items:center;gap:4px;font-size:var(--text-label);color:var(--warning-foreground)}
+.ac-prior{margin-top:4px}
+.ac-prereqnotice li .ac-linkbtn{display:inline;text-align:start}
+.ac-qalist li.asked{padding:8px 10px;border-radius:var(--r-control);background:var(--warning-muted);border:1px solid color-mix(in srgb,var(--warning) 40%,var(--border))}
+
+/* v6.7 — cards and breadcrumbs are real links (<a>); keep the card look. */
+a.ac-catbtn,a.ac-cardbtn,a.ac-recbtn,a.ac-contcard,a.ac-priorcard{text-decoration:none;color:inherit}
+a.ac-catbtn:visited,a.ac-cardbtn:visited,a.ac-recbtn:visited,a.ac-contcard:visited{color:inherit}
+.ac-crumbs a.ac-link{text-decoration:none}
+.ac-crumbs a.ac-link:hover{text-decoration:underline}
+
+/* v6.7 — Recommended prior knowledge as compact cards (secondary to Start). */
+.ac-priorcards{list-style:none;margin:6px 0 0;padding:0;display:grid;grid-template-columns:minmax(0,1fr);gap:10px;max-width:760px;min-width:0}
+@media(min-width:700px){.ac-priorcards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.ac-prior-learn{min-width:0}
+.ac-priorcard{display:grid;grid-template-columns:56px minmax(0,1fr);gap:12px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:var(--r-card);background:var(--surface);transition:border-color var(--motion-fast),box-shadow var(--motion-fast);height:100%}
+.ac-priorcard:hover{border-color:var(--border-strong);box-shadow:var(--shadow-sm)}
+.ac-priorcard:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.ac-priorcover{width:56px;height:auto;aspect-ratio:3/4;object-fit:cover;display:block;border-radius:calc(var(--r-control) - 2px);overflow:hidden;align-self:start}
+.ac-priorbody{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ac-priorbody .ac-cat{font-size:var(--text-label)}
+.ac-priorctitle{font-weight:600;line-height:1.3;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ac-priorbody .ac-done{font-size:var(--text-label);font-weight:500}
+.ac-priorview{display:inline-flex;align-items:center;gap:2px;margin-top:2px;font-size:var(--text-label);font-weight:500;color:var(--accent-foreground)}
+.ac-priorcard:hover .ac-priorview{text-decoration:underline}
+.ac-editorflag.compact{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;padding:6px 10px;font-size:var(--text-label);max-width:760px}
+.ac-editorflag.compact .ac-link{font-size:var(--text-label);min-height:28px;padding:2px 6px}
+@media(prefers-reduced-motion:reduce){.ac-priorcard{transition:none}}
+
+/* ===== v6.7 — Academy authoring polish (scoped to the workspace + its dialogs) ===== */
+/* Selects: a chevron drawn with two small gradients in --text-muted (no image;
+   follows light/dark) with room so long values never run into it. Native select kept,
+   so keyboard and screen-reader behaviour are unchanged. */
+.ac-ws .sb-field select,.ac-smalldialog select{
+  -webkit-appearance:none;appearance:none;
+  background-color:var(--field);color:var(--text-primary);
+  background-image:linear-gradient(45deg,transparent 50%,var(--text-muted) 50%),linear-gradient(135deg,var(--text-muted) 50%,transparent 50%);
+  background-position:calc(100% - 19px) 50%,calc(100% - 14px) 50%;
+  background-size:5px 5px,5px 5px;background-repeat:no-repeat;
+  padding:10px 40px 10px 12px;min-height:42px;line-height:1.3;
+  text-overflow:ellipsis;white-space:nowrap;overflow:hidden;cursor:pointer}
+.ac-ws .sb-field select:hover:not(:disabled){border-color:var(--border-strong)}
+.ac-ws .sb-field select::-ms-expand{display:none}
+/* Inputs/textareas: one geometry everywhere in the workspace. */
+.ac-ws .sb-field input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]),
+.ac-ws .sb-field textarea,.ac-input{
+  width:100%;padding:10px 12px;min-height:42px;font:inherit;font-size:var(--text-body);line-height:1.4;
+  border:1px solid var(--field-border);border-radius:var(--r-input);background:var(--field);color:var(--text-primary)}
+.ac-ws .sb-field textarea{min-height:76px;resize:vertical}
+.ac-input:focus{outline:none;border-color:var(--accent-foreground);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 18%,transparent)}
+.ac-ws .sb-field label{gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.ac-ws .sb-field{margin-bottom:14px}
+.ac-ws .sb-field > .ac-hint{margin-top:6px}
+.ac-ws .ac-fieldhint{margin:2px 0 6px}
+.ac-req{display:inline-flex;align-items:center;font-size:10.5px;font-weight:600;letter-spacing:.01em;padding:1px 7px;border-radius:var(--r-pill);background:var(--surface-muted);color:var(--text-secondary);white-space:nowrap;margin-inline-start:8px}
+.ac-fieldlabel .ac-req{vertical-align:1px}
+.ac-optional{font-weight:500;color:var(--text-muted)}
+.ac-fielderr{color:var(--danger-foreground);font-size:var(--text-label);margin-top:6px;line-height:1.4}
+.ac-ws .sb-field.has-err input,.ac-ws .sb-field.has-err select,.ac-ws .sb-field.has-err textarea,.ac-ws .sb-field input[aria-invalid="true"]{border-color:color-mix(in srgb,var(--danger) 60%,var(--field-border))}
+/* buttons: icon + label aligned, no stray width */
+.ac-ws .sb-btn.compact{gap:6px;align-items:center;line-height:1.2}
+.ac-ws .sb-btn.compact .hi{flex:none;margin:0}
+.ac-ws label.sb-btn .hi{flex:none}
+.ac-imgpick .ac-actions:has(input[type=file]:focus-visible) .ac-filebtn{outline:2px solid var(--focus-ring);outline-offset:2px}
+
+/* Quiz editor */
+.ac-edq{padding:14px 16px;gap:10px}
+.ac-edqfield{margin-bottom:0}
+.ac-edqlabelrow{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.ac-edqlabelrow label{margin-bottom:0}
+.ac-edqremove{width:auto}
+.ac-edopts{border:0;margin:0;padding:0;min-width:0;display:flex;flex-direction:column;gap:8px}
+.ac-edopts legend{padding:0;margin-bottom:2px}
+.ac-edopts .ac-fieldhint{margin:0 0 2px}
+.ac-edopt{grid-template-columns:22px minmax(0,1fr) 36px;gap:10px}
+.ac-edopt .ac-input{min-height:40px}
+.ac-addopt{align-self:flex-start;width:auto}
+.ac-edquestions{display:flex;flex-direction:column;gap:12px;padding:0;margin:0 0 12px;list-style:none}
+
+/* Searchable picker (combobox) */
+.ac-pick{position:relative}
+.ac-pickfield{position:relative}
+.ac-pickfield input{padding-inline-end:40px !important}
+.ac-pickchev{position:absolute;inset-inline-end:4px;top:50%;transform:translateY(-50%);width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border:0;background:none;color:var(--text-muted);border-radius:var(--r-control);cursor:pointer}
+.ac-pickchev:hover{background:var(--surface-muted);color:var(--text-primary)}
+.ac-pickpop{position:absolute;inset-inline:0;top:calc(100% + 4px);z-index:30;overflow:auto;overscroll-behavior:contain;background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--r-control);box-shadow:var(--shadow-lg);padding:4px}
+.ac-pickpop.up{top:auto;bottom:calc(100% + 4px)}
+.ac-picklist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.ac-pickopt{display:flex;flex-direction:column;gap:1px;padding:8px 10px;border-radius:6px;cursor:pointer;min-height:40px;justify-content:center}
+.ac-pickopt.active{background:var(--accent-muted);outline:1px solid var(--accent-border)}
+.ac-pickname{font-weight:550;overflow-wrap:anywhere}
+.ac-pickstatus{padding:8px 10px;font-size:var(--text-support);color:var(--text-muted)}
+.ac-pickstatus.err{color:var(--danger-foreground)}
+.ac-chipxlabel{display:none}
+
+/* Publish readiness + notices (distinct tones) */
+.ac-readiness{margin-top:10px;border:1px solid var(--border);border-radius:var(--r-card);background:var(--surface)}
+.ac-readiness.attempted{border-color:color-mix(in srgb,var(--warning) 55%,var(--border));background:color-mix(in srgb,var(--warning-muted) 45%,var(--surface))}
+.ac-readysum{display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;background:none;border:0;font:inherit;font-size:var(--text-support);color:var(--text-primary);text-align:start;cursor:pointer;border-radius:var(--r-card);min-height:40px}
+.ac-readysum:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.ac-readysum > span{flex:1}
+.ac-readychev{transition:transform var(--motion-fast)}
+.ac-readychev.open{transform:rotate(180deg)}
+.ac-readylist{padding:2px 12px 10px;max-height:min(40vh,320px);overflow:auto;border-top:1px solid var(--border)}
+.ac-readyh{font-size:var(--text-label);font-weight:600;color:var(--text-secondary);margin:10px 0 4px;text-transform:none}
+.ac-readylist ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.ac-readylist li{display:grid;grid-template-columns:16px minmax(0,1fr) auto;gap:4px 10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)}
+.ac-readylist li:last-child{border-bottom:0}
+.ac-readydot{width:8px;height:8px;border-radius:50%;border:2px solid var(--text-muted);justify-self:center}
+.ac-readywarn{color:var(--warning-foreground);justify-self:center}
+.ac-readytext{display:flex;flex-direction:column;gap:1px;min-width:0;font-size:var(--text-support)}
+.ac-readytext b{font-weight:600;overflow-wrap:anywhere}
+.ac-readytext span{color:var(--text-secondary)}
+.ac-readylist .sb-btn{width:auto}
+.ac-wsnote{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:9px 12px;border-radius:var(--r-card);font-size:var(--text-support)}
+.ac-wsnote > .hi{flex:none}
+.ac-wsnote > span:not(.ac-wsnoteacts){flex:1 1 240px;min-width:0}
+.ac-wsnoteacts{display:inline-flex;flex-wrap:wrap;gap:2px;margin-inline-start:auto}
+.ac-wsnoteacts .ac-link{margin-inline-start:0}
+.ac-note-info{background:var(--surface-muted);color:var(--text-primary);border:1px solid var(--border)}
+.ac-note-info > .hi{color:var(--text-secondary)}
+.ac-note-err{background:var(--danger-muted);color:var(--danger-foreground);border:1px solid color-mix(in srgb,var(--danger) 35%,var(--border))}
+.ac-blockers.ac-wsnote{display:block}
+@media(prefers-reduced-motion:reduce){.ac-readychev{transition:none}}
+
+/* Publish / visibility dialogs */
+.ac-smalldialog{max-width:min(640px,calc(100vw - 32px))}
+.ac-smalldialog .bd{max-height:min(70vh,640px);overflow:auto}
+.ac-dlgbody{display:flex;flex-direction:column;gap:10px;font-size:var(--text-support);line-height:1.5}
+.ac-dlgbody p{margin:0}
+.ac-dlgbody .ac-h3{margin:0 0 6px;font-size:var(--text-support)}
+.ac-dlgsec{display:flex;flex-direction:column;gap:6px;padding-top:4px}
+.ac-dlglist{margin:4px 0 0;padding-inline-start:18px;display:flex;flex-direction:column;gap:3px}
+.ac-pubpick{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--r-control)}
+.ac-pubpick li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border)}
+.ac-pubpick li:last-child{border-bottom:0}
+.ac-pubrow{display:flex;align-items:flex-start;gap:10px;cursor:pointer;min-width:0}
+.ac-pubrow input{width:18px;height:18px;margin-top:2px;flex:none;accent-color:var(--accent-fill)}
+.ac-pubrow input:disabled{cursor:not-allowed}
+.ac-pubtitle{display:flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
+.ac-pubstate{grid-column:1;padding-inline-start:28px;font-size:var(--text-label);color:var(--text-secondary)}
+.ac-pubpick li.notready .ac-pubstate{color:var(--warning-foreground)}
+.ac-pubpick li > .ac-link{grid-column:2;grid-row:1 / span 2;align-self:center}
+.ac-ok-text{color:var(--success-foreground);font-weight:600}
+.ac-dlgplan{padding:8px 10px;border-radius:var(--r-control);background:var(--surface-muted)}
+.ac-pubresults{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.ac-pubresults li{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.ac-pubresults li.ok .hi{color:var(--success-foreground)}
+.ac-pubresults li.fail .hi{color:var(--danger-foreground)}
+.ac-pubresults li > span{flex:1 1 220px}
+.ac-sheetfoot{flex-wrap:wrap}
+.ac-sheetfoot .sb-btn{width:auto}
+@media(max-width:560px){
+  .ac-sheetfoot{flex-direction:column-reverse;align-items:stretch}
+  .ac-sheetfoot .sb-btn{width:100%}
+  .ac-readylist li{grid-template-columns:16px minmax(0,1fr)}
+  .ac-readylist li .sb-btn{grid-column:2;justify-self:start}
+  .ac-edopt{grid-template-columns:22px minmax(0,1fr) 32px;gap:8px}
+}
+.ac-edopts.has-err .ac-input{border-color:color-mix(in srgb,var(--danger) 45%,var(--field-border))}
+@media(max-width:560px){.ac-ws .ac-row2{grid-template-columns:minmax(0,1fr)}}
+/* v6.8 — "Back to course/lesson" is a link styled as a secondary button */
+.ac-wsbaractions a.sb-btn{text-decoration:none}
+.ac-wsbaractions a.sb-btn:visited{color:inherit}
+
+/* v6.10 — category deletion dialog */
+.ac-smalldialog:has(.ac-catdel){max-width:min(820px,calc(100vw - 32px))}
+.ac-cdmodes{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.ac-cdmodes .ac-opt{margin:0}
+.ac-cdbulk{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:6px 0;position:sticky;top:-1px;background:var(--surface);z-index:1}
+.ac-cdbulk .sb-btn{width:auto}
+.ac-cdcheck{display:inline-flex;align-items:center;gap:6px;font-size:var(--text-support);cursor:pointer}
+.ac-cdcheck input{width:18px;height:18px;accent-color:var(--accent-fill)}
+.ac-cdrows{list-style:none;margin:0;padding:0;border:1px solid var(--border);border-radius:var(--r-control)}
+.ac-cdrow{display:grid;grid-template-columns:20px 36px minmax(0,1fr) minmax(0,260px);gap:6px 10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border)}
+.ac-cdrow:last-child{border-bottom:0}
+.ac-cdrow.sel{background:var(--accent-muted)}
+.ac-cdrow.other{grid-template-columns:minmax(0,1fr) minmax(0,260px)}
+.ac-cdrow > input{width:18px;height:18px;accent-color:var(--accent-fill)}
+.ac-cdrow .ac-thumb,.ac-cdrow img{width:36px;aspect-ratio:3/4;object-fit:cover;border-radius:4px}
+.ac-cdtitle{display:flex;flex-direction:column;gap:1px;min-width:0;overflow-wrap:anywhere}
+.ac-cdact{display:flex;flex-direction:column;gap:6px;min-width:0}
+.ac-cdact select{width:100%;min-height:38px;border:1px solid var(--field-border);border-radius:var(--r-input);background-color:var(--field);color:var(--text-primary);padding:6px 40px 6px 10px;font:inherit;font-size:var(--text-support)}
+.ac-cdhint{display:inline-flex;align-items:flex-start;gap:4px;font-size:var(--text-label);color:var(--warning-foreground)}
+.ac-cdconflict{display:flex;gap:6px;align-items:flex-start;color:var(--warning-foreground)}
+.ac-cdsummary{font-size:var(--text-body)}
+.ac-cdfinal{display:inline-flex;flex-direction:column;align-items:flex-end;gap:2px}
+.ac-cdfinal .sb-btn{width:auto}
+@media(max-width:600px){
+  .ac-cdrow{grid-template-columns:20px 36px minmax(0,1fr)}
+  .ac-cdrow .ac-cdact{grid-column:1 / -1}
+  .ac-cdrow.other{grid-template-columns:minmax(0,1fr)}
+  .ac-cdfinal{align-items:stretch}
+}
+.ac-pubgroup{font-size:var(--text-label);font-weight:600;color:var(--text-secondary);margin:8px 0 4px;text-transform:none}
+.ac-wsthumb16,.ac-cdthumb16{width:64px;aspect-ratio:16/9;object-fit:cover;border-radius:4px;flex:none}
+.ac-cdrow .ac-cdthumb16{width:36px;aspect-ratio:16/9}
+.ac-guidews .ac-guidepane{margin-top:4px}
+
+/* =====================================================================
+   Mobile shell (round 5): header menu + five-item bottom bar
+   ===================================================================== */
+/* Header — brand, then Search · Notifications · avatar (44px targets). The full
+   name shows where it fits; narrow phones keep the compact IFC mark instead of
+   squeezing the controls. */
+.sb-topactions{gap:6px}
+.sb-hbtn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.sb-hbtn .sb-belldot{top:-5px;inset-inline-end:-5px}
+/* Avatar = the account menu trigger: a plain 44px hit area around the avatar,
+   with no button frame (so no border nested around the circle). */
+.sb-avbtn{position:relative;display:grid;place-items:center;width:44px;height:44px;flex:none;padding:0;
+  border:0;border-radius:50%;background:none;cursor:pointer;color:inherit}
+.sb-avbtn .sb-av{width:34px;height:34px;margin:0;border:0;font-size:12.5px;font-weight:700;
+  transition:box-shadow var(--motion-fast) var(--ease-standard)}
+.sb-avbtn:hover .sb-av,.sb-avbtn[aria-expanded="true"] .sb-av{box-shadow:0 0 0 3px var(--surface-muted)}
+.sb-avbtn:active .sb-av{transform:scale(.96)}
+.sb-avbtn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:0}
+@media(max-width:359px){ .sb-topactions{gap:8px} }
+@media(max-width:359px){
+  .sb-top .brandname{display:none}
+  .sb-top .brandwm .ifc-sm{font-size:14px;letter-spacing:.14em;vertical-align:0;margin-inline-end:0}
+}
+
+/* Bottom bar — five equal destinations, readable labels; a label may wrap
+   (enlarged text) rather than shrink or truncate. Selected = capsule + weight
+   + aria-current (not colour alone). */
+.sb-navbtn{font-size:11.5px;gap:4px;min-height:56px;padding:5px 2px}
+.sb-navbtn .lblx{white-space:normal;text-align:center;line-height:1.15;overflow-wrap:anywhere}
+.sb-navbtn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.sb-nav.noactive .sb-nav-ind{opacity:0}
+@media(max-width:359px){ .sb-dock{padding-inline:10px} .sb-nav{padding:5px} }
+
+/* The floating New action (workflow content) — reserve room so it never covers
+   the last card or button. */
+@media(max-width:899px){ .sb-content.has-fab{padding-bottom:88px} }
+
+/* Mobile keyboard: while a text field has focus, hide the dock so the field and
+   its actions stay visible above the keyboard. */
+@media(max-width:899px){
+  .sb-main:has(.sb-content :is(input:not([type=checkbox],[type=radio],[type=button],[type=submit],[type=range],[type=file],[type=color]),textarea,select,[contenteditable="true"]):focus) .sb-dock{display:none}
+}
+
+/* The account menu — dropped down from the avatar on phones, sized to the
+   visible viewport, scrolling internally; a popover beside the sidebar profile
+   button on desktop. */
+.sb-menuscrim{align-items:flex-start;justify-content:flex-end}
+.sb-appmenu{background:var(--surface-elevated);color:var(--text-primary);width:min(calc(100% - 16px),380px);
+  margin:calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 8px) 0 8px;
+  border:1px solid var(--border);border-radius:var(--r-modal);box-shadow:var(--shadow-lg);
+  max-height:calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 16px);
+  display:flex;flex-direction:column;overflow:hidden;animation:sbMenuIn var(--motion-fast) var(--ease-standard)}
+@keyframes sbMenuIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){ .sb-appmenu{animation:none} }
+.sb-appmenu-hd{display:flex;align-items:center;gap:12px;padding:8px 6px 8px 14px;border-bottom:1px solid var(--border);flex:none}
+.sb-appmenu-av{width:40px;height:40px;margin:0;border:0;font-size:14px}
+.sb-appmenu-who{flex:1;min-width:0}
+.sb-appmenu-who .nm{font-size:15px;font-weight:700;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-appmenu-who .rl{font-size:12.5px;color:var(--text-secondary);line-height:1.3;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-appmenu-body{overflow-y:auto;overscroll-behavior:contain;padding:10px 8px 10px}
+.sb-appmenu-group+.sb-appmenu-group{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.sb-appmenu-label{font-size:12px;font-weight:700;color:var(--text-muted);letter-spacing:.04em;padding:0 8px 8px;float:none}
+.sb-appmenu-body .sb-drawer-item{min-height:44px}
+@media(min-width:900px){
+  .sb-scrim-anchored .sb-appmenu{width:320px;margin:0;transform-origin:bottom left;
+    max-height:calc(100dvh - 28px);border-color:var(--border-strong);animation:popIn var(--motion-fast) var(--ease-enter)}
+}
+@media (prefers-reduced-motion:reduce){ .sb-scrim-anchored .sb-appmenu,.sb-avbtn .sb-av{animation:none;transition:none} }
+.sb-appearance{border:0;margin:0 0 8px;padding:0;min-width:0}
+.sb-appearance-opts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:0 4px}
+.sb-appearance-opt{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:58px;
+  padding:6px 4px;border:1px solid var(--border);border-radius:var(--r-control);background:var(--surface);
+  font-size:13px;font-weight:600;color:var(--text-secondary);cursor:pointer;text-align:center}
+.sb-appearance-opt input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.sb-appearance-opt.on{background:var(--primary-muted);color:var(--accent-foreground);border-color:var(--accent-fill);box-shadow:inset 0 0 0 1px var(--accent-fill)}
+.sb-appearance-opt:has(input:focus-visible){outline:2px solid var(--focus-ring);outline-offset:2px}
+.sb-appmenu-sep{height:1px;background:var(--border);margin:10px 8px 6px}
+.sb-countpill{background:var(--danger-fill);color:#fff;border-color:transparent}
+
+/* =====================================================================
+   Learn landing (round 5): compact head, Continue shortcut, compact intro,
+   horizontal browsing rows
+   ===================================================================== */
+.ac-home{padding-top:12px}
+.ac-homehead{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-bottom:14px}
+.ac-hometitle{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;min-width:0}
+.ac-hometitle .ac-h1{margin-bottom:0}
+.ac-hometitle .ac-managebtn{flex:none;min-height:44px}
+.ac-homesearch{width:100%;max-width:none;min-width:0;min-height:46px}
+.ac-homesearch input{min-height:44px}
+@media(min-width:900px){
+  .ac-home{padding-top:8px}
+  .ac-homehead{grid-template-columns:minmax(0,1fr) minmax(260px,380px);align-items:end}
+}
+
+/* Continue learning — one compact shortcut */
+.ac-continue{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center;
+  padding:10px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  color:inherit;text-decoration:none}
+.ac-continue:hover{border-color:var(--border-strong)}
+.ac-continue:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.ac-continue-thumb{width:112px;border-radius:var(--r-control);overflow:hidden}
+.ac-continue-cover{width:54px;border-radius:var(--r-control)}
+.ac-continue-body{display:flex;flex-direction:column;gap:3px;min-width:0}
+.ac-continue-go{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:0 16px;
+  border-radius:999px;background:var(--accent-fill);color:#fff;font-weight:600;font-size:14px;white-space:nowrap}
+@media(max-width:479px){
+  .ac-continue{grid-template-columns:auto minmax(0,1fr)}
+  .ac-continue-go{grid-column:1 / -1}
+}
+
+/* Introduction — a small 16:9 thumbnail and a two-line summary; Watch is the
+   primary action; a compact "watched" state with Watch again. */
+.ac-start2{display:flex;flex-direction:column;gap:10px;margin-bottom:6px;padding:12px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-panel)}
+.ac-start2-row{display:grid;grid-template-columns:clamp(112px,36%,240px) minmax(0,1fr);gap:12px;align-items:center}
+.ac-start2-thumb .ac-img{border-radius:var(--r-control)}
+.ac-playbadge.sm .hi{width:18px;height:18px;padding:10px}
+.ac-start2-title{display:block;font-size:var(--text-card);font-weight:600;line-height:1.3;margin:0}
+.ac-start2-sum{margin:4px 0 0;color:var(--text-secondary);font-size:var(--text-support);line-height:1.45;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ac-start2-actions{margin:0;align-items:center;row-gap:6px}
+.ac-start2-actions:empty{display:none}
+.ac-start2-edit{margin-inline-start:auto;font-size:var(--text-label);min-height:44px;display:inline-flex;align-items:center;gap:5px}
+.ac-start2-done{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center}
+.ac-start2-check{color:var(--success-foreground)}
+.ac-start2-donetxt{display:flex;flex-direction:column;min-width:0}
+.ac-start2.is-done{padding:10px 12px}
+.ac-start2-player{border-radius:var(--r-control);overflow:hidden}
+@media(min-width:900px){ .ac-start2-row{grid-template-columns:240px minmax(0,1fr)} .ac-start2-sum{-webkit-line-clamp:3} }
+
+/* Horizontal browsing rows: native scroll + gentle snap, the next card peeks in,
+   no visible scrollbar; pagination dots underneath (phones/tablets only). On
+   phones the row bleeds to the screen edges (inside the page padding, so the
+   page never scrolls sideways). Every row header keeps its View all link. */
+.ac-hsection{min-width:0}
+.ac-hhead{flex-wrap:wrap;row-gap:4px;column-gap:12px;align-items:baseline}
+.ac-hhead .ac-h2{min-width:0;flex:1 1 auto}
+.ac-hctrl{display:flex;align-items:center;gap:6px;flex:none;margin-inline-start:auto}
+.ac-hrow{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x proximity;
+  scroll-padding-inline:16px;padding:2px 16px 6px;margin:0 -16px 4px;-webkit-overflow-scrolling:touch;
+  scrollbar-width:none;-ms-overflow-style:none}
+.ac-hrow::-webkit-scrollbar{display:none}
+.ac-hrow > *{flex:0 0 clamp(8.5rem,40%,13.75rem);scroll-snap-align:start;min-width:0}
+.ac-hrow > .ac-rowcard{flex-basis:clamp(9.5rem,44%,14.5rem)}
+/* Dots: centred, a 6px dot per group, the current one stretched into a pill.
+   Each is a 28×32px button (label "Show … group 2 of 3", aria-current). */
+.ac-hdots{display:flex;justify-content:center;align-items:center;flex-wrap:wrap;margin:0 0 10px}
+.ac-hdot{width:28px;height:32px;display:grid;place-items:center;padding:0;border:0;border-radius:999px;background:none;cursor:pointer}
+.ac-hdot > span{display:block;width:6px;height:6px;border-radius:999px;background:var(--border-strong);
+  transition:width var(--motion-fast) var(--ease-standard),background-color var(--motion-fast) var(--ease-standard)}
+.ac-hdot.on{width:36px}
+.ac-hdot.on > span{width:20px;background:var(--accent-fill)}
+.ac-hdot.edge > span{width:4px;height:4px}
+.ac-hdot:hover:not(.on) > span{background:var(--text-muted)}
+.ac-hdot:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-3px}
+@media (prefers-reduced-motion:reduce){ .ac-hdot > span{transition:none} }
+@media(min-width:900px){
+  .ac-hrow{margin:0 0 8px;padding:2px 2px 10px;scroll-padding-inline:2px}
+  .ac-hrow-gridwide{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));overflow:visible;gap:16px;margin-bottom:24px}
+  .ac-hrow-gridwide > *{flex:none}
+  .ac-hrow-gridwide ~ .ac-hdots{display:none}
+}
+@media(min-width:1180px){ .ac-hrow-gridwide{grid-template-columns:repeat(6,minmax(0,1fr))} }
+@media (prefers-reduced-motion:reduce){ .ac-hrow{scroll-behavior:auto} }
+
+/* For you course cards — consistent 3:4 covers, readable titles; progress only
+   when there is real progress. */
+.ac-rowcardbtn{display:flex;flex-direction:column;height:100%;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-card);overflow:hidden;color:inherit;text-decoration:none}
+.ac-rowcardbtn:hover{border-color:var(--border-strong)}
+.ac-rowcardbtn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.ac-rowcover{border-radius:0}
+.ac-rowbody{display:flex;flex-direction:column;gap:3px;padding:10px 12px 12px;min-width:0;flex:1}
+.ac-rowbody .sb-progress,.ac-rowbody .ac-progress{margin-top:auto}
+/* Category cards: same 2-line description limit everywhere; the course count
+   sits on the card's bottom edge so counts line up across a row. */
+.ac-catbody{flex:1}
+.ac-catcount{margin-top:auto;padding-top:4px}
+.ac-catdesc:empty{display:none}
+.ac-recentrow{color:inherit;text-decoration:none}
+
+/* Round 5: less space above the main content on phones; the beta notice stays
+   (dismissible, Report still one tap away — also in the header menu). */
+@media(max-width:899px){
+  .sb-beta{padding:6px 16px;margin:2px 0 0}
+  .sb-page{padding-top:14px}
+}
+/* Links styled as buttons/links (AppLink) — no underline unless inline text. */
+a.sb-btn,a.ac-link:not(.inline){text-decoration:none}
+a.ac-link:not(.inline):hover{text-decoration:underline}
+
+/* Course page on phones: a small cover beside the title so the primary action
+   (Start / Resume / Finish) is visible without scrolling; the action spans the
+   column. */
+@media(max-width:639px){
+  .ac-coursehead{grid-template-columns:96px minmax(0,1fr);gap:14px;align-items:start;margin-bottom:20px}
+  .ac-coursehead .ac-coursecover{max-width:none;margin:0;width:96px}
+  .ac-coursehead .ac-h1{font-size:clamp(1.375rem,6vw,1.75rem);line-height:1.2}
+  .ac-coursehead .ac-actions > :first-child{flex:1 1 100%;justify-content:center;min-height:44px}
+}
+@media(max-width:359px){
+  .ac-coursehead{grid-template-columns:84px minmax(0,1fr)}
+  .ac-coursehead .ac-coursecover{width:84px}
+}
+/* Quiz heading: stack the note under the title on phones. */
+@media(max-width:639px){ .ac-quiz .sb-shead{flex-direction:column;align-items:flex-start;gap:4px} }
+
+/* Catalogue / search results / category pages on phones: two columns only when
+   each card keeps ~9.5rem (scales with the user's text size), otherwise one. */
+@media(max-width:699px){
+  .ac-grid,.ac-catgrid{grid-template-columns:repeat(auto-fill,minmax(min(100%,9.5rem),1fr))}
+}
+
+/* =====================================================================
+   Round 7: Learn, category and course layouts
+   ===================================================================== */
+/* Learn: the Continue slot is reserved (same size) only for returning learners
+   while their progress loads, so nothing jumps when it arrives. */
+.ac-continue-skel{pointer-events:none}
+.ac-continue-skel .ac-continue-cover{display:block;width:54px;aspect-ratio:3/4;border-radius:var(--r-control)}
+.ac-skelline{display:block;height:12px;border-radius:6px;width:70%;margin:4px 0}
+.ac-skelline.short{width:40%}
+/* category count pending: the line keeps its height */
+.ac-catcount.pending{visibility:hidden}
+/* Introduction: three readable lines with Show more; one primary action, the
+   category as a short text link, editing quiet. */
+.ac-start2-sum{-webkit-line-clamp:3}
+.ac-start2-sum.open{display:block;-webkit-line-clamp:unset;overflow:visible}
+.ac-start2-more{margin-top:2px;font-size:var(--text-label);min-height:32px}
+.ac-start2-cat{display:inline-flex;align-items:center;gap:3px;min-height:44px;font-weight:600}
+/* Learn title row: Manage never crowds the title on narrow screens */
+.ac-hometitle{flex-wrap:wrap;row-gap:6px}
+.ac-hometitle > div{min-width:0}
+@media(max-width:379px){ .ac-hometitle .ac-managebtn{padding-inline:10px} }
+
+/* Category page header: phones get a small 3:4 cover beside the title and
+   count; the description runs full width below. Desktop keeps a larger cover
+   with the description beside it. */
+.ac-cathead{display:grid;grid-template-columns:88px minmax(0,1fr);grid-template-areas:"art meta" "desc desc";gap:10px 14px;align-items:center;margin-bottom:16px}
+.ac-cathead .ac-catheadart{grid-area:art;width:88px;max-width:none}
+.ac-catheadmeta{grid-area:meta;display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+.ac-catheadmeta .ac-h1{margin:0;overflow-wrap:anywhere;line-height:1.15}
+.ac-catpurpose{grid-area:desc;margin:0;color:var(--text-secondary);font-size:var(--text-body);line-height:1.5;max-width:65ch}
+.ac-editlink{display:inline-flex;align-items:center;gap:5px;font-size:var(--text-label);min-height:44px;padding:0}
+@media(max-width:359px){ .ac-cathead{grid-template-columns:72px minmax(0,1fr)} .ac-cathead .ac-catheadart{width:72px} }
+@media(min-width:720px){
+  .ac-cathead{grid-template-columns:180px minmax(0,1fr);grid-template-areas:"art meta" "art desc";align-items:start;align-content:start;column-gap:22px}
+  .ac-cathead .ac-catheadart{width:180px}
+}
+.ac-catpage .ac-catcont{margin-top:4px}
+
+/* Course page header: cover + category, level, title and lesson count side by
+   side; topics, time, actions and progress use the full width below (phones)
+   or the column beside the cover (wide screens). */
+.ac-coursehead{grid-template-areas:"cover meta" "wide wide";grid-template-columns:96px minmax(0,1fr);gap:12px 14px;align-items:start}
+.ac-coursehead .ac-coursecover{grid-area:cover;width:96px;max-width:none;margin:0}
+.ac-coursehead .ac-coursemeta{grid-area:meta;min-width:0}
+.ac-coursehead .ac-coursemeta .ac-h1{overflow-wrap:anywhere}
+.ac-coursewide{grid-area:wide;display:flex;flex-direction:column;gap:10px;min-width:0}
+.ac-coursewide .ac-actions{margin:0;align-items:center;row-gap:6px}
+.ac-coursewide .ac-summary{margin-top:0;max-width:none}
+.ac-lessoncount{margin-top:4px}
+.ac-viewlessons{display:inline-flex;align-items:center;gap:3px;min-height:44px;font-weight:600}
+@media(max-width:639px){
+  .ac-coursewide .ac-actions > :first-child{flex:1 1 100%;justify-content:center;min-height:44px}
+}
+@media(max-width:359px){ .ac-coursehead{grid-template-columns:84px minmax(0,1fr)} .ac-coursehead .ac-coursecover{width:84px} }
+@media(min-width:720px){
+  .ac-coursehead{grid-template-columns:220px minmax(0,1fr);grid-template-areas:"cover meta" "cover wide";align-content:start}
+  .ac-coursehead .ac-coursecover{width:220px}
+}
+/* optional course preview video: a labelled poster until played */
+.ac-previewvid .ac-h2 .ac-cardsub{font-weight:400;margin-inline-start:6px}
+.ac-previewposter{display:block;position:relative;width:100%;padding:0;border:0;background:none;cursor:pointer;border-radius:var(--r-card);overflow:hidden}
+.ac-previewposter .ac-img{border-radius:var(--r-card)}
+.ac-previewposter-label{position:absolute;inset-inline-start:12px;bottom:12px;padding:6px 10px;border-radius:999px;background:rgba(0,0,0,.62);color:#fff;font-size:var(--text-label);font-weight:600}
+.ac-previewposter:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.ac-inprogress{color:var(--accent-foreground);font-weight:600}
+
+/* Lesson page on phones (round 7): one compact row (back to the course + the
+   lesson list), the 16:9 player right beneath, then title, content, quiz,
+   completion + Next, discussion. */
+.ac-lessonnav{display:flex;flex-direction:column;gap:8px;min-width:0}
+/* With enlarged text on a narrow phone the lessons toggle wraps under the back
+   link rather than squeezing the course title to a few letters (basis in em, so
+   it scales with the text). */
+.ac-lessonnav-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.ac-lessonnav-row .ac-back{flex:1 1 10em;min-width:0;margin:0;min-height:44px}
+.ac-lessonnav-row .ac-sidetoggle{width:auto;flex:none;margin:0;padding:8px 12px;gap:6px;border-radius:999px}
+.ac-sidetoggle-n{font-variant-numeric:tabular-nums;color:var(--text-secondary);font-weight:500}
+.ac-lessonnav .ac-side{border:1px solid var(--border);border-radius:var(--r-card);padding:6px;background:var(--surface);max-height:min(55dvh,420px);overflow-y:auto;overscroll-behavior:contain}
+.ac-lessonpage:not(.desktop){gap:10px}
+.ac-lessonpage:not(.desktop) .ac-lessonmain{gap:18px}
+.ac-lessonhead{gap:4px}
+.ac-lessonhead .ac-titlerow{row-gap:4px}
+/* Edit lesson stays reachable but quiet */
+.ac-lessonhead .ac-titlerow .sb-btn.ghost{min-height:36px;padding-inline:10px;font-size:var(--text-label)}
+/* resources: compact tappable rows (title, site, external marker) */
+.ac-resources{padding:0;margin:0;gap:0;border:1px solid var(--border);border-radius:var(--r-card);overflow:hidden}
+.ac-resources li + li{border-top:1px solid var(--border)}
+.ac-resources a.ac-resrow{display:flex;align-items:center;gap:10px;width:100%;min-height:52px;padding:8px 14px;color:var(--text-primary);text-decoration:none;background:var(--surface)}
+.ac-resources a.ac-resrow:hover{background:var(--surface-muted);text-decoration:none}
+.ac-resources a.ac-resrow:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.ac-restext{display:flex;flex-direction:column;min-width:0;flex:1}
+.ac-restitle{font-weight:600;font-size:var(--text-body);overflow-wrap:anywhere}
+.ac-ressite{font-size:var(--text-label);color:var(--text-muted)}
+.ac-resrow .hi{flex:none;color:var(--accent-foreground)}
+/* a lesson that was already complete: only the quiet undo link remains */
+.ac-completion.is-quiet{border:0;background:none;padding:0;margin:0}
+/* discussion empty state: one quiet line */
+.ac-disc-empty{margin:4px 0 0}
+
+/* Header attention badges (round 7): ONE treatment for the bell (unread
+   notifications) and the avatar (accounts awaiting approval): upper-right,
+   18px, bold 10px digits, a ring in the header colour, capped at 9+. Each
+   badge stays inside the 6px gap beside its control (never over a neighbour). */
+.sb-top .sb-hbadge{top:-5px;inset-inline-end:-5px;min-width:18px;height:18px;padding:0 5px;font-size:10px;
+  background:var(--danger-fill);color:#fff;border:2px solid var(--background);box-shadow:none;pointer-events:none}
+/* both badges: the same offset from the corner of their 44px control box */
+/* (the bell's box has a 1px border and the avatar's none; offsets are from the
+   padding edge, so the bell's badge sits 1px further out to match outside) */
+.sb-top .sb-avbtn .sb-hbadge{top:-5px;inset-inline-end:-5px}
+.sb-top .sb-hbtn .sb-hbadge{top:-6px;inset-inline-end:-6px}
+/* room for a badge between controls at every width (a badge overhangs 5px) */
+.sb-top .sb-topactions{gap:8px}
+
+/* =====================================================================
+   Round 7: ONE phone bottom-sheet foundation (account menu + notifications)
+   Same backdrop, top radius, handle, header with the close button at the
+   end, entrance (slide up), exit (slide down) and safe-area padding. Desktop
+   keeps its own placements (popover / side drawer).
+   ===================================================================== */
+@media(max-width:899px){
+  .sb-scrim.sb-bscrim{align-items:flex-end;justify-content:center;padding:0;background:var(--overlay)}
+  .sb-bsheet{position:relative;width:100%;max-width:560px;margin:0;
+    border:1px solid var(--border);border-bottom:0;border-radius:var(--r-modal) var(--r-modal) 0 0;
+    background:var(--surface-elevated);box-shadow:var(--shadow-lg);
+    max-height:calc(100dvh - env(safe-area-inset-top) - 24px);
+    display:flex;flex-direction:column;overflow:hidden;
+    padding-bottom:env(safe-area-inset-bottom);
+    animation:bsheetIn .3s cubic-bezier(.2,.85,.25,1)}
+  .sb-scrim.closing .sb-bsheet{animation:bsheetOut .2s cubic-bezier(.4,0,1,1) forwards}
+  .sb-scrim.sb-bscrim.closing{animation:scrimOut .2s ease forwards;pointer-events:none}
+  .sb-bsheet .sb-grab{display:flex;padding:8px 0 4px}
+  /* header = drag zone (buttons inside it stay ordinary buttons) */
+  .sb-bsheet .sb-appmenu-hd,.sb-bsheet .sb-notifhd{touch-action:none;user-select:none;-webkit-user-select:none}
+  .sb-bsheet .sb-appmenu-hd{border-bottom:1px solid var(--border);padding:2px 6px 10px 16px}
+  .sb-bsheet .sb-appmenu-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y}
+  /* the account menu no longer drops from the top on phones */
+  .sb-appmenu.sb-bsheet{width:100%;margin:0}
+}
+@keyframes bsheetIn{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes bsheetOut{to{transform:translateY(100%)}}
+@media (prefers-reduced-motion:reduce){
+  .sb-bsheet,.sb-scrim.closing .sb-bsheet,.sb-scrim.sb-bscrim.closing{animation:none!important}
+}
+
+/* Row dots, round 7: fixed 28×32 buttons (hit areas never move); one pill
+   follows the scroll (see academyRow.jsx). The pill animates only transform
+   and its own width, on an absolutely positioned element in a contained box. */
+.ac-hdots{position:relative;contain:layout paint}
+.ac-hdot,.ac-hdot.on{width:28px}
+.ac-hdot.on > span{width:6px;background:var(--border-strong)}
+.ac-hpill{position:absolute;top:50%;inset-inline-start:0;height:6px;width:18px;margin-top:-3px;border-radius:999px;
+  background:var(--accent-fill);pointer-events:none;will-change:transform,width;z-index:1}
+.ac-hdot:focus-visible{position:relative;z-index:2}
+@media (prefers-reduced-motion:reduce){ .ac-hpill{will-change:auto} }
+
+/* Round 7 audit: anchors and keyboard focus scroll into view clear of the
+   floating bottom bar (and a little below the header). */
+@media(max-width:899px){
+  .sb-content{scroll-padding-top:12px;scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom))}
+}
+
+/* Round 8: the dot window is a viewport onto a track of every dot; the track
+   slides when the window moves, so the pill never jumps. */
+.ac-hdots{display:flex;justify-content:center}
+.ac-hdots-view{overflow:hidden;position:relative;contain:layout paint}
+.ac-hdots-track{display:flex;position:relative;width:max-content;transition:transform .25s cubic-bezier(.2,.8,.25,1)}
+.ac-hdots-track .ac-hdot:disabled{cursor:default}
+@media (prefers-reduced-motion:reduce){ .ac-hdots-track{transition:none} }

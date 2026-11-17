@@ -24,7 +24,7 @@ export const IMAGE_KINDS = {
   cover: { label: "Course cover", ratio: 3 / 4, width: 900, height: 1200 },
   thumb: { label: "Lesson thumbnail", ratio: 16 / 9, width: 1280, height: 720 },
   purpose: { label: "Purpose video thumbnail", ratio: 16 / 9, width: 1280, height: 720 },
-  guideThumb: { label: "Guide thumbnail", ratio: 16 / 9, width: 1280, height: 720 },
+  guideThumb: { label: "Resource thumbnail", ratio: 16 / 9, width: 1280, height: 720 },
   pathCover: { label: "Path cover", ratio: 3 / 4, width: 900, height: 1200 },
   categoryArt: { label: "Category artwork (legacy landscape)", ratio: 16 / 9, width: 1600, height: 900 },
   catCover: { label: "Category cover", ratio: 3 / 4, width: 900, height: 1200 },

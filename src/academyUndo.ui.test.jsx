@@ -129,7 +129,7 @@ describe("reorder persistence", () => {
     strictRender(<Harness persistImpl={persist} />);
     await act(async () => { fireEvent.click(screen.getByText("move d to top")); });
     expect(screen.getByTestId("phase").textContent).toBe("error");
-    expect(screen.getByTestId("errmsg").textContent).toMatch(/server didn't accept the change/);
+    expect(screen.getByTestId("errmsg").textContent).toMatch(/change wasn't accepted/);
     expect(document.body.textContent).not.toMatch(/L833|evaluation error/);
     expect(shown()).toBe("abcd");
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();

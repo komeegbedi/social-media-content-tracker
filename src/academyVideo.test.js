@@ -93,3 +93,25 @@ test("resume ignores tiny or tail positions; watched only from ENDED or the fina
   assert.equal(videoWatchedFromEvent({ ended: false, positionSec: 300, durationSec: 600 }), false, "seeking to the middle is not watched");
   assert.equal(videoWatchedFromEvent({ ended: false, positionSec: 300, durationSec: 0 }), false, "no duration → only ENDED counts");
 });
+
+test("Vimeo events: only the player's own error event is a failure; autoplay refusals, rejected API calls, pauses and slow loading are not", async () => {
+  const { vimeoEventKind, vimeoProvesPlayback } = await import("./academyVideo.js");
+  assert.equal(vimeoEventKind({ event: "error", data: { name: "PrivacyError", message: "Because of its privacy settings, this video cannot be played here." } }), "failure");
+  assert.equal(vimeoEventKind({ event: "error", data: { name: "NotFoundError", message: "x" } }), "failure");
+  assert.equal(vimeoEventKind({ event: "error", data: {} }), "failure", "an unnamed player error still counts");
+  assert.equal(vimeoEventKind({ event: "error", data: { name: "NotAllowedError", message: "play() failed because the user didn't interact" } }), "autoplay-blocked");
+  assert.equal(vimeoEventKind({ event: "error", data: { name: "AbortError" } }), "autoplay-blocked");
+  assert.equal(vimeoEventKind({ event: "error", data: { method: "setCurrentTime", name: "RangeError" } }), "method-error");
+  assert.equal(vimeoEventKind({ event: "error", data: { method: "play", name: "NotAllowedError" } }), "method-error");
+  assert.equal(vimeoEventKind({ event: "pause", data: { seconds: 12 } }), null, "a pause is not an event we act on");
+  assert.equal(vimeoEventKind({ event: "ready" }), "ready");
+  assert.equal(vimeoEventKind({ event: "timeupdate", data: { seconds: 0, duration: 62 } }), "time-zero");
+  assert.equal(vimeoEventKind({ event: "timeupdate", data: { seconds: 3.2, duration: 62 } }), "time");
+  for (const bad of [null, "ready", 5, {}, { event: "bogus" }]) assert.equal(vimeoEventKind(bad), null);
+  assert.equal(vimeoEventKind({ event: "play", data: { seconds: 0 } }), "play-requested");
+  assert.equal(vimeoEventKind({ event: "playing", data: { seconds: 0 } }), "playing");
+  assert.equal(vimeoEventKind({ event: "drminitfailed" }), null, "not the documented error event; not treated as a confirmed failure");
+  assert.ok(vimeoProvesPlayback("playing") && vimeoProvesPlayback("time") && vimeoProvesPlayback("ended"));
+  assert.ok(!vimeoProvesPlayback("play-requested"), "a play REQUEST is not proof (observed: play then drminitfailed, no progress)");
+  assert.ok(!vimeoProvesPlayback("ready") && !vimeoProvesPlayback("time-zero") && !vimeoProvesPlayback("autoplay-blocked"));
+});

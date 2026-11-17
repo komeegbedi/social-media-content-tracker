@@ -138,7 +138,7 @@ describe("VideoPreview — automatic duration", () => {
     globalThis.__fakeYT = fakeYT([100, 104]);
     try {
       render(<Harness url="https://youtu.be/dQw4w9WgXcQ" fetcher={vi.fn().mockResolvedValue(ytMeta("Live service"))} probe />);
-      expect(await screen.findByText(/Live stream — no fixed duration/, {}, { timeout: 5000 })).toBeInTheDocument();
+      expect(await screen.findByText(/Live stream, so there's no fixed length/, {}, { timeout: 5000 })).toBeInTheDocument();
       expect(screen.getByTestId("dur")).toHaveTextContent("none|live");
     } finally { delete globalThis.__fakeYT; }
   }, 10000);

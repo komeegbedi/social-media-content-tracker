@@ -1,6 +1,7 @@
 /* IFC Creative Academy — Cloud Storage rules against the emulator (needs BOTH
    the Firestore and Storage emulators, because storage.rules reads user +
    course docs with firestore.get). Run: npm run test:academy */
+import { assertThrowawayProject } from "../emulatorGuard.js";
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -13,10 +14,16 @@ import { ref, uploadBytes, getBytes, deleteObject } from "firebase/storage";
    suite must share it — a per-run random id would make every firestore.get
    return null. It therefore clears that project's emulator data: run it only
    through `npm run test:academy` (a throwaway emulator), never against the dev
-   emulator you've seeded. */
+   emulator you've seeded.
+   ALSO: every Storage emulator keeps its file contents in the SAME folder,
+   $TMPDIR/firebase/storage/blobs, and deletes it when it stops — so a second
+   Storage emulator started beside the dev one wipes the dev emulator's files.
+   `npm run test:academy` sets its own TMPDIR for that reason; keep it if you
+   run this suite any other way. */
 const PROJECT_ID = process.env.GCLOUD_PROJECT;
 if (!PROJECT_ID) throw new Error("storage.rules.test.js must run under `firebase emulators:exec` (npm run test:academy)");
 const BUCKET = `${PROJECT_ID}.appspot.com`;
+assertThrowawayProject(PROJECT_ID, { bucket: BUCKET });   // never the dev project/bucket
 let env;
 const asStorage = (uid) => env.authenticatedContext(uid).storage(BUCKET);
 async function seed(path, id, data) {
@@ -38,11 +45,14 @@ const USERS = {
   exadmin:{ name: "Ex",  role: "admin",  status: "removed", disabled: true },
 };
 
+/* The emulator address `firebase emulators:exec` exported (an isolated run on
+   other ports), else the default local ports. */
+const emu = (envVar, port) => { const [h, p] = String(process.env[envVar] || "").split(":"); return { host: h || "127.0.0.1", port: Number(p) || port }; };
 before(async () => {
   env = await initializeTestEnvironment({
     projectId: PROJECT_ID,
-    firestore: { rules: readFileSync("firestore.rules", "utf8"), host: "127.0.0.1", port: 8080 },
-    storage: { rules: readFileSync("storage.rules", "utf8"), host: "127.0.0.1", port: 9199 },
+    firestore: { rules: readFileSync("firestore.rules", "utf8"), ...emu("FIRESTORE_EMULATOR_HOST", 8080) },
+    storage: { rules: readFileSync("storage.rules", "utf8"), ...emu("FIREBASE_STORAGE_EMULATOR_HOST", 9199) },
   });
 });
 after(async () => { if (env) await env.cleanup(); });
@@ -182,4 +192,25 @@ test("deleting a course: its leftover uploads can be removed by an editor once t
   await seed("courseDrafts", "drafty", { title: "D", rev: 1, publishedRev: 0 });
   await seedObject("academy/covers/drafty/v1.jpg", JPEG);
   await assertFails(deleteObject(ref(asStorage("member"), "academy/covers/drafty/v1.jpg")));
+});
+
+test("v6.11: a resource that exists only as a private DRAFT accepts editor thumbnails; learners can't read them; clean-up after deletion", async () => {
+  await seed("guideDrafts", "gnew", { title: "Draft only", rev: 1, publishedRev: 0 });
+  await seed("academySettings", "categoryIndex", { hidden: ["hid"] });
+  await seed("guides", "ghid", { title: "H", status: "published", category: "hid" });
+  await seedObject("academy/guideThumbs/ghid/v1.jpg", JPEG);
+  // draft-only: editors upload + read; learners can't read; no guide/draft → no upload
+  await assertSucceeds(uploadBytes(ref(asStorage("inst"), "academy/guideThumbs/gnew/v1.jpg"), JPEG, { contentType: "image/jpeg" }));
+  await assertSucceeds(getBytes(ref(asStorage("inst"), "academy/guideThumbs/gnew/v1.jpg")));
+  await assertFails(getBytes(ref(asStorage("member"), "academy/guideThumbs/gnew/v1.jpg")));
+  await assertFails(uploadBytes(ref(asStorage("member"), "academy/guideThumbs/gnew/v2.jpg"), JPEG, { contentType: "image/jpeg" }));
+  await assertFails(deleteObject(ref(asStorage("member"), "academy/guideThumbs/gnew/v1.jpg")));
+  // a published resource in a hidden category: learners can't read its thumbnail
+  await assertFails(getBytes(ref(asStorage("member"), "academy/guideThumbs/ghid/v1.jpg")));
+  await assertSucceeds(getBytes(ref(asStorage("inst"), "academy/guideThumbs/ghid/v1.jpg")));
+  // after the resource AND its draft are gone: an editor may remove the leftover; a learner never
+  await env.withSecurityRulesDisabled(async (ctx) => { const { deleteDoc } = await import("firebase/firestore"); await deleteDoc(doc(ctx.firestore(), "guideDrafts", "gnew")); });
+  await assertFails(uploadBytes(ref(asStorage("inst"), "academy/guideThumbs/gnew/v3.jpg"), JPEG, { contentType: "image/jpeg" }), "no guide or draft → no upload");
+  await assertFails(deleteObject(ref(asStorage("member"), "academy/guideThumbs/gnew/v1.jpg")));
+  await assertSucceeds(deleteObject(ref(asStorage("inst"), "academy/guideThumbs/gnew/v1.jpg")));
 });

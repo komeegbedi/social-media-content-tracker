@@ -146,6 +146,14 @@ export function videoFromRecord(rec) {
   return null;
 }
 
+/* Is a stored record publishable? Format only (provider + id shape, optional
+   Vimeo hash): never depends on the provider being reachable. Mirrors
+   validVideoRecord in functions/academyProgression.js (parity-tested). */
+export function isValidVideoRecord(rec) {
+  if (!videoFromRecord(rec)) return false;
+  return !rec.hash || (rec.provider === "vimeo" && VIMEO_HASH.test(String(rec.hash)));
+}
+
 /* Allowed origins for provider postMessage traffic. The player only trusts
    messages whose origin is in this set for the lesson's provider. */
 export const PROVIDER_ORIGINS = {
@@ -153,6 +161,39 @@ export const PROVIDER_ORIGINS = {
   vimeo: ["https://player.vimeo.com"],
   gdrive: [],
 };
+
+/* Vimeo player (postMessage API) events → what they mean for the lesson. Pure;
+   unit-tested in academyVideo.test.js.
+   Only Vimeo's `error` EVENT counts as a confirmed playback failure, and not
+   when it is:
+     • the rejection of one of our API calls (`data.method` set, e.g. a resume
+       `setCurrentTime` out of range) — the player itself is fine;
+     • an autoplay refusal (`NotAllowedError`) or a play() interrupted by a pause
+       (`AbortError`) — the learner just presses play.
+   Pausing, blocked autoplay and slow loading are never failures; slow loading
+   (no `ready` after VIMEO_SLOW_MS) only earns neutral guidance in the player. */
+export const VIMEO_SLOW_MS = 15000;
+const VIMEO_NOT_FAILURES = new Set(["NotAllowedError", "AbortError"]);
+export function vimeoEventKind(d) {
+  if (!d || typeof d !== "object") return null;
+  switch (d.event) {
+    case "ready": return "ready";
+    case "play": return "play-requested";   // playback asked for — not proof it started (it can still fail, e.g. DRM)
+    case "playing": return "playing";
+    case "timeupdate": return Number(d.data?.seconds) > 0 ? "time" : "time-zero";
+    case "ended": return "ended";
+    case "error": {
+      const e = d.data && typeof d.data === "object" ? d.data : {};
+      if (e.method) return "method-error";
+      if (VIMEO_NOT_FAILURES.has(e.name)) return "autoplay-blocked";
+      return "failure";
+    }
+    default: return null;
+  }
+}
+/* Events that prove playback is actually happening (used to clear a failure
+   after Retry — `ready` alone doesn't: a player can load and then fail). */
+export const vimeoProvesPlayback = (kind) => kind === "playing" || kind === "time" || kind === "ended";
 
 /* Playback-position persistence policy (pure, shared by the player + tests).
    • Save at most every `minIntervalSec` seconds of playback, and only when the

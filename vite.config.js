@@ -12,8 +12,12 @@ function requireFirebaseConfig() {
     config(_config, { command, mode }) {
       if (command !== "build" || mode !== "production") return;
       const env = loadEnv(mode, process.cwd(), "");
-      const required = ["VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN", "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID"];
+      // The Storage bucket is required too: without it every Academy image fails at runtime.
+      const required = ["VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN", "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID", "VITE_FIREBASE_STORAGE_BUCKET"];
       const missing = required.filter((k) => !env[k] || !String(env[k]).trim());
+      if (String(env.VITE_USE_EMULATOR).trim() === "true") {
+        throw new Error("Production build aborted — VITE_USE_EMULATOR is true. A production bundle must never talk to the local emulators (see .env.production).");
+      }
       if (missing.length) {
         throw new Error(
           `Production build aborted — missing Firebase config: ${missing.join(", ")}.\n` +

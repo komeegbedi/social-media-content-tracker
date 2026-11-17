@@ -19,7 +19,7 @@ import { XMarkIcon } from "@heroicons/react/24/outline";
 /* Plain words for a failed write (never raw rule-debug text). */
 export function friendlySaveError(e) {
   const code = String(e?.code || "").replace(/^firestore\//, "");
-  if (code === "permission-denied") return "the server didn't accept the change — you may not have permission, or one of these items changed meanwhile";
+  if (code === "permission-denied") return "the change wasn't accepted. You may not have permission, or one of these items changed in the meantime";
   if (code === "unavailable" || code === "deadline-exceeded" || /network|offline|fetch/i.test(e?.message || "")) return "the connection dropped";
   if (code === "stale" || code === "conflict") return e.message;
   const m = String(e?.message || "").split(/[:\n]/)[0].trim();

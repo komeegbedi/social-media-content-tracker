@@ -22,10 +22,10 @@
 import { courseCounters, flatLessons, toMs } from "./academyProgress.js";
 
 export const DRAFT_COURSE_FIELDS = [
-  "title", "category", "level", "about", "outcomes", "requirements", "cover", "previewVideo", "topicIds", "topics", "modules", "mdVersion",
+  "title", "category", "level", "about", "outcomes", "requirements", "cover", "previewVideo", "topicIds", "topics", "modules", "mdVersion", "priorKnowledge",
 ];
 export const DRAFT_LESSON_FIELDS = [
-  "title", "moduleId", "kind", "video", "videoMeta", "thumbMode", "description", "resources", "thumb", "bonus", "durationMinutes", "quiz", "createdAtMs", "mdVersion",
+  "title", "moduleId", "kind", "video", "videoMeta", "thumbMode", "description", "resources", "thumb", "bonus", "durationMinutes", "quiz", "prerequisites", "createdAtMs", "mdVersion",
 ];
 const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => obj && obj[k] !== undefined).map((k) => [k, obj[k]]));
 
@@ -131,6 +131,39 @@ export function courseRuntime(lessons) {
     } else if (Number(l.durationMinutes) > 0) otherMin += Number(l.durationMinutes);
   }
   return { videoSec, videos, measured, live, partial: measured < videos - live, otherMin };
+}
+/* The learner-facing time summary for a course (round 7). Required lessons
+   only; bonus lessons are summarised separately so optional material never
+   inflates the course. Measured video time and authors' reading / exercise
+   estimates stay separate, and anything not known is said, never invented:
+     • videos with no measured length → "N videos (length not known yet)", or
+       "At least …" when only some are measured
+     • lessons with no estimate → the reading figure becomes "At least ~…"
+   Returns { required: string[], bonus: string|null }. `fmtMin` formats minutes. */
+export function courseTimeFacts(lessons, fmtMin = (m) => `${m} min`) {
+  const part = (list) => {
+    let videoSec = 0, videos = 0, measured = 0, live = 0, otherMin = 0, unestimated = 0;
+    for (const l of list) {
+      if (l.video) {
+        videos += 1;
+        const d = Number(l.videoMeta?.durationSec);
+        if (l.videoMeta?.isLive) live += 1;
+        else if (d > 0) { videoSec += d; measured += 1; }
+      } else if (Number(l.durationMinutes) > 0) otherMin += Number(l.durationMinutes);
+      else unestimated += 1;
+    }
+    const timed = videos - live;
+    const out = [];
+    if (measured > 0) out.push(`${measured < timed ? "At least " : ""}${formatRuntime(videoSec)} of video`);
+    else if (timed > 0) out.push(`${timed} video${timed === 1 ? "" : "s"} (length not known yet)`);
+    if (live > 0) out.push(`${live} live video${live === 1 ? "" : "s"}`);
+    if (otherMin > 0) out.push(`${unestimated > 0 ? "At least " : ""}~${fmtMin(otherMin)} reading & exercises`);
+    return out;
+  };
+  const all = lessons || [];
+  const req = all.filter((l) => !l.bonus), bon = all.filter((l) => l.bonus);
+  const b = part(bon);
+  return { required: part(req), bonus: bon.length ? `${bon.length} bonus lesson${bon.length === 1 ? "" : "s"}${b.length ? `: ${b.join(", ")}` : ""}` : null };
 }
 export function formatRuntime(sec) {
   const s = Math.round(Number(sec) || 0);

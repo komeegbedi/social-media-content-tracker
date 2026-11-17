@@ -11,29 +11,64 @@
      • quiz answers are only ever read by the server (quizKeys is editor-only)
      • images are read with getBlob (auth-checked by storage.rules) → object URLs;
        no download URLs are ever requested or stored. */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { acquireShared, releaseShared, sharedState, sessionGen, cachedImageUrl, storeImageUrl, retainImage, releaseImage, onAcademyClear, clearAcademySession } from "./academyCache.js";
 import {
-  collection, collectionGroup, doc, query, where, onSnapshot, getDoc, getDocs,
+  collection, collectionGroup, doc, query, where, onSnapshot, getDoc, getDocs, getDocsFromServer,
   setDoc, updateDoc, deleteDoc, addDoc, writeBatch, serverTimestamp, deleteField, FieldPath, runTransaction,
 } from "firebase/firestore";
 import { db, callFunction, getStorageInstance } from "./firebase";
 import { logIssue } from "./logging";
 import { courseCounters, newId, toMs, normalizeCategory, normalizeTopics, nameKey, slugId, defaultCategoryRecords,
-  isAcademyEditor, ACADEMY_CATEGORIES, LEGACY_CATEGORY_IDS, quizMode, publishBlockers, flatLessons } from "./academyProgress.js";
+  isAcademyEditor, ACADEMY_CATEGORIES, LEGACY_CATEGORY_IDS, quizMode, publishBlockers, flatLessons, categoryIdFromName } from "./academyProgress.js";
 import { videoRecord } from "./academyVideo.js";
 import { runCourseDeletion, pathsReferencingCourse } from "./academyDeletion.js";
+import { courseRow } from "./academyCategoryDeletion.js";
+import { GUIDE_CONTENT_FIELDS, guideDraftFromLive, guidePublishIssues, guideRow } from "./academyGuides.js";
+import { orderCourses } from "./academyOrder.js";
 import { draftFromLive, buildPublishPlan, imagePathsOf, deletableAfterDraftSave, normalizeOutline, ownedByCourse } from "./academyDrafts.js";
 
 const PURPOSE_DOC = "purposeVideo";
 
 /* ---- generic listeners ---------------------------------------------------- */
-function useQueryDocs(build, deps, enabled) {
-  const [state, setState] = useState({ docs: [], loaded: false, error: null });
+/* Shared, lingering subscription (academyCache.js): `key` null = disabled. The
+   first render after a revisit returns the last known state at once (no
+   skeleton flash), and the live listener keeps it current. */
+function useShared(key, start, initial) {
+  // the session generation is part of the identity: after a sign-out / account
+  // or role change, readers re-subscribe under the new session
+  const g = sessionGen();
+  const subscribe = useCallback((cb) => {
+    if (!key) return () => {};
+    const s = acquireShared(key, start, initial);
+    s.listeners.add(cb);
+    return () => releaseShared(key, s, cb);
+  }, [key, g]); // eslint-disable-line react-hooks/exhaustive-deps
+  const snap = () => (key ? sharedState(key) ?? initial : initial);
+  return useSyncExternalStore(subscribe, snap, snap);
+}
+const Q_IDLE = { docs: [], loaded: false, error: null };
+const Q_OFF = { docs: [], loaded: true, error: null };
+const startQuery = (build) => (set) => onSnapshot(build(),
+  (snap) => set({ docs: snap.docs.map((d) => ({ id: d.id, ...d.data() })), loaded: true, error: null }),
+  (err) => {
+    // the listener has stopped: clear the content it was showing (access may have
+    // been revoked) and let the next reader restart it
+    set({ docs: [], loaded: true, error: err }, { ended: true });
+    logIssue({ kind: "error", action: "academy read failed", message: err.message, code: err.code });
+  });
+/* `shareKey`: a string that fully identifies the query (shared + lingering);
+   without one the listener belongs to this component alone (editor/leader
+   views, comments). */
+function useQueryDocs(build, deps, enabled, shareKey = null) {
+  const shared = useShared(shareKey && enabled ? `q:${shareKey}` : null, startQuery(build), Q_IDLE);
+  const [state, setState] = useState(Q_IDLE);
   useEffect(() => {
-    if (!enabled) { setState({ docs: [], loaded: true, error: null }); return; }
+    if (shareKey) return undefined;
+    if (!enabled) { setState(Q_OFF); return undefined; }
     setState((s) => ({ ...s, loaded: false, error: null }));
     let q;
-    try { q = build(); } catch (e) { setState({ docs: [], loaded: true, error: e }); return; }
+    try { q = build(); } catch (e) { setState({ docs: [], loaded: true, error: e }); return undefined; }
     return onSnapshot(q,
       (snap) => setState({ docs: snap.docs.map((d) => ({ id: d.id, ...d.data() })), loaded: true, error: null }),
       (err) => {
@@ -41,22 +76,31 @@ function useQueryDocs(build, deps, enabled) {
         logIssue({ kind: "error", action: "academy read failed", message: err.message, code: err.code });
       });
   }, deps); // eslint-disable-line react-hooks/exhaustive-deps
+  if (shareKey) return enabled ? shared : Q_OFF;
   return state;
 }
-function useDocState(path, enabled) {
-  const [state, setState] = useState({ data: undefined, loaded: false, error: null });
-  useEffect(() => {
-    if (!enabled || !path) { setState({ data: null, loaded: true, error: null }); return; }
-    setState({ data: undefined, loaded: false, error: null });
-    return onSnapshot(doc(db, path),
-      (snap) => setState({ data: snap.exists() ? { id: snap.id, ...snap.data() } : null, loaded: true, error: null }),
-      (err) => {
-        // permission-denied for a draft/missing course reads as "not available".
-        setState({ data: null, loaded: true, error: err });
-        if (err.code !== "permission-denied") logIssue({ kind: "error", action: `academy doc read failed: ${path}`, message: err.message, code: err.code });
-      });
-  }, [path, enabled]);
-  return state;
+/* `withPending`: also report whether a local write is still waiting for the
+   server (`pending`) and keep `confirmed` = the doc as the SERVER last
+   acknowledged it. The UI uses `data` for immediate feedback but `confirmed`
+   for claims of success (e.g. course completion) — an unrelated pending write
+   (like recording a lesson view) never makes acknowledged progress look new.
+   Shared + lingering (see useShared). */
+const D_IDLE = { data: undefined, loaded: false, error: null, pending: false, confirmed: undefined };
+const D_OFF = { data: null, loaded: true, error: null, pending: false, confirmed: null };
+function useDocState(path, enabled, withPending = false) {
+  const on = !!(enabled && path);
+  const st = useShared(on ? `d:${withPending ? 1 : 0}:${path}` : null, (set) => onSnapshot(doc(db, path), { includeMetadataChanges: withPending },
+    (snap) => {
+      const data = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+      const pending = withPending && snap.metadata.hasPendingWrites;
+      set((prev) => ({ data, loaded: true, error: null, pending, confirmed: pending ? (prev.confirmed === undefined ? null : prev.confirmed) : data }));
+    },
+    (err) => {
+      // permission-denied for a draft/missing course reads as "not available".
+      set({ data: null, loaded: true, error: err, pending: false, confirmed: null }, { ended: true });
+      if (err.code !== "permission-denied") logIssue({ kind: "error", action: `academy doc read failed: ${path}`, message: err.message, code: err.code });
+    }), D_IDLE);
+  return on ? st : D_OFF;
 }
 
 /* Listen to an arbitrary SET of document paths (path resolution needs the
@@ -78,9 +122,9 @@ export function useManyDocs(paths) {
 }
 
 /* ---- category + topic RECORDS (v4) ------------------------------------------ */
-export const useCategoryRecords = () => useQueryDocs(() => collection(db, "academyCategories"), [], true);
+export const useCategoryRecords = () => useQueryDocs(() => collection(db, "academyCategories"), [], true, "academyCategories");
 export const useTopicRecords = () => {
-  const s = useQueryDocs(() => collection(db, "academyTopics"), [], true);
+  const s = useQueryDocs(() => collection(db, "academyTopics"), [], true, "academyTopics");
   return useMemo(() => ({ ...s, byId: Object.fromEntries(s.docs.map((t) => [t.id, t])) }), [s]);
 };
 export const useCategoryIndex = () => {
@@ -99,7 +143,8 @@ export const updateCategory = (me, id, patch) => updateDoc(doc(db, "academyCateg
 /* v6 workspace: a NEW category is created as a private draft (hidden) the
    moment it has a name (or needs an id for its cover). The id is a slug plus a
    short random suffix, fixed forever after; renames never touch it. */
-export const newCategoryId = (name) => `${slugId(name || "category")}-${Math.random().toString(36).slice(2, 6)}`;
+// ≤ 40 chars in total (the rules' limit): a 35-char slug + "-" + 4 random chars.
+export const newCategoryId = (name) => categoryIdFromName(name, Math.random().toString(36).slice(2, 6));
 export async function createCategoryDraft(me, id, { name, description = "", short = "", order = 0 }, currentHidden = []) {
   const b = writeBatch(db);
   b.set(doc(db, "academyCategories", id), { name: String(name || "Untitled category").trim().slice(0, 60) || "Untitled category", short: String(short || "").trim().slice(0, 30), description: String(description || "").slice(0, 300), order, hidden: true, cover: null, courseOrder: [], ...stamp(me, true) });
@@ -109,14 +154,23 @@ export async function createCategoryDraft(me, id, { name, description = "", shor
 }
 export const setCategoryCourseOrder = (me, id, courseOrder) => updateDoc(doc(db, "academyCategories", id), { courseOrder: courseOrder.slice(0, 500), ...stamp(me) });
 /* Hide/restore keeps the denormalised list (consulted by rules) in the same batch. */
-export async function setCategoryHidden(me, id, hidden, currentHidden) {
-  // Legacy ids that read as this category are hidden with it (rules compare raw ids).
-  const ids = [id, ...Object.entries(LEGACY_CATEGORY_IDS).filter(([, to]) => to === id).map(([from]) => from)];
-  const next = hidden ? [...new Set([...currentHidden, ...ids])] : currentHidden.filter((x) => !ids.includes(x));
-  const b = writeBatch(db);
-  b.update(doc(db, "academyCategories", id), { hidden: !!hidden, ...stamp(me) });
-  b.set(doc(db, "academySettings/categoryIndex"), { hidden: next, updatedAt: serverTimestamp(), updatedBy: me.id });
-  await b.commit();
+// Legacy ids that read as this category are hidden with it (rules compare raw ids).
+const categoryIdsFor = (id) => [id, ...Object.entries(LEGACY_CATEGORY_IDS).filter(([, to]) => to === id).map(([from]) => from)];
+const nextHiddenList = (cur, id, hidden) => { const ids = categoryIdsFor(id); return hidden ? [...new Set([...cur, ...ids])] : cur.filter((x) => !ids.includes(x)); };
+/* Writes the category's flag + the index inside a transaction `tx`, reading the
+   index FRESH (never a possibly stale client copy, so two admins toggling
+   different categories can't undo each other). */
+async function applyCategoryHidden(tx, me, id, hidden) {
+  const idxRef = doc(db, "academySettings/categoryIndex");
+  const idx = await tx.get(idxRef);
+  const cur = idx.exists() ? (idx.data().hidden || []) : [];
+  return (writes) => {
+    writes.update(doc(db, "academyCategories", id), { hidden: !!hidden, ...stamp(me) });
+    writes.set(idxRef, { hidden: nextHiddenList(cur, id, hidden), updatedAt: serverTimestamp(), updatedBy: me.id });
+  };
+}
+export async function setCategoryHidden(me, id, hidden /* , currentHidden — read fresh now */) {
+  await runTransaction(db, async (tx) => { const write = await applyCategoryHidden(tx, me, id, hidden); write(tx); });
 }
 export async function reorderCategories(me, orderedIds) {
   const b = writeBatch(db);
@@ -139,32 +193,87 @@ export async function categoryReferences(categoryId) {
   }
   return out;
 }
-/* Move every referencing item to another category, then delete the record
-   (+ its cover) — never a cascade delete of content. */
-export async function reassignAndDeleteCategory(me, fromId, toId, currentHidden) {
-  const refs = await categoryReferences(fromId);
-  const all = [...refs.courses.map((x) => ["courses", x]), ...refs.guides.map((x) => ["guides", x]), ...refs.paths.map((x) => ["paths", x])];
-  if (all.length && !toId) throw new Error("Choose a category to move the content to first.");
-  for (let i = 0; i < all.length; i += 200) {
-    const b = writeBatch(db);
-    for (const [coll, x] of all.slice(i, i + 200)) b.update(doc(db, coll, x.id), { category: toId, ...stamp(me) });
-    await b.commit();
-  }
-  const rec = await getDoc(doc(db, "academyCategories", fromId));
-  const cover = rec.exists() ? rec.data().cover : null;
-  const b = writeBatch(db);
-  b.delete(doc(db, "academyCategories", fromId));
-  const aliases = Object.entries(LEGACY_CATEGORY_IDS).filter(([, to]) => to === fromId).map(([from]) => from);
-  b.set(doc(db, "academySettings/categoryIndex"), { hidden: currentHidden.filter((x) => x !== fromId && !aliases.includes(x)), updatedAt: serverTimestamp(), updatedBy: me.id });
-  await b.commit();
-  if (cover?.path) { try { await deleteImage(cover.path); } catch {} }
-  return all.length;
+/* ---- v6.10: deleting a category with its contents (admins) -----------------
+   The plan is run item by item with the services below; the server locks the
+   category first (re-checking against what was reviewed) and deletes the
+   record last, only once nothing is filed under it (functions/
+   academyCategoryDeletion.js + the rules' categoryLocked()). */
+export async function categoryContents(catId) {
+  const ids = categoryIdsFor(catId);
+  const q = (c) => getDocs(query(collection(db, c), where("category", "in", ids)));
+  const [live, drafts, guides, guideDrafts, paths, rec] = await Promise.all([q("courses"), q("courseDrafts"), q("guides"), q("guideDrafts"), q("paths"), getDoc(doc(db, "academyCategories", catId))]);
+  const courseIds = [...new Set([...live.docs, ...drafts.docs].map((d) => d.id))];
+  const courses = await Promise.all(courseIds.map(async (id) => {
+    const [l, d] = await Promise.all([getDoc(doc(db, "courses", id)), getDoc(doc(db, "courseDrafts", id))]);
+    return courseRow(id, l.exists() ? l.data() : null, d.exists() ? d.data() : null, ids);
+  }));
+  // the category's own order first (as learners and the workspace show it), then the rest by title
+  const order = (rec.exists() && rec.data().courseOrder) || [];
+  const pos = (id) => { const i = order.indexOf(id); return i < 0 ? Infinity : i; };
+  courses.sort((a, b) => pos(a.id) - pos(b.id) || a.title.localeCompare(b.title));
+  return {
+    ids, exists: rec.exists(), lock: rec.exists() ? rec.data().deleting || null : null, cover: rec.exists() ? rec.data().cover || null : null,
+    courses,
+    guides: await Promise.all([...new Set([...guides.docs, ...guideDrafts.docs].map((d) => d.id))].map(async (id) => {
+      const [l, d] = await Promise.all([getDoc(doc(db, "guides", id)), getDoc(guideDraftRef(id))]);
+      return guideRow(id, l.exists() ? l.data() : null, d.exists() ? d.data() : null, ids);
+    })).then((gs) => { const order = (rec.exists() && rec.data().guideOrder) || []; const pos = (x) => { const i = order.indexOf(x); return i < 0 ? Infinity : i; }; return gs.sort((a, b) => pos(a.id) - pos(b.id) || a.title.localeCompare(b.title)); }),
+    paths: paths.docs.map((d) => ({ id: d.id, title: d.data().title || "Untitled path", status: d.data().status })),
+  };
 }
+/* Move a course to another category, keeping everything (ids, lessons, keys,
+   attempts, progress, comments, images, references). The live course moves if
+   it's filed here; the draft moves if it's filed here (or `draftToo`), with a
+   draft revision bump so an open editor notices. Never publishes, restores or
+   un-hides anything. Already moved → nothing to do. */
+export async function moveCourseCategory(me, id, fromIds, dest, { draftToo = false } = {}) {
+  await runTransaction(db, async (tx) => {
+    const lref = doc(db, "courses", id), dref = doc(db, "courseDrafts", id);
+    const l = await tx.get(lref); const d = await tx.get(dref);
+    if (l.exists() && fromIds.includes(l.data().category)) tx.update(lref, { category: dest, updatedAt: serverTimestamp(), updatedBy: me.id });
+    if (d.exists() && d.data().category !== dest && (fromIds.includes(d.data().category) || draftToo))
+      tx.update(dref, { category: dest, rev: Number(d.data().rev || 0) + 1, updatedAt: serverTimestamp(), updatedBy: me.id });
+  });
+}
+/* Move a resource: its published record (if filed here) and its draft (if filed
+   here, or `draftToo`), with a draft revision bump. Never publishes or restores. */
+export async function moveGuideCategory(me, id, dest, { fromIds = null, draftToo = false } = {}) {
+  await runTransaction(db, async (tx) => {
+    const lref = doc(db, "guides", id), dref = guideDraftRef(id);
+    const l = await tx.get(lref); const d = await tx.get(dref);
+    const here = (c) => !fromIds || fromIds.includes(c);
+    if (l.exists() && here(l.data().category) && l.data().category !== dest) tx.update(lref, { category: dest, updatedAt: serverTimestamp(), updatedBy: me.id });
+    if (d.exists() && d.data().category !== dest && (here(d.data().category) || draftToo))
+      tx.update(dref, { category: dest, rev: Number(d.data().rev || 0) + 1, updatedAt: serverTimestamp(), updatedBy: me.id });
+  });
+}
+export const movePathCategory = (me, id, dest) => updateDoc(doc(db, "paths", id), { category: dest || "", ...stamp(me) });
+/* Moved courses go after the destination's existing courses, in the order they
+   had here. If the destination has no saved order yet, its CURRENT order (as
+   shown) is saved first, so nothing already there moves. */
+export async function appendCourseOrder(me, destId, movedIds) {
+  const ref = doc(db, "academyCategories", destId);
+  const cur = await getDoc(ref);
+  if (!cur.exists()) return;
+  let order = cur.data().courseOrder || [];
+  if (!order.length) {
+    const [live, drafts] = await Promise.all([getDocs(query(collection(db, "courses"), where("category", "==", destId))), getDocs(query(collection(db, "courseDrafts"), where("category", "==", destId)))]);
+    const byId = new Map();
+    for (const d of live.docs) byId.set(d.id, { id: d.id, ...d.data(), publishedAtMs: toMs(d.data().publishedAt), createdAtMs: toMs(d.data().createdAt) });
+    for (const d of drafts.docs) if (!byId.has(d.id)) byId.set(d.id, { id: d.id, ...d.data(), publishedAtMs: 0, createdAtMs: toMs(d.data().createdAt) });
+    order = orderCourses([...byId.values()].filter((c) => !movedIds.includes(c.id)), []).map((c) => c.id);
+  }
+  const next = [...order.filter((x) => !movedIds.includes(x)), ...movedIds].slice(0, 500);
+  await updateDoc(ref, { courseOrder: next, ...stamp(me) });
+}
+export const lockCategoryForDeletion = (payload) => callFunction("lockCategoryForDeletion", payload).then((r) => r.data);
+export const finalizeCategoryDeletion = (categoryId, planId) => callFunction("finalizeCategoryDeletion", { categoryId, planId }).then((r) => r.data);
+export const cancelCategoryDeletion = (categoryId) => callFunction("cancelCategoryDeletion", { categoryId }).then((r) => r.data);
 
 export async function createTopic(me, { name, description = "" }, byId = {}) {
   const key = nameKey(name);
   const dup = Object.values(byId).find((t) => nameKey(t.name) === key);
-  if (dup) throw new Error(`“${dup.name}” already exists${dup.hidden ? " (hidden — restore it instead)" : ""}.`);
+  if (dup) throw new Error(`“${dup.name}” already exists${dup.hidden ? " (hidden, so restore it instead)" : ""}.`);
   let id = slugId(name);
   if (byId[id]) id = `${id}-${newId().slice(0, 4)}`;
   await setDoc(doc(db, "academyTopics", id), { name: String(name).trim().slice(0, 60), description: String(description || "").slice(0, 300), hidden: false, ...stamp(me, true) });
@@ -229,32 +338,33 @@ function useContentList(coll, format, me) {
   const editor = isAcademyEditor(me);
   const cats = useLearnerCategoryIds();
   const key = cats.ids.join(",");
-  const [state, setState] = useState({ docs: [], loaded: false, error: null });
-  useEffect(() => {
-    if (!me?.id) { setState({ docs: [], loaded: true, error: null }); return; }
+  const learnerIds = !editor && coll !== "paths";
+  // Ready to subscribe? (a learner's query needs the visible category ids first)
+  const ready = !!me?.id && (!learnerIds || cats.loaded);
+  const empty = learnerIds && cats.loaded && !key;
+  const shareKey = ready && !empty ? `list:${coll}:${editor ? "all" : learnerIds ? key : "pub"}:${me.id}` : null;
+  const st = useShared(shareKey, (set) => {
     let qs;
     if (editor) qs = [collection(db, coll)];
     else if (coll === "paths") qs = [query(collection(db, coll), where("status", "==", "published"))];
     else {
-      if (!cats.loaded) return;
-      const ids = key ? key.split(",") : [];
-      if (!ids.length) { setState({ docs: [], loaded: true, error: null }); return; }
+      const ids = key.split(",");
       qs = [];
       for (let i = 0; i < ids.length; i += 30) qs.push(query(collection(db, coll), where("status", "==", "published"), where("category", "in", ids.slice(i, i + 30))));
     }
-    setState((s) => ({ ...s, loaded: false, error: null }));
     const parts = qs.map(() => null);
     const publish = (error = null) => {
       if (!parts.every(Boolean) && !error) return;
       const docs = parts.filter(Boolean).flat().sort((a, b) => toMs(b.updatedAt) - toMs(a.updatedAt));
-      setState({ docs, loaded: true, error });
+      set({ docs, loaded: true, error }, error ? { ended: true } : undefined);
     };
     const unsubs = qs.map((q, i) => onSnapshot(q,
       (snap) => { parts[i] = snap.docs.map((d) => ({ id: d.id, ...d.data(), format })); publish(); },
       (err) => { parts[i] = []; publish(err); logIssue({ kind: "error", action: `academy ${coll} read failed`, message: err.message, code: err.code }); }));
     return () => unsubs.forEach((u) => u());
-  }, [coll, format, me?.id, editor, key, cats.loaded]);
-  return state;
+  }, Q_IDLE);
+  if (!me?.id || empty) return Q_OFF;
+  return st;
 }
 export function useCourses(me) {
   const s = useContentList("courses", "course", me);
@@ -272,7 +382,7 @@ export const useGuide = (guideId) => useDocState(guideId ? `guides/${guideId}` :
 export const usePathDoc = (pathId) => useDocState(pathId ? `paths/${pathId}` : null, !!pathId);
 export const useCourse = (courseId) => useDocState(courseId ? `courses/${courseId}` : null, !!courseId);
 export const useLessons = (courseId, enabled = true) =>
-  useQueryDocs(() => collection(db, `courses/${courseId}/lessons`), [courseId, enabled], !!courseId && enabled);
+  useQueryDocs(() => collection(db, `courses/${courseId}/lessons`), [courseId, enabled], !!courseId && enabled, `courses/${courseId}/lessons`);
 export const usePurposeVideo = () => useDocState(`academySettings/${PURPOSE_DOC}`, true);
 /* Category artwork: { art: { [categoryId]: imageRef } } — ids are fixed in code. */
 export const useCategoryArt = () => useDocState("academySettings/categories", true);
@@ -286,9 +396,9 @@ export const setIntroWatched = (uid, watched) =>
 
 /* ---- progress ------------------------------------------------------------- */
 export const progressPath = (uid, courseId) => `learnerProgress/${uid}/courseProgress/${courseId}`;
-export const useProgress = (uid, courseId) => useDocState(uid && courseId ? progressPath(uid, courseId) : null, !!(uid && courseId));
+export const useProgress = (uid, courseId) => useDocState(uid && courseId ? progressPath(uid, courseId) : null, !!(uid && courseId), true);
 export function useAllProgress(uid) {
-  const s = useQueryDocs(() => collection(db, `learnerProgress/${uid}/courseProgress`), [uid], !!uid);
+  const s = useQueryDocs(() => collection(db, `learnerProgress/${uid}/courseProgress`), [uid], !!uid, `learnerProgress/${uid}/courseProgress`);
   return useMemo(() => ({ ...s, byCourse: Object.fromEntries(s.docs.map((p) => [p.id, p])) }), [s]);
 }
 export const useLeaderProgress = (courseId, enabled) =>
@@ -301,7 +411,7 @@ export const useLeaderAttempts = (courseId, enabled) =>
 
 /* Guide "reviewed" self-report + path bookkeeping (both learner-owned). */
 export const useAllGuideReviews = (uid) => {
-  const s = useQueryDocs(() => collection(db, `learnerProgress/${uid}/guideReviews`), [uid], !!uid);
+  const s = useQueryDocs(() => collection(db, `learnerProgress/${uid}/guideReviews`), [uid], !!uid, `learnerProgress/${uid}/guideReviews`);
   return useMemo(() => ({ ...s, byGuide: Object.fromEntries(s.docs.map((r) => [r.id, r])) }), [s]);
 };
 export const useGuideReview = (uid, guideId) => useDocState(uid && guideId ? `learnerProgress/${uid}/guideReviews/${guideId}` : null, !!(uid && guideId));
@@ -309,7 +419,7 @@ export const setGuideReviewed = (uid, guideId, reviewed) =>
   setDoc(doc(db, `learnerProgress/${uid}/guideReviews/${guideId}`),
     { uid, guideId, reviewed: !!reviewed, reviewedAt: reviewed ? serverTimestamp() : deleteField(), updatedAt: serverTimestamp() }, { merge: true });
 export const useAllPathProgress = (uid) => {
-  const s = useQueryDocs(() => collection(db, `learnerProgress/${uid}/pathProgress`), [uid], !!uid);
+  const s = useQueryDocs(() => collection(db, `learnerProgress/${uid}/pathProgress`), [uid], !!uid, `learnerProgress/${uid}/pathProgress`);
   return useMemo(() => ({ ...s, byPath: Object.fromEntries(s.docs.map((r) => [r.id, r])) }), [s]);
 };
 export const usePathProgressDoc = (uid, pathId) => useDocState(uid && pathId ? `learnerProgress/${uid}/pathProgress/${pathId}` : null, !!(uid && pathId));
@@ -355,25 +465,38 @@ async function writeProgress(uid, courseId, patch, { create = false } = {}) {
   if (create) base.startedAt = serverTimestamp();
   await setDoc(doc(db, progressPath(uid, courseId)), { ...base, ...patch }, { merge: true });
 }
+/* v6.4: the learner's own writes go to `playback` (view/position) — completion
+   flags in `lessons`, `earned` and `finishedAt` are server-only (see rules). */
 export const recordLessonView = (uid, courseId, lessonId, hasProgress) =>
   writeProgress(uid, courseId, {
     lastLessonId: lessonId, lastViewedAt: serverTimestamp(),
-    lessons: { [lessonId]: { viewedAt: serverTimestamp() } },
+    playback: { [lessonId]: { viewedAt: serverTimestamp() } },
   }, { create: !hasProgress });
 export const startCourse = (uid, courseId, hasProgress) =>
   writeProgress(uid, courseId, { lastViewedAt: serverTimestamp() }, { create: !hasProgress });
 export const savePlayback = (uid, courseId, lessonId, { positionSec, durationSec }) =>
-  writeProgress(uid, courseId, { lessons: { [lessonId]: { positionSec: Math.floor(positionSec), durationSec: Math.floor(durationSec || 0) } } });
+  writeProgress(uid, courseId, { playback: { [lessonId]: { positionSec: Math.floor(positionSec), durationSec: Math.floor(durationSec || 0) } } });
+/* Completion goes through the server, which enforces the course order
+   (functions/academyCompletion.js). They resolve once the server has written. */
 export const markVideoWatched = (uid, courseId, lessonId) =>
-  writeProgress(uid, courseId, { lessons: { [lessonId]: { videoWatched: true, videoWatchedAt: serverTimestamp() } } });
+  callFunction("completeLesson", { courseId, lessonId, how: "video", done: true }).then((r) => r.data);
 export const setManualDone = (uid, courseId, lessonId, done) =>
-  writeProgress(uid, courseId, { lessons: { [lessonId]: done
-    ? { manualDone: true, manualDoneAt: serverTimestamp() }
-    : { manualDone: false, manualDoneAt: deleteField() } } });
+  callFunction("completeLesson", { courseId, lessonId, how: "manual", done: !!done }).then((r) => r.data);
+/* Finish course: server-verified, idempotent → { already, finishedAt } */
+export const finishCourse = (courseId) => callFunction("finishCourse", { courseId }).then((r) => r.data);
 
 /* Quiz: graded by the submitQuizAttempt callable (server-side). */
-export const submitQuiz = (courseId, lessonId, answers) =>
-  callFunction("submitQuizAttempt", { courseId, lessonId, answers }).then((r) => r.data);
+/* `submissionId` identifies ONE attempt: reuse it to retry an uncertain request
+   (the server returns the original result instead of using another attempt). */
+export const submitQuiz = (courseId, lessonId, answers, submissionId) =>
+  callFunction("submitQuizAttempt", { courseId, lessonId, answers, ...(submissionId ? { submissionId } : {}) }).then((r) => r.data);
+/* Academy staff: give a learner more attempts on a limited quiz (server-checked). */
+export const grantQuizAttempts = (uid, courseId, lessonId, count = 1) =>
+  callFunction("grantQuizAttempts", { uid, courseId, lessonId, count }).then((r) => r.data);
+/* Academy staff: attempts on one course's limited quizzes (scoped server view). */
+export const quizAttemptStatus = (courseId) => callFunction("quizAttemptStatus", { courseId }).then((r) => r.data);
+/* Learner: ask for another attempt on a used-up quiz (editors see it on the course page). */
+export const requestQuizAttempt = (courseId, lessonId) => callFunction("requestQuizAttempt", { courseId, lessonId }).then((r) => r.data);
 
 /* ---- discussion ----------------------------------------------------------- */
 /* A discussion lives under a lesson ({courseId, lessonId}) or a guide ({guideId}). */
@@ -394,9 +517,22 @@ export const addComment = (scope, me, ownerDoc, txt, parentId = null) =>
   });
 export const editComment = (scope, id, txt) =>
   updateDoc(doc(db, commentsPath(scope), id), { txt: txt.trim(), editedAt: serverTimestamp() });
-export const pinComment = (scope, id, pinned, txt) =>
-  updateDoc(doc(db, commentsPath(scope), id), { pinned: !!pinned, txt, editedAt: serverTimestamp() });
-export const deleteComment = (scope, id) => deleteDoc(doc(db, commentsPath(scope), id));
+/* Pin/unpin changes ONLY `pinned` (never editedAt — pinning isn't an edit). */
+export const pinComment = (scope, id, pinned) =>
+  updateDoc(doc(db, commentsPath(scope), id), { pinned: !!pinned });
+/* Delete one comment. Replies are NOT deleted: they stay visible under a
+   "Comment deleted" placeholder. If it's already gone (deleted elsewhere),
+   resolves { alreadyGone: true } instead of failing. */
+export async function deleteComment(scope, id) {
+  const ref = doc(db, commentsPath(scope), id);
+  try { await deleteDoc(ref); return { alreadyGone: false }; }
+  catch (e) {
+    let gone = false;
+    try { gone = !(await getDoc(ref)).exists(); } catch { /* can't tell */ }
+    if (gone) return { alreadyGone: true };
+    throw e;
+  }
+}
 
 /* ---- course management ---------------------------------------------------- */
 const topicIdsOf = (d) => [...new Set((d.topicIds || []).map(String))].slice(0, 12);
@@ -416,6 +552,10 @@ export const shapeVideoMeta = (m) => !m ? null : {
   ...(Number(m.durationSec) > 0 && !m.isLive ? { durationSec: Math.round(Number(m.durationSec)) } : {}),
   ...(m.isLive ? { isLive: true } : {}),
 };
+export const shapePriorKnowledge = (pk, selfId = null) => ({
+  courseIds: [...new Set(((pk && pk.courseIds) || []).map(String))].filter((id) => id && id !== selfId).slice(0, 10),
+  note: String((pk && pk.note) || "").trim().slice(0, 300),
+});
 export const courseShape = (d) => ({
   title: String(d.title || "").trim().slice(0, 120),
   category: normalizeCategory(d.category), level: d.level, topics: normalizeTopics(d.topics), topicIds: topicIdsOf(d),
@@ -425,28 +565,17 @@ export const courseShape = (d) => ({
   modules: (d.modules || []).slice(0, 50).map((m) => ({ id: m.id || newId(), title: String(m.title || "").slice(0, 120), lessonIds: (m.lessonIds || []).slice(0, 200) })),
   cover: d.cover || null,
   previewVideo: d.previewVideo ? videoRecord(d.previewVideo.ok ? d.previewVideo : { ok: true, ...d.previewVideo }) : null,
+  // v6.6 "Recommended prior knowledge": advisory course ids + a short note (never a gate)
+  ...(d.priorKnowledge ? { priorKnowledge: shapePriorKnowledge(d.priorKnowledge) } : {}),
   // Markdown format of `about` (absent = 1, legacy). Never written for legacy text.
   ...(d.mdVersion === 2 ? { mdVersion: 2 } : {}),
 });
 
-export async function createCourse(me, data) {
-  const ref = doc(collection(db, "courses"));
-  await setDoc(ref, {
-    ...courseShape(data), status: "draft",
-    lessonCount: 0, requiredLessonCount: 0, requiredQuizLessonIds: [], bonusLessonIds: [], durationMinutes: 0,
-    createdAt: serverTimestamp(), createdBy: me.id, updatedAt: serverTimestamp(), updatedBy: me.id,
-  });
-  return ref.id;
-}
-/* Save course fields and refresh the denormalised counters from the current
-   lessons (passed in by the editor, which already listens to them). */
-export async function updateCourse(me, courseId, data, lessons) {
-  const patch = { ...courseShape(data), updatedAt: serverTimestamp(), updatedBy: me.id };
-  if (lessons) Object.assign(patch, courseCounters({ ...data, modules: patch.modules }, lessons));
-  await updateDoc(doc(db, "courses", courseId), patch);
-}
-/* Reorder save: writes only `modules` (+ counters/stamps), so a failed save can
-   never lose unrelated edits and the editor keeps its previous order on error. */
+/* v6.6: courses and lessons are only ever written through the workspace's
+   draft → publish flow (saveCourseDraft / publishCourseDraft), which the rules
+   and the server prerequisite check are built around. The pre-workspace direct
+   writers (createCourse, updateCourse, saveLesson, deleteLesson, getQuizKey)
+   were removed so nothing can save a live course or lesson another way. */
 export async function saveCourseOrder(me, courseId, course, modules, lessons) {
   const patch = { modules: modules.map((m) => ({ id: m.id || newId(), title: String(m.title || "").slice(0, 120), lessonIds: (m.lessonIds || []).slice(0, 200) })), updatedAt: serverTimestamp(), updatedBy: me.id };
   Object.assign(patch, courseCounters({ ...course, modules: patch.modules }, lessons));
@@ -473,24 +602,121 @@ const guideShape = (d) => ({
   durationMinutes: Math.max(0, Math.round(Number(d.durationMinutes) || 0)),
   ...(d.mdVersion === 2 ? { mdVersion: 2 } : {}),   // format of `description` (absent = 1, legacy)
 });
-export async function createGuide(me, data) {
-  const ref = doc(collection(db, "guides"));
-  await setDoc(ref, { ...guideShape(data), status: "draft", createdAt: serverTimestamp(), createdBy: me.id, updatedAt: serverTimestamp(), updatedBy: me.id });
-  return ref.id;
+/* v6.11 — Tips & resources get private drafts (guideDrafts/{id}). Saving never
+   touches what learners read; Publish copies the draft's content fields into
+   guides/{id} in one transaction that also bumps the draft revision (the rules
+   require the published content to equal the draft being published). */
+const guideDraftRef = (gid) => doc(db, "guideDrafts", gid);
+export const newGuideId = () => doc(collection(db, "guides")).id;
+export function useGuideDrafts(me) {
+  return useQueryDocs(() => collection(db, "guideDrafts"), [me?.id, isAcademyEditor(me)], !!me?.id && isAcademyEditor(me));
 }
-export const updateGuide = (me, id, data) => updateDoc(doc(db, "guides", id), { ...guideShape(data), updatedAt: serverTimestamp(), updatedBy: me.id });
-export async function deleteGuideHard(id) {
-  const g = await getDoc(doc(db, "guides", id));
-  const paths = g.exists() && g.data().thumb?.path ? [g.data().thumb.path] : [];
-  const cs = await getDocs(collection(db, `guides/${id}/comments`));
+const shapeGuideDraft = (g) => ({
+  title: String(g.title || "").slice(0, 120),
+  category: g.category ? normalizeCategory(g.category) : "", topics: normalizeTopics(g.topics), topicIds: topicIdsOf(g),
+  video: g.video ? videoRecord(g.video.ok ? g.video : { ok: true, ...g.video }) : null,
+  videoMeta: g.video ? shapeVideoMeta(g.videoMeta) : null,
+  thumbMode: g.thumbMode === "custom" && g.thumb ? "custom" : "source",
+  body: String(g.body || "").slice(0, 20000),
+  resources: (g.resources || []).filter((r) => r && r.url).slice(0, 20).map(shapeResource),
+  thumb: g.thumb || null,
+  durationMinutes: g.video ? 0 : Math.max(0, Math.round(Number(g.durationMinutes) || 0)),   // a reading estimate, text-only
+  ...(g.mdVersion === 2 ? { mdVersion: 2 } : {}),
+});
+export async function loadGuideWorkspace(gid) {
+  const [d, l] = await Promise.all([getDoc(guideDraftRef(gid)), getDoc(doc(db, "guides", gid))]);
+  const live = l.exists() ? { id: gid, ...l.data() } : null;
+  if (d.exists()) return { draftExists: true, head: { rev: Number(d.data().rev || 0), publishedRev: Number(d.data().publishedRev || 0) }, guide: d.data(), live };
+  if (live) return { draftExists: false, head: { rev: 0, publishedRev: 0 }, guide: guideDraftFromLive(live), live };
+  return { draftExists: false, head: { rev: 0, publishedRev: 0 }, guide: null, live: null };
+}
+/* One save, pinned to the revision the editor loaded (else → conflict). */
+export async function saveGuideDraft(me, gid, guide, baseRev) {
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(guideDraftRef(gid));
+    const cur = snap.exists() ? Number(snap.data().rev || 0) : 0;
+    if (cur !== baseRev) throw Object.assign(new Error("This resource was changed somewhere else (another editor or tab)."), { code: "conflict", remoteRev: cur });
+    const data = { ...shapeGuideDraft(guide), rev: cur + 1, publishedRev: snap.exists() ? Number(snap.data().publishedRev || 0) : 0, updatedAt: serverTimestamp(), updatedBy: me.id };
+    if (snap.exists()) tx.update(guideDraftRef(gid), data); else tx.set(guideDraftRef(gid), { ...data, createdAt: serverTimestamp(), createdBy: me.id });
+    return cur + 1;
+  });
+}
+/* Publish exactly revision `expectedRev`. Retry-safe like courses: if that
+   revision is already the published one → { already: true }. */
+export async function publishGuideDraft(me, gid, expectedRev) {
+  try { return await publishGuideOnce(me, gid, expectedRev); }
+  catch (e) {
+    if (e?.code !== "conflict") throw e;
+    const d = await getDoc(guideDraftRef(gid)); const x = d.exists() ? d.data() : null;
+    if (x && Number(x.rev) === expectedRev + 1 && Number(x.publishedRev) === Number(x.rev)) return { rev: Number(x.rev), already: true, firstPublish: false };
+    throw e;
+  }
+}
+async function publishGuideOnce(me, gid, expectedRev) {
+  const d = await getDoc(guideDraftRef(gid));
+  if (!d.exists()) throw Object.assign(new Error("There are no changes to publish."), { code: "no-draft" });
+  const draft = d.data();
+  const catOk = !!draft.category && (await getDoc(doc(db, "academyCategories", draft.category))).exists();
+  const issues = guidePublishIssues(draft, catOk ? [draft.category] : []);
+  if (issues.length) throw Object.assign(new Error(issues[0].message), { code: "blocked", blockers: issues.map((i) => i.blocker) });
+  let oldThumb = null, first = false;
+  const rev = await runTransaction(db, async (tx) => {
+    const cur = await tx.get(guideDraftRef(gid));
+    if (!cur.exists() || Number(cur.data().rev) !== expectedRev) throw Object.assign(new Error("This resource was changed somewhere else since you last saved. Reload to see the latest version, then publish."), { code: "conflict" });
+    const liveRef = doc(db, "guides", gid); const live = await tx.get(liveRef);
+    const content = {}; for (const k of GUIDE_CONTENT_FIELDS) if (cur.data()[k] !== undefined) content[k] = cur.data()[k];
+    const now = serverTimestamp();
+    oldThumb = live.exists() ? live.data().thumb?.path || null : null; first = !live.exists() || !live.data().publishedAt;
+    const next = { ...content, status: "published", updatedAt: now, updatedBy: me.id };
+    if (live.exists()) {
+      const drop = Object.fromEntries(GUIDE_CONTENT_FIELDS.filter((k) => !(k in content) && live.data()[k] !== undefined).map((k) => [k, deleteField()]));
+      tx.update(liveRef, { ...next, ...drop, ...(live.data().publishedAt ? {} : { publishedAt: now }) });
+    } else tx.set(liveRef, { ...next, createdAt: now, createdBy: me.id, publishedAt: now });
+    const r = expectedRev + 1;
+    tx.update(guideDraftRef(gid), { rev: r, publishedRev: r, updatedAt: now, updatedBy: me.id });
+    return r;
+  });
+  // the replaced thumbnail, if it was this resource's own and nothing else uses it
+  if (oldThumb && oldThumb !== draft.thumb?.path && oldThumb.startsWith(`academy/guideThumbs/${gid}/`)) {
+    try { if (!(await imagesReferencedElsewhere([oldThumb], null, { guideId: gid })).has(oldThumb)) await deleteImage(oldThumb); } catch { /* left for clean-up */ }
+  }
+  return { rev, firstPublish: first };
+}
+/* Discard unpublished changes: the draft goes; learners' published version, its
+   reviews and discussion are untouched. */
+export const discardGuideDraft = (gid) => deleteDoc(guideDraftRef(gid));
+export const setGuideStatus = (me, gid, status) => setContentStatus("guides", me, gid, status);
+/* Permanently delete a resource: discussion, learners' "reviewed" records,
+   its draft and the published record; then its own thumbnails that nothing
+   else uses. Primary deletion first; image clean-up reported separately. */
+export async function deleteGuideHard(me, gid) {
+  const [g, d] = await Promise.all([getDoc(doc(db, "guides", gid)), getDoc(guideDraftRef(gid))]);
+  const images = [...new Set([g.exists() && g.data().thumb?.path, d.exists() && d.data().thumb?.path].filter((p) => p && p.startsWith(`academy/guideThumbs/${gid}/`)))];
+  // discussion first (readable only while the resource exists), then the draft +
+  // record, then learners' "reviewed" records (deletable once it's gone)
+  const cs = g.exists() ? await getDocs(collection(db, `guides/${gid}/comments`)) : { docs: [] };
+  await batchDelete(cs.docs.map((c) => c.ref));
   const b = writeBatch(db);
-  cs.docs.forEach((c) => b.delete(c.ref));
-  b.delete(doc(db, "guides", id));
+  if (d.exists()) b.delete(guideDraftRef(gid));
+  if (g.exists()) b.delete(doc(db, "guides", gid));
   await b.commit();
+  let reviewsLeft = false;
+  if (g.exists()) {
+    try { const rs = await getDocs(query(collectionGroup(db, "guideReviews"), where("guideId", "==", gid))); await batchDelete(rs.docs.map((x) => x.ref)); }
+    catch { reviewsLeft = true; /* left behind; never shown once the resource is gone */ }
+  }
+  const keep = images.length ? await imagesReferencedElsewhere(images, null, { guideId: gid }).catch(() => new Set(images)) : new Set();
   const failed = [];
-  for (const p of paths) { try { await deleteImage(p); } catch { failed.push(p); } }
-  return failed;
+  for (const p of images.filter((x) => !keep.has(x))) { try { await deleteImage(p); } catch (e) { if (e?.code !== "storage/object-not-found") failed.push(p); } }
+  return { pendingCleared: failed.length === 0 && !reviewsLeft, failedImages: failed, keptShared: [...keep] };
 }
+/* Impact checks before a deletion read the SERVER only (never the local cache): offline,
+   they fail visibly and the review offers Retry instead of showing unconfirmed results. */
+export async function pathsUsingGuide(gid) {
+  const ps = await getDocsFromServer(collection(db, "paths"));
+  return ps.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => (p.items || []).some((it) => it.type === "guide" && it.guideId === gid));
+}
+export const setCategoryGuideOrder = (me, id, guideOrder) => updateDoc(doc(db, "academyCategories", id), { guideOrder: guideOrder.slice(0, 500), ...stamp(me) });
 
 /* ---- learning paths -------------------------------------------------------- */
 const pathItemShape = (it) => {
@@ -532,8 +758,20 @@ export const usePendingCleanup = (enabled) => useDocState(enabled ? PENDING_DOC 
 async function batchDelete(refs) {
   for (let i = 0; i < refs.length; i += 400) { const b = writeBatch(db); refs.slice(i, i + 400).forEach((r) => b.delete(r)); await b.commit(); }
 }
+/* Other courses that list `courseId` as recommended prior knowledge (live or
+   draft). Deleting it leaves those references dangling: learners simply stop
+   seeing it there, and editors are told to update the list. */
+export async function coursesRecommending(courseId) {
+  const [live, drafts] = await Promise.all([
+    getDocsFromServer(query(collection(db, "courses"), where("priorKnowledge.courseIds", "array-contains", courseId))),
+    getDocsFromServer(query(collection(db, "courseDrafts"), where("priorKnowledge.courseIds", "array-contains", courseId))),
+  ]);
+  const byId = new Map();
+  for (const d of [...live.docs, ...drafts.docs]) if (d.id !== courseId && !byId.has(d.id)) byId.set(d.id, { id: d.id, title: d.data().title || "Untitled course" });
+  return [...byId.values()];
+}
 export async function pathsUsingCourse(courseId) {
-  const ps = await getDocs(collection(db, "paths"));
+  const ps = await getDocsFromServer(collection(db, "paths"));
   return pathsReferencingCourse(ps.docs.map((d) => ({ id: d.id, ...d.data() })), courseId);
 }
 export function deleteCourseHard(me, courseId, pending = null) {
@@ -589,6 +827,8 @@ export const lessonShape = (d) => ({
   videoMeta: d.video ? shapeVideoMeta(d.videoMeta) : null,
   bonus: d.bonus === true,
   durationMinutes: Math.max(0, Math.round(Number(d.durationMinutes) || 0)),
+  // v6.5: stable lesson ids this lesson requires (only written when present)
+  ...(Array.isArray(d.prerequisites) ? { prerequisites: [...new Set(d.prerequisites.map(String))].slice(0, 20) } : {}),
   quiz: {
     mode: d.quiz?.mode || "none",
     passMark: Math.min(100, Math.max(1, Math.round(Number(d.quiz?.passMark) || 70))),
@@ -599,40 +839,7 @@ export const lessonShape = (d) => ({
     })),
   },
 });
-/* Save a lesson. The learner-readable doc gets the questions; the correct
-   option ids + explanations go to quizKeys in the same batch, so the two can
-   never drift. `key` = { answers: {qId: [optId]}, explanations: {qId: text} }. */
-export async function saveLesson(courseId, lessonId, data, key) {
-  const id = lessonId || doc(collection(db, `courses/${courseId}/lessons`)).id;
-  const b = writeBatch(db);
-  const ref = doc(db, `courses/${courseId}/lessons/${id}`);
-  const shaped = { ...lessonShape(data), updatedAt: serverTimestamp() };
-  if (!lessonId) { shaped.createdAt = serverTimestamp(); shaped.createdAtMs = Date.now(); }
-  b.set(ref, shaped, { merge: !!lessonId });
-  if (shaped.quiz.mode !== "none") {
-    const answers = {}, explanations = {};
-    for (const q of shaped.quiz.questions) {
-      answers[q.id] = ((key?.answers || {})[q.id] || []).filter((o) => q.options.some((op) => op.id === o));
-      const ex = (key?.explanations || {})[q.id];
-      if (ex) explanations[q.id] = String(ex).slice(0, 2000);
-    }
-    b.set(doc(db, `courses/${courseId}/quizKeys/${id}`), { answers, explanations, updatedAt: serverTimestamp() });
-  }
-  await b.commit();
-  return id;
-}
-export async function getQuizKey(courseId, lessonId) {
-  const s = await getDoc(doc(db, `courses/${courseId}/quizKeys/${lessonId}`));
-  return s.exists() ? s.data() : { answers: {}, explanations: {} };
-}
-export async function deleteLesson(courseId, lessonId) {
-  const b = writeBatch(db);
-  const cs = await getDocs(collection(db, `courses/${courseId}/lessons/${lessonId}/comments`));
-  cs.docs.forEach((c) => b.delete(c.ref));
-  b.delete(doc(db, `courses/${courseId}/quizKeys/${lessonId}`));
-  b.delete(doc(db, `courses/${courseId}/lessons/${lessonId}`));
-  await b.commit();
-}
+
 export async function savePurposeVideo(me, data) {
   await setDoc(doc(db, `academySettings/${PURPOSE_DOC}`), {
     title: String(data.title || "").slice(0, 120), intro: String(data.intro || "").slice(0, 4000),
@@ -643,20 +850,36 @@ export async function savePurposeVideo(me, data) {
 
 /* ---- Storage -------------------------------------------------------------- */
 /* Uploads fail FAST instead of hanging: the Storage SDK otherwise keeps
-   retrying for minutes while offline. Offline at the start, going offline
-   mid-upload, or no completion within `timeoutMs` → cancelled + a clear
-   error (code "offline" / "timeout"), so the author can simply try again. */
-export async function uploadImage(path, blob, contentType, { timeoutMs = 60000 } = {}) {
+   retrying for minutes (and an unresponsive Storage service never answers).
+   Ends with a clear error code, after cancelling the upload task:
+     "offline"  — offline at the start, or the connection drops mid-upload
+     "stalled"  — no progress for `stallMs` (the service stopped responding)
+     "timeout"  — not finished within `timeoutMs` overall
+     "canceled" — the author cancelled (`signal`)
+   Getting a storage handle that never resolves counts as a stall too. Nothing
+   references the uploaded file until this resolves. */
+export async function uploadImage(path, blob, contentType, { timeoutMs = 90000, stallMs = 20000, signal = null } = {}) {
   if (typeof navigator !== "undefined" && navigator.onLine === false) throw Object.assign(new Error("offline"), { code: "offline" });
-  const [{ ref, uploadBytesResumable }, st] = await Promise.all([import("firebase/storage"), getStorageInstance()]);
+  if (signal?.aborted) throw Object.assign(new Error("canceled"), { code: "canceled" });
+  const fail = (code) => Object.assign(new Error(code), { code });
+  const withStall = (p) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(fail("stalled")), stallMs);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+  const [{ ref, uploadBytesResumable }, st] = await withStall(Promise.all([import("firebase/storage"), getStorageInstance()]));
   const task = uploadBytesResumable(ref(st, path), blob, { contentType, cacheControl: "private, max-age=3600" });
   return new Promise((resolve, reject) => {
-    let done = false;
-    const finish = (fn) => { if (done) return; done = true; clearTimeout(timer); window.removeEventListener("offline", onOffline); fn(); };
-    const abort = (code) => finish(() => { try { task.cancel(); } catch {} reject(Object.assign(new Error(code), { code })); });
+    let done = false, stall = 0;
+    const finish = (fn) => { if (done) return; done = true; clearTimeout(timer); clearTimeout(stall); unsub(); window.removeEventListener("offline", onOffline); signal?.removeEventListener("abort", onAbort); fn(); };
+    const abort = (code) => finish(() => { try { task.cancel(); } catch {} reject(fail(code)); });
+    const armStall = () => { clearTimeout(stall); stall = setTimeout(() => abort("stalled"), stallMs); };
     const onOffline = () => abort("offline");
+    const onAbort = () => abort("canceled");
     const timer = setTimeout(() => abort("timeout"), timeoutMs);
+    const unsub = task.on("state_changed", () => armStall(), () => {}, () => {});
+    armStall();
     window.addEventListener("offline", onOffline);
+    signal?.addEventListener("abort", onAbort);
     task.then((snap) => finish(() => resolve({ path, bytes: snap.metadata.size, contentType })), (e) => finish(() => reject(e)));
   });
 }
@@ -666,7 +889,7 @@ export async function uploadImage(path, blob, contentType, { timeoutMs = 60000 }
    ownership alone isn't enough — data copied between courses can point at
    another course's file. If a check can't complete, the path counts as still
    used (an image is only deleted when it's provably unreferenced). */
-export async function imagesReferencedElsewhere(paths, courseId) {
+export async function imagesReferencedElsewhere(paths, courseId, { guideId = null } = {}) {
   const keep = new Set();
   const notThisCourse = (d) => {
     // lesson docs live at courses/{cid}/lessons/{lid} or courseDrafts/{cid}/lessons/{lid}
@@ -682,10 +905,11 @@ export async function imagesReferencedElsewhere(paths, courseId) {
         getDocs(query(collection(db, "guides"), where("thumb.path", "==", p))),
         getDocs(query(collection(db, "paths"), where("cover.path", "==", p))),
         getDocs(query(collection(db, "academyCategories"), where("cover.path", "==", p))),
+        getDocs(query(collection(db, "guideDrafts"), where("thumb.path", "==", p))),
       ]);
-      const [courses, drafts, lessons, guides, pathsQ, cats] = qs;
+      const [courses, drafts, lessons, guides, pathsQ, cats, guideDrafts] = qs;
       if ([...courses.docs, ...drafts.docs].some((d) => d.id !== courseId) || lessons.docs.some(notThisCourse)
-        || guides.size || pathsQ.size || cats.size) keep.add(p);
+        || [...guides.docs, ...guideDrafts.docs].some((d) => d.id !== guideId) || pathsQ.size || cats.size) keep.add(p);
     } catch { keep.add(p); }
   }
   return keep;
@@ -702,40 +926,98 @@ export async function deleteImage(path) {
   const [{ ref, deleteObject }, st] = await Promise.all([import("firebase/storage"), getStorageInstance()]);
   await deleteObject(ref(st, path));
 }
-/* Object-URL cache: one fetch per object path per session. A failed fetch is
-   not cached, so a transient error retries on the next render. */
-const _urlCache = new Map();
-const _inflight = new Map();
-export async function imageObjectUrl(path) {
-  if (_urlCache.has(path)) return _urlCache.get(path);
-  if (_inflight.has(path)) return _inflight.get(path);
-  const p = (async () => {
-    const [{ ref, getBlob }, st] = await Promise.all([import("firebase/storage"), getStorageInstance()]);
-    const blob = await getBlob(ref(st, path));
-    const url = URL.createObjectURL(blob);
-    _urlCache.set(path, url);
-    return url;
-  })().finally(() => _inflight.delete(path));
-  _inflight.set(path, p);
+/* Images (round 7). Reads stay auth-checked (getBlob under storage.rules →
+   blob: URLs); no public or download URLs. The object-URL cache lives in
+   academyCache.js: bounded, entries in use are never evicted, evicted URLs are
+   revoked, everything is dropped on sign-out / account change.
+   • at most IMAGE_PARALLEL downloads at once; images on screen are requested
+     first (callers only ask once an image is near the viewport — useImageUrl)
+   • one request per path at a time (in-flight dedupe)
+   • a stuck request counts as failed after IMAGE_TIMEOUT_MS from when its
+     download STARTS (time spent queued doesn't count). Failures are never
+     cached, so the next view tries again. */
+export const IMAGE_TIMEOUT_MS = 15000;
+const IMAGE_PARALLEL = 4;
+let _storageMod = null;          // the Storage SDK module, imported once on first use
+const storageModule = () => (_storageMod ||= import("firebase/storage"));
+const _inflight = new Map();   // path → { promise, job }
+const _queue = [];
+let _active = 0;
+const cancelled = () => Object.assign(new Error("Not needed any more."), { code: "cancelled" });
+onAcademyClear(() => { for (const j of _queue) j.reject(cancelled()); _queue.length = 0; _inflight.clear(); });
+function pumpImages() {
+  while (_active < IMAGE_PARALLEL && _queue.length) {
+    const job = _queue.shift();
+    _active += 1;
+    job.started = true;
+    job.run().then(job.resolve, job.reject).finally(() => { _active -= 1; pumpImages(); });
+  }
+}
+/* A component that no longer needs an image (it unmounted, e.g. the learner
+   moved on) withdraws its interest; a download that hasn't STARTED and that
+   nobody waits for any more leaves the queue, so it never delays the images on
+   the screen the learner moved to. */
+export function releaseImageRequest(path) {
+  const f = _inflight.get(path);
+  if (!f || f.job.started) return;
+  f.job.waiters -= 1;
+  if (f.job.waiters > 0) return;
+  const i = _queue.indexOf(f.job);
+  if (i >= 0) _queue.splice(i, 1);
+  _inflight.delete(path);
+  f.job.reject(cancelled());
+}
+export async function imageObjectUrl(path, { timeoutMs = IMAGE_TIMEOUT_MS, waiter = false } = {}) {
+  const hit = cachedImageUrl(path);
+  if (hit) return hit;
+  if (_inflight.has(path)) { const f = _inflight.get(path); if (waiter) f.job.waiters += 1; return f.promise; }
+  const gen = sessionGen();
+  const run = async () => {
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("Image took too long to load."), { code: "timeout" })), timeoutMs); });
+    const load = (async () => {
+      const [{ ref, getBlob }, st] = await Promise.all([storageModule(), getStorageInstance()]);
+      const blob = await getBlob(ref(st, path));
+      const url = URL.createObjectURL(blob);
+      // a download from a previous session is revoked, never cached
+      if (!storeImageUrl(path, url, gen)) throw Object.assign(new Error("Signed out."), { code: "cancelled" });
+      return url;
+    })();
+    try { return await Promise.race([load, timeout]); } finally { clearTimeout(timer); }
+  };
+  const job = { run, resolve: null, reject: null, started: false, waiters: waiter ? 1 : 0 };
+  const p = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; _queue.push(job); pumpImages(); })
+    .finally(() => { if (_inflight.get(path)?.promise === p) _inflight.delete(path); });
+  _inflight.set(path, { promise: p, job });
   return p;
 }
-export function useImageUrl(imageRef) {
+/* `visible`: start loading only once the image is on (or near) the screen.
+   While mounted the cached URL is retained (never evicted under it). */
+export function useImageUrl(imageRef, visible = true) {
   const path = imageRef?.path || null;
-  const [state, setState] = useState(() => ({ path, url: path ? _urlCache.get(path) || null : null, error: false }));
+  const [state, setState] = useState(() => ({ path, url: path ? cachedImageUrl(path) : null, error: false }));
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
+    if (!path) return undefined;
+    retainImage(path);
+    return () => releaseImage(path);
+  }, [path, state.url]);
+  useEffect(() => {
     if (!path) { setState({ path, url: null, error: false }); return; }
-    const cached = _urlCache.get(path);
+    const cached = cachedImageUrl(path);
     if (cached) { setState({ path, url: cached, error: false }); return; }
+    if (!visible) { setState((s) => (s.path === path && !s.url && !s.error ? s : { path, url: null, error: false })); return; }
     setState({ path, url: null, error: false });
-    imageObjectUrl(path).then(
-      (url) => { if (alive.current) setState({ path, url, error: false }); },
-      () => { if (alive.current) setState({ path, url: null, error: true }); });
-  }, [path]);
+    let waiting = true;
+    imageObjectUrl(path, { waiter: true }).then(
+      (url) => { waiting = false; if (alive.current) setState({ path, url, error: false }); },
+      (e) => { waiting = false; if (alive.current && e?.code !== "cancelled") setState({ path, url: null, error: true }); });
+    return () => { if (waiting) releaseImageRequest(path); };
+  }, [path, visible]);
   return state.path === path ? state : { path, url: null, error: false };
 }
-export const _resetImageCacheForTests = () => { _urlCache.clear(); _inflight.clear(); };
+export const _resetImageCacheForTests = () => { clearAcademySession(); _active = 0; };
 
 
 /* =====================================================================
@@ -820,7 +1102,26 @@ export async function cleanupDraftImages(cid, candidates, { course, lessons }) {
    { code: "conflict" } when the draft moved on since `expectedRev`, and
    { code: "blocked", blockers } when it isn't ready. Clean-up of discussions
    of removed lessons and of no-longer-referenced images runs after commit. */
-export async function publishCourseDraft(me, cid, expectedRev) {
+/* opts.showCategory: ALSO make the course's (draft) category visible, in the
+   SAME transaction — both happen or neither does (admins only; the rules
+   refuse the category write for anyone else, which fails the whole publish).
+   Retry-safe: if this exact revision was already published (a lost response,
+   a double click, another tab), it returns { already: true } instead of a
+   conflict. */
+export async function publishCourseDraft(me, cid, expectedRev, opts = {}) {
+  try { return await publishCourseDraftOnce(me, cid, expectedRev, opts); }
+  catch (e) {
+    // a revision mismatch shows up either in the transaction ("conflict") or in
+    // the server check that runs first ("aborted")
+    if (e?.code !== "conflict" && e?.code !== "functions/aborted") throw e;
+    const d = await getDoc(draftRef(cid));
+    const x = d.exists() ? d.data() : null;
+    if (x && Number(x.rev) === expectedRev + 1 && Number(x.publishedRev) === Number(x.rev)) return { rev: Number(x.rev), already: true, firstPublish: false, leftovers: [], categoryShown: false };
+    if (e?.code === "conflict") throw e;
+    throw Object.assign(new Error("This course was changed somewhere else since you last saved. Reload to see the latest version, then publish."), { code: "conflict" });
+  }
+}
+async function publishCourseDraftOnce(me, cid, expectedRev, { showCategory = false } = {}) {
   const dSnap = await getDoc(draftRef(cid));
   if (!dSnap.exists()) throw Object.assign(new Error("There are no draft changes to publish."), { code: "no-draft" });
   const draftCourse = dSnap.data();
@@ -833,15 +1134,23 @@ export async function publishCourseDraft(me, cid, expectedRev) {
   const blockers = publishBlockers(draftCourse, flatLessons(draftCourse, Object.entries(draftLessons).map(([id, l]) => ({ id, ...l }))), catExists ? [catId] : []);
   if (blockers.length) throw Object.assign(new Error(blockers[0]), { code: "blocked", blockers });
   const plan = buildPublishPlan({ draftCourse, draftLessons, liveCourse, liveLessons, courseId: cid });
+  // EVERY publish is checked by the SERVER for this exact draft revision
+  // (prerequisites, video links, quiz answer keys). The rules refuse published
+  // lessons, answer keys and the course itself without a matching, passing
+  // verdict — the checks above are for quick feedback only.
+  const res = (await callFunction("checkCoursePrerequisites", { courseId: cid, rev: expectedRev })).data;
+  if (!res.ok) throw Object.assign(new Error(res.issues[0]?.message || "Fix the problems listed, then publish."), { code: "blocked", blockers: res.issues.map((i) => i.message) });
   if (2 + plan.upserts.length * 2 + plan.removes.length * 2 > 480) throw Object.assign(new Error("This course has too many lessons to publish in one step."), { code: "too-large" });
   const newRev = await runTransaction(db, async (tx) => {
     const cur = await tx.get(draftRef(cid));
     if (!cur.exists() || Number(cur.data().rev) !== expectedRev) throw Object.assign(new Error("This course was changed somewhere else since you last saved. Reload to review the latest version, then publish."), { code: "conflict" });
     const liveRef = doc(db, "courses", cid);
     const curLive = await tx.get(liveRef);
+    const showWrite = showCategory && catExists ? await applyCategoryHidden(tx, me, catId, false) : null;   // all reads before writes
     const now = serverTimestamp();
     const shaped = { ...courseShape(plan.course), lessonCount: plan.course.lessonCount, requiredLessonCount: plan.course.requiredLessonCount,
       requiredQuizLessonIds: plan.course.requiredQuizLessonIds, bonusLessonIds: plan.course.bonusLessonIds, durationMinutes: plan.course.durationMinutes,
+      prerequisiteMap: plan.course.prerequisiteMap || {},
       status: "published", updatedAt: now, updatedBy: me.id };
     if (curLive.exists()) tx.update(liveRef, { ...shaped, ...(curLive.data().publishedAt ? {} : { publishedAt: now }) });
     else tx.set(liveRef, { ...shaped, createdAt: now, createdBy: me.id, publishedAt: now });
@@ -854,6 +1163,7 @@ export async function publishCourseDraft(me, cid, expectedRev) {
     for (const id of plan.removes) { tx.delete(doc(db, `courses/${cid}/lessons/${id}`)); tx.delete(doc(db, `courses/${cid}/quizKeys/${id}`)); }
     const rev = Number(cur.data().rev) + 1;
     tx.update(draftRef(cid), { rev, publishedRev: rev, updatedAt: now, updatedBy: me.id });
+    if (showWrite) showWrite(tx);
     return rev;
   });
   // After commit (best effort; nothing learner-visible depends on these).
@@ -864,7 +1174,7 @@ export async function publishCourseDraft(me, cid, expectedRev) {
   const draftPaths = imagePathsOf(draftCourse, draftLessons);
   const deletable = await safeToDeleteFor(cid, plan.imagesToDelete.filter((p) => !draftPaths.has(p)));
   for (const p of deletable) { try { await deleteImage(p); } catch (e) { if (e?.code !== "storage/object-not-found") leftovers.push(p); } }
-  return { rev: newRev, firstPublish: plan.firstPublish, leftovers };
+  return { rev: newRev, firstPublish: plan.firstPublish, leftovers, categoryShown: !!(showCategory && catExists) };
 }
 /* Discard a never-published draft (editors) — the course was never visible. */
 export async function discardNeverPublishedDraft(cid) {

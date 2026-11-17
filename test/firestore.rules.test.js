@@ -6,6 +6,7 @@
    Run directly against a running emulator:   node --test test/firestore.rules.test.js
    Or self-contained (CI):                     npm run test:rules
    (the latter starts a throwaway Firestore emulator via `firebase emulators:exec`) */
+import { assertThrowawayProject } from "./emulatorGuard.js";
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -16,7 +17,7 @@ import { doc, setDoc, getDoc, updateDoc, deleteDoc, serverTimestamp, deleteField
 
 // A fixed project id can be supplied (RULES_TEST_PROJECT) so the emulator's rule
 // coverage report can be fetched for THIS run; otherwise a unique per-run id is used.
-const PROJECT_ID = process.env.RULES_TEST_PROJECT || ("rules-test-" + Date.now());
+const PROJECT_ID = assertThrowawayProject(process.env.RULES_TEST_PROJECT || ("rules-test-" + Date.now()));
 let env;
 
 // Seed helper: write a doc bypassing rules (admin context).
@@ -54,10 +55,13 @@ const baseTask = (over = {}) => ({
   ...over,
 });
 
+/* The emulator address `firebase emulators:exec` exported (an isolated run on
+   other ports), else the default local ports. */
+const emu = (envVar, port) => { const [h, p] = String(process.env[envVar] || "").split(":"); return { host: h || "127.0.0.1", port: Number(p) || port }; };
 before(async () => {
   env = await initializeTestEnvironment({
     projectId: PROJECT_ID,
-    firestore: { rules: readFileSync("firestore.rules", "utf8"), host: "127.0.0.1", port: 8080 },
+    firestore: { rules: readFileSync("firestore.rules", "utf8"), ...emu("FIRESTORE_EMULATOR_HOST", 8080) },
   });
   for (const [k, u] of Object.entries(USERS)) await seed("users", k, u);
 });

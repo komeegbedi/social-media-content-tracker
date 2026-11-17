@@ -1,3 +1,4 @@
+import { isValidVideoRecord } from "./academyVideo.js";
 /* IFC Creative Academy — domain logic for courses, lessons, progress and quiz
    completion (pure, DOM/Firebase-free; mirrored by functions/academyScoring.js
    for the server side). Everything here is (data) -> value.
@@ -73,6 +74,9 @@ export const ACADEMY_CATEGORIES = [
 export const INTRO_CATEGORY_ID = "heart-of-serving";          // featured by STABLE id
 export const slugId = (name) => String(name || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
   .replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "category";
+/* A NEW category's id: slug (≤ 35) + "-" + 4 random chars → always ≤ 40, the
+   rules' limit, and may contain digits (routes must accept them). */
+export const categoryIdFromName = (name, suffix) => `${slugId(name || "category").slice(0, 35).replace(/-+$/, "") || "category"}-${String(suffix || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 4).padEnd(4, "0")}`;
 export const nameKey = (name) => String(name || "").trim().toLowerCase().replace(/\s+/g, " ");
 /* records: [{ id, name, description, order, hidden, cover }] from Firestore.
    With NO records (fresh project) the bootstrap defaults render; once any record
@@ -143,7 +147,7 @@ export const ONBOARDING_SEQUENCE = ["heart-of-serving", "creating-together"];
    help; learning paths are ordered references to existing content. */
 export const CONTENT_FORMATS = [
   { id: "course", label: "Course", plural: "Courses" },
-  { id: "guide",  label: "Quick guide", plural: "Quick guides" },
+  { id: "guide",  label: "Tip or resource", plural: "Tips & resources" },
   { id: "path",   label: "Learning path", plural: "Learning paths" },
 ];
 export const formatLabel = (id) => (CONTENT_FORMATS.find((f) => f.id === id) || {}).label || "";
@@ -258,11 +262,17 @@ export const isRequiredLesson = (lesson) => !!lesson && lesson.bonus !== true;
 
 /* Per-lesson state for a learner. `progress` is the learnerProgress doc (or null). */
 export function lessonState(lesson, progress) {
-  const p = (progress && progress.lessons && progress.lessons[lesson.id]) || {};
+  // `lessons` holds completion flags (server-written since v6.4; older docs may
+  // also hold view/playback here); `playback` holds the client-written
+  // view/position data since v6.4. Reads merge both.
+  // Completion flags are read from `lessons` ONLY (server-written): a client
+  // could put anything in `playback`, and the server never counts it.
+  const flags = (progress && progress.lessons && progress.lessons[lesson.id]) || {};
+  const p = { ...flags, ...((progress && progress.playback && progress.playback[lesson.id]) || {}) };
   const earned = !!(progress && progress.earned && progress.earned[lesson.id]);
   const mode = quizMode(lesson);
-  const videoWatched = p.videoWatched === true;
-  const manualDone = p.manualDone === true;
+  const videoWatched = flags.videoWatched === true;
+  const manualDone = flags.manualDone === true;
   const hasVideo = !!lesson.video;
   let completed;
   if (mode === "required") completed = earned;
@@ -281,23 +291,187 @@ export function lessonState(lesson, progress) {
   };
 }
 
-/* The next lesson id to continue with, from the course's stored module order +
-   the progress doc alone (no lesson docs needed — used on the home screen so a
-   recommendation never loads a whole curriculum). Completion per id follows the
-   same rules as lessonState for what the progress doc can tell us: earned (quiz),
-   videoWatched or manualDone. Returns null when nothing is outstanding. */
-export function nextLessonIdFromModules(course, progress) {
+/* ---- prerequisites (v6.5, refined in v6.6) -----------------------------------
+   Two independent ideas:
+   • REQUIRED to finish the course = every lesson except optional (bonus) ones.
+     Being required never locks anything.
+   • PREREQUISITES = the lesson ids listed on a lesson (`prerequisites`); all of
+     them must be complete before it opens. None (the default, and every course
+     created before v6.5) = open directly.
+   • A prerequisite must come EARLIER in the full curriculum order (across
+     sections); the first lesson can't have any. That also rules out loops.
+   • BROKEN data (not a list, the lesson itself, a lesson not in the course, a
+     later lesson) is NOT treated as satisfied: that lesson can't be opened or
+     completed until an editor fixes it; completions already earned stay. The
+     server applies the same rule (functions/academyProgression.js). Publishing
+     refuses such data, so it only appears if published data was changed
+     outside the publish flow. */
+export const MAX_PREREQUISITES = 20;
+export const prerequisitesOf = (lesson) => (lesson && Array.isArray(lesson.prerequisites) ? lesson.prerequisites.map(String) : []);
+
+/* Per lesson (ordered = curriculum order): { ids, broken: null|"shape"|"self"|"missing"|"order" }. */
+export function prerequisiteStatus(ordered) {
+  const pos = new Map((ordered || []).map((l, i) => [l.id, i]));
+  const out = new Map();
+  (ordered || []).forEach((l, i) => {
+    if (l.prerequisites != null && !Array.isArray(l.prerequisites)) { out.set(l.id, { ids: [], broken: "shape" }); return; }
+    const ids = [...new Set(prerequisitesOf(l))];
+    let broken = null;
+    for (const p of ids) {
+      if (p === l.id) broken = broken || "self";
+      else if (!pos.has(p)) broken = broken || "missing";
+      else if (pos.get(p) > i) broken = broken || "order";
+    }
+    out.set(l.id, { ids, broken });
+  });
+  return out;
+}
+/* Lessons a given lesson may require: the ones before it in curriculum order. */
+export const eligiblePrerequisites = (ordered, lessonId) => {
+  const i = (ordered || []).findIndex((l) => l.id === lessonId);
+  return i <= 0 ? [] : ordered.slice(0, i);
+};
+
+/* Authoring validation — the same checks as the server's (parity-tested).
+   Returns [{ lessonId, kind, message }]; empty = valid. */
+export function validatePrerequisites(lessons) {
+  // `lessons` MUST be in curriculum order (flatLessons)
+  const list = lessons || [];
+  const byId = new Map(list.map((l) => [l.id, l]));
+  const pos = new Map(list.map((l, i) => [l.id, i]));
+  const title = (id) => { const l = byId.get(id); return `“${(l && String(l.title || "").trim()) || "Untitled lesson"}”`; };
+  const issues = [];
+  for (const l of list) {
+    const ps = prerequisitesOf(l);
+    if (l.prerequisites != null && !Array.isArray(l.prerequisites)) issues.push({ lessonId: l.id, kind: "shape", message: `${title(l.id)} has an unreadable prerequisite list.` });
+    if (ps.length > MAX_PREREQUISITES) issues.push({ lessonId: l.id, kind: "too-many", message: `${title(l.id)} has more than ${MAX_PREREQUISITES} prerequisites.` });
+    if (ps.includes(l.id)) issues.push({ lessonId: l.id, kind: "self", message: `${title(l.id)} can't be its own prerequisite.` });
+    if (new Set(ps).size !== ps.length) issues.push({ lessonId: l.id, kind: "duplicate", message: `${title(l.id)} lists the same prerequisite twice.` });
+    for (const p of ps) if (p !== l.id && !byId.has(p)) issues.push({ lessonId: l.id, prereqId: p, kind: "missing", message: `${title(l.id)} requires a lesson that isn't in this course. Remove it from its prerequisites.` });
+    for (const p of [...new Set(ps)]) if (p !== l.id && byId.has(p) && pos.get(p) > pos.get(l.id)) issues.push({ lessonId: l.id, prereqId: p, kind: "order", message: `${title(l.id)} requires ${title(p)}, which comes after it in the course. A prerequisite must be an earlier lesson. Move ${title(l.id)} below ${title(p)}, or remove ${title(p)} from its prerequisites.` });
+  }
+  const adj = new Map(list.map((l) => [l.id, [...new Set(prerequisitesOf(l))].filter((p) => p !== l.id && byId.has(p))]));
+  const state = new Map(); const reported = new Set();
+  const visit = (id, path) => {
+    state.set(id, 1); path.push(id);
+    for (const p of adj.get(id) || []) {
+      if (state.get(p) === 1) {
+        const cyc = path.slice(path.indexOf(p));
+        const key = [...cyc].sort().join(",");
+        if (!reported.has(key)) {
+          reported.add(key);
+          issues.push({ lessonId: id, kind: "cycle", message: `These lessons depend on each other in a loop, so none of them could ever open: ${[...cyc, p].map(title).join(" → ")}. Remove one of these prerequisites.` });
+        }
+      } else if (!state.get(p)) visit(p, path);
+    }
+    path.pop(); state.set(id, 2);
+  };
+  for (const l of list) if (!state.get(l.id)) visit(l.id, []);
+  for (const l of list.filter(isRequiredLesson)) {
+    const seen = new Set(); const stack = [...(adj.get(l.id) || [])];
+    while (stack.length) {
+      const x = stack.pop(); if (seen.has(x)) continue; seen.add(x);
+      const xl = byId.get(x);
+      if (xl && !isRequiredLesson(xl)) issues.push({ lessonId: l.id, prereqId: x, kind: "optional-prerequisite", message: `${title(x)} is optional, but required lesson ${title(l.id)} depends on it, so learners would have to complete it to finish. Make ${title(x)} required, or remove it from ${title(l.id)}'s prerequisites.` });
+      for (const p of adj.get(x) || []) stack.push(p);
+    }
+  }
+  return issues;
+}
+/* Lessons that list `id` as a prerequisite (delete warnings). */
+export const dependentsOf = (lessons, id) => (lessons || []).filter((l) => prerequisitesOf(l).includes(id));
+
+/* From the course doc + progress alone (home recommendations, learning-path
+   steps — no curriculum loaded). Uses the course's denormalised
+   `prerequisiteMap` (written on publish); a course without one has no
+   prerequisites. Completion per id: earned (quiz), videoWatched or manualDone. */
+function moduleProgression(course, progress) {
   const ids = (course && Array.isArray(course.modules) ? course.modules : []).flatMap((m) => m.lessonIds || []);
   const bonus = new Set(course?.bonusLessonIds || []);
   const quiz = new Set(course?.requiredQuizLessonIds || []);
+  const map = (course && course.prerequisiteMap && typeof course.prerequisiteMap === "object") ? course.prerequisiteMap : {};
+  const status = prerequisiteStatus(ids.map((id) => ({ id, prerequisites: map[id] })));
   const done = (id) => {
     const l = (progress?.lessons || {})[id] || {};
     if (quiz.has(id)) return !!(progress?.earned || {})[id];
     return l.videoWatched === true || l.manualDone === true || !!(progress?.earned || {})[id];
   };
+  // broken prerequisite data never counts as satisfied
+  const open = (id) => { if (done(id)) return true; const st = status.get(id); return !!st && !st.broken && st.ids.every(done); };
+  return { ids, bonus, done, open };
+}
+/* Is a lesson open to this learner (course doc + progress only). A lesson the
+   course doesn't list is treated as open — the lesson page applies the full rule. */
+export function lessonOpenFromModules(course, progress, lessonId) {
+  const { ids, open } = moduleProgression(course, progress);
+  return !ids.includes(lessonId) || open(lessonId);
+}
+/* The next lesson to continue with: the last viewed one if it's open and not
+   done, else the first open, incomplete required lesson in course order, else
+   the first open incomplete optional one. null when nothing is outstanding. */
+export function nextLessonIdFromModules(course, progress) {
+  const { ids, bonus, done, open } = moduleProgression(course, progress);
   const last = progress?.lastLessonId;
-  if (last && ids.includes(last) && !done(last)) return last;
-  return ids.find((id) => !bonus.has(id) && !done(id)) || ids.find((id) => !done(id)) || null;
+  if (last && ids.includes(last) && !done(last) && open(last)) return last;
+  return ids.find((id) => !bonus.has(id) && !done(id) && open(id)) || ids.find((id) => !done(id) && open(id)) || null;
+}
+
+/* Per-lesson availability, in course order:
+     { id, lesson, required, completed, accessible,
+       prerequisites: [lesson], missing: [lesson] (incomplete prerequisites),
+       blockedBy: first missing prerequisite | null }
+   The same rule runs server-side for completion writes, quiz submissions and
+   Finish course. */
+export function lessonAccess(course, lessons, progress) {
+  const all = flatLessons(course, lessons);
+  const byId = new Map(all.map((l) => [l.id, l]));
+  const status = prerequisiteStatus(all);
+  const done = new Map(all.map((l) => [l.id, lessonState(l, progress).completed]));
+  return all.map((l) => {
+    const st = status.get(l.id);
+    const prerequisites = st.broken ? [] : st.ids.map((id) => byId.get(id));
+    const missing = prerequisites.filter((p) => !done.get(p.id));
+    const completed = done.get(l.id);
+    return { id: l.id, lesson: l, required: isRequiredLesson(l), completed, broken: st.broken, accessible: completed || (!st.broken && missing.length === 0), prerequisites, missing, blockedBy: completed ? null : (missing[0] || null) };
+  });
+}
+export const accessFor = (access, id) => (access || []).find((a) => a.id === id) || null;
+/* Where to go to make progress towards a locked lesson: the first missing
+   prerequisite that is itself open (walking down chains of prerequisites). */
+export function actionableFor(access, id) {
+  const seen = new Set(); const queue = [id];
+  while (queue.length) {
+    const x = queue.shift(); if (seen.has(x)) continue; seen.add(x);
+    const a = accessFor(access, x); if (!a) continue;
+    if (x !== id && a.accessible && !a.completed && !a.broken) return a.lesson;
+    for (const m of a.missing || []) queue.push(m.id);
+  }
+  return null;
+}
+/* All required items done → the learner may Finish the course (server-checked). */
+export function readyToFinish(course, lessons, progress) {
+  const s = courseProgress(course, lessons, progress);
+  return { ready: s.total > 0 && s.done === s.total, total: s.total, done: s.done };
+}
+/* "Finished" = the learner pressed Finish course and the server recorded it.
+   It's permanent: later edits to the course never take it away. */
+export const isFinished = (progress) => !!(progress && progress.finishedAt);
+/* A course completed BEFORE explicit Finish course existed. Since v6.4 every
+   completion flag is written by a server function, and since v6.5 each of
+   those writes stamps `progressModel` — so a doc with every required lesson
+   complete and NO marker can only have got there earlier. It counts as
+   completed (never downgraded to "ready to finish"); the server records its
+   finishedAt (finishedVia "legacy") the next time it touches the doc. */
+export const isLegacyCompletion = (summary, progress) => !!progress && !progress.progressModel && !progress.finishedAt && !!summary.completed;
+/* The learner-facing course state:
+     "completed"   — finished (server-recorded finishedAt) or a legacy completion
+     "ready"       — every required lesson complete, Finish course not pressed yet
+     "in-progress" — started, requirements outstanding
+     "not-started" */
+export function courseStatus(summary, progress) {
+  if (isFinished(progress) || isLegacyCompletion(summary, progress)) return "completed";
+  if (summary.completed) return "ready";
+  return summary.started ? "in-progress" : "not-started";
 }
 
 /* Course-level summary. Percent is over REQUIRED lessons only. */
@@ -317,17 +491,20 @@ export function courseProgress(course, lessons, progress) {
   };
 }
 
-/* Where "Resume" should land: the last viewed lesson if it's still in the course
-   and not complete, else the first incomplete required lesson, else the first
-   lesson (for a completed course — revisit from the top). */
+/* Where "Resume" should land: the last viewed lesson if it's open and not
+   complete, else the first open incomplete required lesson in course order,
+   else the first open incomplete lesson, else the first lesson (a completed
+   course — revisit from the top). */
 export function resumeLessonId(course, lessons, progress) {
   const all = flatLessons(course, lessons);
   if (!all.length) return null;
-  const last = progress && progress.lastLessonId && all.find((l) => l.id === progress.lastLessonId);
-  if (last && !lessonState(last, progress).completed) return last.id;
-  const next = all.find((l) => !lessonState(l, progress).completed);
-  if (next) return next.id;
-  return all[0].id;
+  const access = lessonAccess(course, lessons, progress);
+  const last = progress && progress.lastLessonId && accessFor(access, progress.lastLessonId);
+  if (last && !last.completed && last.accessible) return last.id;
+  const req = access.find((a) => a.required && !a.completed && a.accessible);
+  if (req) return req.id;
+  const any = access.find((a) => !a.completed && a.accessible);
+  return any ? any.id : all[0].id;
 }
 
 /* Previous / next around a lesson in the flattened order. */
@@ -386,6 +563,8 @@ export function courseCounters(course, lessons) {
     requiredQuizLessonIds: required.filter((l) => quizMode(l) === "required").map((l) => l.id),
     bonusLessonIds: all.filter((l) => !isRequiredLesson(l)).map((l) => l.id),
     durationMinutes: all.reduce((s, l) => s + (Number(l.durationMinutes) || 0), 0),
+    // lesson id → prerequisite ids, for screens that only load the course doc
+    prerequisiteMap: Object.fromEntries(all.filter((l) => prerequisitesOf(l).length).map((l) => [l.id, prerequisitesOf(l)])),
   };
 }
 
@@ -404,11 +583,14 @@ export function validateQuizAnswers(quiz, answers) {
 }
 
 /* Retry policy: retryLimit 0/absent = unlimited. `attempts` = prior attempt count. */
-export function canAttemptQuiz(quiz, attempts) {
+/* Attempts: the quiz's limit (retryLimit; 0 = unlimited, the default for new
+   quizzes) plus any extra attempts Academy staff granted this learner. */
+export function canAttemptQuiz(quiz, attempts, extra = 0) {
   const limit = Number(quiz && quiz.retryLimit) || 0;
-  if (!limit) return { ok: true, remaining: null };
-  const remaining = Math.max(0, limit - (attempts || 0));
-  return { ok: remaining > 0, remaining };
+  if (!limit) return { ok: true, remaining: null, allowed: null, used: attempts || 0 };
+  const allowed = limit + Math.max(0, Number(extra) || 0);
+  const remaining = Math.max(0, allowed - (attempts || 0));
+  return { ok: remaining > 0, remaining, allowed, used: attempts || 0 };
 }
 
 /* ---- catalogue search/filter ----------------------------------------------
@@ -416,7 +598,9 @@ export function canAttemptQuiz(quiz, attempts) {
    `category` (legacy ids normalised) and optional `topics`. Category and
    format are independent filters; search covers title, author, category,
    level, topics and body text. */
-export function filterCourses(items, { q = "", category = "", level = "", status = "", format = "" } = {}) {
+/* `categories` (merged records) lets search match workspace-created categories
+   by name, not only the six built-ins. */
+export function filterCourses(items, { q = "", category = "", level = "", status = "", format = "", categories = null } = {}) {
   const needle = q.trim().toLowerCase();
   return (items || []).filter((c) => {
     if (format && (c.format || "course") !== format) return false;
@@ -424,8 +608,8 @@ export function filterCourses(items, { q = "", category = "", level = "", status
     if (level && c.level !== level) return false;
     if (status && c.status !== status) return false;
     if (!needle) return true;
-    const hay = [c.title, c.instructorName, categoryLabel(c.category), levelLabel(c.level), c.about, c.body, c.purpose,
-      ...(c.topics || []), formatLabel(c.format || "course")].filter(Boolean).join(" ").toLowerCase();
+    const hay = [c.title, c.instructorName, categories ? categoryNameIn(categories, c.category) : categoryLabel(c.category), levelLabel(c.level), c.about, c.body, c.purpose,
+      ...(c.topics || []), formatLabel(c.format || "course"), c.format === "guide" ? "guide tips resources" : ""].filter(Boolean).join(" ").toLowerCase();
     return hay.includes(needle);
   });
 }
@@ -459,7 +643,7 @@ export function validatePathItems(items) {
     if (!key || (it.type === "course" && !it.courseId) || (it.type === "lesson" && !(it.courseId && it.lessonId)) || (it.type === "guide" && !it.guideId))
       errors.push(`Item ${n} is incomplete.`);
     else if (keys.has(key)) errors.push(`Item ${n} is already in this path.`);
-    else if (it.type === "lesson" && courseIds.has(it.courseId)) errors.push(`Item ${n} is a lesson of a course that's already in this path — keep one or the other.`);
+    else if (it.type === "lesson" && courseIds.has(it.courseId)) errors.push(`Item ${n} is a lesson from a course that's already in this path. Keep one or the other.`);
     keys.add(key);
   });
   return errors;
@@ -552,26 +736,63 @@ export function continueLearningCombined({ courseEntries = [], pathEntries = [] 
 /* ---- editor-side validation (what must be true to PUBLISH) ------------------ */
 /* `categoryIds`: the category RECORDS that exist (admins create categories, so
    the built-in six aren't the whole list). Omitted → the built-in list. */
-export function publishBlockers(course, lessons, categoryIds = null) {
+/* Everything that must be true to PUBLISH a course, as structured issues the
+   workspace can point at: { key, kind, item ("details" | lessonId), field,
+   label, message, fix, blocker }.
+     kind: "missing" (required information), "quiz" (quiz set-up that learners
+     couldn't pass), "prerequisite" (lesson order/links).
+   `blocker` is the short sentence used by publish errors (unchanged wording).
+   Drafts save with any of these unresolved — they only gate publishing.
+   A quiz question needs a prompt, ≥ 2 answer options and at least one answer
+   marked correct (an unmarked question can never be scored correct, so a
+   required quiz without one could never be passed). A quiz with no questions
+   is treated as no quiz everywhere. A video lesson needs its video link. */
+/* The server's limit for formatted text (course about, lesson description,
+   resource text) — firestore.rules refuses longer drafts and published copies. */
+export const TEXT_LIMIT = 20000;
+const tooLong = (v) => String(v || "").length > TEXT_LIMIT;
+export function publishIssues(course, lessons, categoryIds = null) {
   const out = [];
-  if (!String(course.title || "").trim()) out.push("Add a course title.");
+  const add = (x) => out.push({ blocker: x.message, ...x });
+  if (!String(course.title || "").trim()) add({ key: "title", kind: "missing", item: "details", field: "title", label: "Course title", message: "Add a course title.", fix: "Add title" });
   const cat = normalizeCategory(course.category || "");
-  if (!cat || (categoryIds ? !categoryIds.includes(cat) : !categoryById(cat))) out.push("Choose a category.");
-  if (!ACADEMY_LEVELS.some((l) => l.id === course.level)) out.push("Choose a level.");
-  if (!course.cover || !course.cover.path) out.push("Upload a cover image.");
+  if (!cat || (categoryIds ? !categoryIds.includes(cat) : !categoryById(cat))) add({ key: "category", kind: "missing", item: "details", field: "category", label: "Category", message: "Choose a category.", fix: "Choose category" });
+  if (!ACADEMY_LEVELS.some((l) => l.id === course.level)) add({ key: "level", kind: "missing", item: "details", field: "level", label: "Level", message: "Choose a level.", fix: "Choose level" });
+  if (!course.cover || !course.cover.path) add({ key: "cover", kind: "missing", item: "details", field: "cover", label: "Course cover", message: "Add a cover image before publishing.", blocker: "Upload a cover image.", fix: "Add cover" });
+  if (tooLong(course.about)) add({ key: "about-long", kind: "missing", item: "details", field: "about", label: "About this course", message: `Shorten this text to ${TEXT_LIMIT.toLocaleString("en")} characters or fewer.`, blocker: "The course description is too long.", fix: "Shorten" });
   const all = flatLessons(course, lessons);
-  if (!all.length) out.push("Add at least one lesson.");
-  for (const l of all) {
-    if (!String(l.title || "").trim()) out.push("Every lesson needs a title.");
+  if (!all.length) add({ key: "lessons", kind: "missing", item: "details", field: "outline", label: "Course content", message: "Add at least one lesson.", fix: "Add content" });
+  all.forEach((l, i) => {
+    const name = String(l.title || "").trim();
+    const where = name ? `“${name}”` : `Item ${i + 1}`;
+    if (!name) add({ key: `lt:${l.id}`, kind: "missing", item: l.id, field: "title", label: `${where} title`, message: "Every lesson needs a title.", fix: "Add title" });
+    if (l.kind === "video" && !l.video) add({ key: `lv:${l.id}`, kind: "missing", item: l.id, field: "video", label: `${where} video link`, message: "Add the video link for this video lesson.", blocker: `${where} needs a video link.`, fix: "Add link" });
+    else if (l.video && !isValidVideoRecord(l.video)) add({ key: `lv:${l.id}`, kind: "missing", item: l.id, field: "video", label: `${where} video link`, message: "Use a YouTube, Vimeo or Google Drive link.", blocker: `${where} has a video link that isn't a supported YouTube, Vimeo or Google Drive link.`, fix: "Fix link" });
+    if (tooLong(l.description)) add({ key: `ld:${l.id}`, kind: "missing", item: l.id, field: "description", label: `${where} description`, message: `Shorten this text to ${TEXT_LIMIT.toLocaleString("en")} characters or fewer.`, blocker: `${where} has text longer than ${TEXT_LIMIT.toLocaleString("en")} characters.`, fix: "Shorten" });
     const mode = quizMode(l);
-    if (mode !== "none") {
-      for (const q of l.quiz.questions || []) {
-        if (!String(q.prompt || "").trim()) { out.push(`A question in “${l.title || "a lesson"}” has no prompt.`); break; }
-        if ((q.options || []).length < 2) { out.push(`A question in “${l.title || "a lesson"}” needs at least two options.`); break; }
+    if (mode === "none") return;
+    const qs = (l.quiz && l.quiz.questions) || [];          // (a quiz with no questions counts as no quiz)
+    const answers = (l.quizKey && l.quizKey.answers) || null;
+    for (let k = 0; k < qs.length; k++) {
+      const q = qs[k];
+      const label = `${where} quiz, question ${k + 1}`;
+      if (!String(q.prompt || "").trim()) { add({ key: `qp:${l.id}`, kind: "quiz", item: l.id, field: `q:${q.id}`, label, message: "Write the question.", blocker: `A question in “${l.title || "a lesson"}” has no prompt.`, fix: "Open question" }); break; }
+      if ((q.options || []).length < 2) { add({ key: `qo:${l.id}`, kind: "quiz", item: l.id, field: `qo:${q.id}`, label, message: "Add at least two answer options.", blocker: `A question in “${l.title || "a lesson"}” needs at least two options.`, fix: "Open question" }); break; }
+      // only checked where the answer key is loaded (drafts carry it). Only
+      // answers that point at an existing option count; a single-answer
+      // question needs exactly one (the server checks the same).
+      if (answers) {
+        const n = (answers[q.id] || []).filter((id) => (q.options || []).some((o) => o.id === id)).length;
+        if (!n) { add({ key: `qa:${l.id}`, kind: "quiz", item: l.id, field: `qa:${q.id}`, label, message: "Mark the correct answer.", blocker: `A question in “${l.title || "a lesson"}” has no correct answer marked.`, fix: "Open question" }); break; }
+        if (q.multi !== true && n !== 1) { add({ key: `qa:${l.id}`, kind: "quiz", item: l.id, field: `qa:${q.id}`, label, message: `Only one answer can be correct, but ${n} are marked. Choose one, or turn on “More than one correct answer”.`, blocker: `A question in “${l.title || "a lesson"}” allows one correct answer but has ${n} marked.`, fix: "Open question" }); break; }
       }
     }
-  }
-  return [...new Set(out)];
+  });
+  for (const i of validatePrerequisites(all)) add({ key: `pr:${i.lessonId}:${i.kind}:${i.prereqId || ""}`, kind: "prerequisite", item: i.lessonId, field: "prerequisites", label: "Prerequisites", message: i.message, fix: "Review" });
+  return out;
+}
+export function publishBlockers(course, lessons, categoryIds = null) {
+  return [...new Set(publishIssues(course, lessons, categoryIds).map((i) => i.blocker))];
 }
 
 /* Firestore Timestamp | Date | number | null → ms (0 when unknown). */
@@ -595,10 +816,10 @@ export const formatDuration = (minutes) => {
 export const newId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
 /* Guide / path publish checks (what must be true to publish). */
-export function guidePublishBlockers(g) {
+export function guidePublishBlockers(g, categoryIds = null) {
   const out = [];
   if (!String(g.title || "").trim()) out.push("Add a title.");
-  if (!categoryById(g.category)) out.push("Choose a category.");
+  if (!categoryById(g.category) && !(categoryIds && categoryIds.includes(normalizeCategory(g.category)))) out.push("Choose a category.");
   if (!g.video && !String(g.body || "").trim()) out.push("Add a video link or some body text.");
   return out;
 }

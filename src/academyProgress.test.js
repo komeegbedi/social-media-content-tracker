@@ -122,10 +122,11 @@ test("quiz answer validation (client) rejects blanks, unknown options and multi-
   assert.equal(v.ok, true); assert.deepEqual(v.answers, { q0: ["a"], q1: ["b"] });
 });
 
-test("retry policy: 0 = unlimited", () => {
-  assert.deepEqual(canAttemptQuiz({ retryLimit: 0 }, 99), { ok: true, remaining: null });
-  assert.deepEqual(canAttemptQuiz({ retryLimit: 2 }, 1), { ok: true, remaining: 1 });
-  assert.deepEqual(canAttemptQuiz({ retryLimit: 2 }, 2), { ok: false, remaining: 0 });
+test("retry policy: 0 = unlimited; staff-granted extra attempts add to a limit", () => {
+  assert.deepEqual(canAttemptQuiz({ retryLimit: 0 }, 99), { ok: true, remaining: null, allowed: null, used: 99 });
+  assert.deepEqual(canAttemptQuiz({ retryLimit: 2 }, 1), { ok: true, remaining: 1, allowed: 2, used: 1 });
+  assert.deepEqual(canAttemptQuiz({ retryLimit: 2 }, 2), { ok: false, remaining: 0, allowed: 2, used: 2 });
+  assert.deepEqual(canAttemptQuiz({ retryLimit: 3 }, 3, 1), { ok: true, remaining: 1, allowed: 4, used: 3 }, "one extra attempt granted");
 });
 
 test("roles: editor = admin or instructor; drafts invisible to learners; leaders = admin or lead", () => {
@@ -178,4 +179,36 @@ test("publishBlockers names every missing piece", () => {
   const badQuiz = publishBlockers({ title: "T", category: "photography", level: "beginner", cover: { path: "p" }, modules: [{ id: "m", lessonIds: ["q"] }] },
     [L("q", { quiz: { mode: "required", questions: [{ id: "a", prompt: "", options: [] }] } })]);
   assert.ok(badQuiz.length >= 1);
+});
+
+test("publishIssues: structured, field-addressable; the old blocker wording is unchanged", async () => {
+  const { publishIssues, categoryIdFromName } = await import("./academyProgress.js");
+  const course = { title: "", category: "photography", level: "beginner", cover: null, modules: [{ id: "m", lessonIds: ["v", "q"] }] };
+  const lessons = [
+    { id: "v", title: "", kind: "video", video: null },
+    { id: "q", title: "Quiz me", kind: "written", quiz: { mode: "required", questions: [{ id: "x", prompt: "Which?", options: [{ id: "o1", text: "A" }, { id: "o2", text: "B" }] }] }, quizKey: { answers: {} } },
+  ];
+  const is = publishIssues(course, lessons, ["photography"]);
+  const byKey = Object.fromEntries(is.map((i) => [i.key, i]));
+  assert.equal(byKey.title.item, "details"); assert.equal(byKey.title.field, "title");
+  assert.equal(byKey.cover.label, "Course cover"); assert.equal(byKey.cover.message, "Add a cover image before publishing.");
+  assert.equal(byKey.cover.blocker, "Upload a cover image.");                                 // publish errors keep their wording
+  assert.equal(byKey["lt:v"].item, "v");
+  assert.equal(byKey["lv:v"].field, "video");                                                 // a video lesson needs its link
+  assert.equal(byKey["qa:q"].kind, "quiz");                                                   // no correct answer marked → unpassable
+  assert.equal(byKey["qa:q"].field, "qa:x");
+  assert.ok(!is.some((i) => i.kind === "missing" && i.field === "category"));
+  // a quiz with no questions isn't an issue (it counts as no quiz); a correct answer that refers to a removed option doesn't count
+  const q2 = [{ id: "q", title: "T", quiz: { mode: "practice", questions: [] } }];
+  assert.ok(publishIssues({ ...course, title: "T", cover: { path: "p" }, modules: [{ id: "m", lessonIds: ["q"] }] }, q2, ["photography"]).length === 0);   // empty quiz = no quiz
+  const q3 = [{ id: "q", title: "T", quiz: { mode: "required", questions: [{ id: "x", prompt: "?", options: [{ id: "o1" }, { id: "o2" }] }] }, quizKey: { answers: { x: ["gone"] } } }];
+  assert.ok(publishIssues({ ...course, title: "T", cover: { path: "p" }, modules: [{ id: "m", lessonIds: ["q"] }] }, q3, ["photography"]).some((i) => i.key === "qa:q"));
+  const ok = [{ id: "q", title: "T", quiz: { mode: "required", questions: [{ id: "x", prompt: "?", options: [{ id: "o1" }, { id: "o2" }] }] }, quizKey: { answers: { x: ["o2"] } } }];
+  assert.deepEqual(publishIssues({ ...course, title: "T", cover: { path: "p" }, modules: [{ id: "m", lessonIds: ["q"] }] }, ok, ["photography"]), []);
+  // non-video kinds never need a link; legacy lessons without a kind aren't flagged
+  assert.ok(!publishIssues({ ...course, title: "T", cover: { path: "p" }, modules: [{ id: "m", lessonIds: ["w"] }] }, [{ id: "w", title: "W", kind: "written" }], ["photography"]).length);
+  // new category ids: ≤ 40 chars (rules), digits allowed
+  const long = categoryIdFromName("A very long category name that keeps going and going", "k3x9");
+  assert.ok(long.length <= 40 && /^[a-z0-9-]+$/.test(long), long);
+  assert.equal(categoryIdFromName("Testing 123", "ab12"), "testing-123-ab12");
 });
