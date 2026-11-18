@@ -1777,7 +1777,32 @@ Nothing has been deployed and no cloud configuration has been changed.
 * Touch gestures are DevTools synthetic touch events; slow / failed image
   responses are intercepted in the browser (Storage itself unchanged).
 
+**Blocker found after launch (2026-11-17): "Create the starter categories"
+fails in production.** The deployed writer (`d3ae810`) spread each starter
+record, `id` included, into the document; `validCategoryRecord` doesn't allow
+`id`, so the whole batch is refused even for an admin, and the button swallowed
+the rejection (Learn kept showing the built-in fallback categories, which look
+the same). Production has 0 category records. Fixed on
+`fixes/academy-mobile-performance`: `src/academyBootstrap.js`
+writes only the allowed fields in a transaction that creates only missing
+categories (retries and concurrent attempts are safe; existing edits are never
+touched) and resolves only after the server commits; the workspace shows
+"Creating categories…", an actionable error with Try again, and success only
+after confirmation; a failed category read shows an error, never the empty
+state. Verified with the real writer against the rules
+(`test/academyBootstrap.rules.test.js`) and the real button in the isolated
+environment. Rules unchanged.
+
 **Outstanding — real device / real video (manual).**
+* **Installed iPhone web app, soft header controls (reported 2026-11-17): NOT
+  resolved, awaiting device verification.** Branch
+  `fixes/academy-mobile-performance` makes the mobile header solid (no
+  `backdrop-filter`): nothing scrolls beneath the header, so the blur had no
+  visual purpose, and the filtered header layer is the only persistent rendering
+  difference between the header and the content. Chromium pixel comparisons
+  (light/dark, 320–430 px, 3×) show the same layout and colours (≤2/255), and
+  ordinary Simulator Safari renders it crisply — neither proves the installed
+  app is fixed. Verify on the device after release.
 * iPhone + Safari: both bottom sheets (open, drag down from the handle or
   header, Back, safe areas, landscape, internal scrolling), the bottom bar with
   the home indicator, the on-screen keyboard (bottom bar steps aside), row

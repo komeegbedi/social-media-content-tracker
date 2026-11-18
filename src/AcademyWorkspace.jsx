@@ -48,6 +48,8 @@ import {
   usePendingCleanup, pathsUsingCourse, coursesRecommending, fetchVideoMetadata, loadCourseWorkspace,
   useGuides, useGuideDrafts, setCategoryGuideOrder, loadGuideWorkspace, publishGuideDraft,
 } from "./academyData.js";
+import { categoryReadState } from "./academyBootstrap.js";
+import { StarterCategoriesSetup, CategoryReadError } from "./academyCategorySetup.jsx";
 import { categoryCourseGroups, readinessOf, runCategoryPublish, outcomeSummary } from "./academyBulkPublish.js";
 import { useUploadsInFlight, uploadsInFlight, waitForUploads } from "./academyUploads.js";
 import { isOfflineError } from "./useOnline.js";
@@ -96,8 +98,11 @@ export function useTaxonomy() {
   const idx = useCategoryIndex();
   return useMemo(() => {
     const categories = mergeCategories(recs.docs).map((c) => (idx.hidden.includes(c.id) ? { ...c, hidden: true } : c));
-    return { categories, records: recs.docs, hidden: idx.hidden, loaded: recs.loaded && idx.loaded, bootstrap: recs.loaded && recs.docs.length === 0 };
-  }, [recs.docs, recs.loaded, idx.hidden, idx.loaded]);
+    // `bootstrap` (no records: the starter set applies, setup is offered) only
+    // when the read SUCCEEDED and found none — a failed read is `error`.
+    const state = categoryReadState(recs, idx);
+    return { categories, records: recs.docs, hidden: idx.hidden, loaded: state === "ready" || state === "empty", bootstrap: state === "empty", error: state === "error" };
+  }, [recs, idx]);
 }
 /* Live courses + private drafts, merged by id, with an authoring status. */
 function useAllCourses(me) {
@@ -279,6 +284,7 @@ function WorkspaceHome({ me, R }) {
     recordMove({ before, after: moveId(before, id, slot), label: cats.find((c) => c.id === id)?.label, save: order.save, current: () => observedRef.current, undo });
   };
   const pendingList = Object.entries(pending.data?.courses || {});
+  const [setupDone, setSetupDone] = useState("");
   return (
     <div className="sb-page ac-ws">
       <Crumbs R={R} items={[{ label: "Learn", to: "/learn" }, { label: "Academy workspace" }]} />
@@ -294,10 +300,12 @@ function WorkspaceHome({ me, R }) {
           <ul>{pendingList.map(([id, e]) => <li key={id}><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true" />{e.title || "Deleted course"}
             <BusyButton className="sb-btn quiet compact" busy={retrying === id} onClick={async () => { setRetrying(id); try { await deleteCourseHard(me, id, e); } catch {} setRetrying(null); }}>Retry clean-up</BusyButton></li>)}</ul></div>
       )}
-      {!tax.loaded ? <Skeleton lines={5} />
+      {setupDone && !tax.bootstrap && <p className="ac-done" role="status"><CheckCircleIcon className="hi hi-sm" aria-hidden="true" />{setupDone}</p>}
+      {tax.error ? <CategoryReadError />
+        : !tax.loaded ? <Skeleton lines={5} />
         : tax.bootstrap ? (
           <div className="sb-empty">{admin ? <><p>Learners currently see the six starter categories. Create them to start organising courses.</p>
-            <BusyButton className="sb-btn compact" onClick={() => createDefaultCategories(me)}>Create the starter categories</BusyButton></> : "An admin needs to set up the categories first."}</div>
+            <StarterCategoriesSetup me={me} onCreated={(r) => setSetupDone(r.created.length ? `Created ${r.created.length} starter categor${r.created.length === 1 ? "y" : "ies"}. They're saved and ready to edit.` : "The starter categories already exist. Nothing was changed.")} /></> : "An admin needs to set up the categories first."}</div>
         ) : (
           <section aria-labelledby="ws-cats-h">
             <div className="sb-shead"><h2 id="ws-cats-h" className="ac-h2">Categories</h2>

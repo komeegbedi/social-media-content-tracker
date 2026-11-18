@@ -233,17 +233,17 @@ a{color:var(--accent-foreground)}
 .sb-report-top{background:rgba(255,255,255,.14);border:none;color:#fff;width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;
   border-radius:999px;font-size:14px;flex:none}
 
-/* Mobile header (v1.2): a light translucent glass surface that complements the
-   floating bottom nav — not a solid purple block. Profile lives in the bottom
-   nav, so only Search + Notifications appear here. */
+/* Mobile header: a SOLID surface in the page colour. It sits above the
+   .sb-content scroll region (content never scrolls beneath it), so the former
+   backdrop blur had nothing to blur, while it made the header a filtered,
+   separately composited layer — the only persistent difference between the
+   header and the crisp content below, and the suspected cause of soft header
+   controls in the installed iOS web app. Same colour as before (the 88%
+   background sat over the identical page background). */
 .sb-top{flex:0 0 auto;z-index:var(--z-sticky);display:flex;align-items:center;justify-content:space-between;
   min-height:54px;padding:calc(8px + env(safe-area-inset-top)) 16px 8px;
-  background:var(--background); /* solid fallback for iOS < 16.2 (no color-mix) */
-  background:color-mix(in srgb,var(--background) 88%,transparent);
-  border-bottom:1px solid var(--border);
-  backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%)}
-@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
-  .sb-top{background:var(--background)} }
+  background:var(--background);
+  border-bottom:1px solid var(--border)}
 @media(min-width:900px){ .sb-top{display:none} }
 .sb-top .brand{display:flex;align-items:center;gap:9px;color:var(--text-primary);min-width:0}
 .sb-top .brandwm{letter-spacing:-.015em;font-weight:600;font-size:18px;white-space:nowrap}
@@ -3351,7 +3351,6 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
      see-through panel by merely dropping the blur (which would hurt legibility).
      Only the NAV chrome was ever glass; working/elevated surfaces are already
      opaque, so nothing else needs a fallback here. */
-  .sb-top{background:var(--background);backdrop-filter:none;-webkit-backdrop-filter:none}
   .sb-nav{background:var(--surface-elevated)!important;backdrop-filter:none;-webkit-backdrop-filter:none}
   .sb-nav-ind{background:var(--primary-muted)!important}
   .sb-dock{background:var(--background)}
@@ -4390,6 +4389,8 @@ body.ac-dragging,body.ac-dragging *{cursor:grabbing !important;-webkit-user-sele
 .ac-linkbtn:disabled{color:var(--text-muted);cursor:default;text-decoration:none}
 .ac-linkbtn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:3px}
 .ac-note .ac-linkbtn{font-size:inherit}
+/* Learn landing notes: a failed history read, and an Academy with nothing published yet */
+.ac-home .ac-historynote,.ac-home .ac-emptynote{margin:0}
 .ac-quizoutcome{margin:10px 0 0;font-size:var(--text-support);color:var(--text-secondary);line-height:1.5}
 
 /* pager: "Previous" / "Next lesson" with the lesson title as supporting text */
@@ -5133,3 +5134,6 @@ a.ac-link:not(.inline):hover{text-decoration:underline}
 .ac-hdots-track{display:flex;position:relative;width:max-content;transition:transform .25s cubic-bezier(.2,.8,.25,1)}
 .ac-hdots-track .ac-hdot:disabled{cursor:default}
 @media (prefers-reduced-motion:reduce){ .ac-hdots-track{transition:none} }
+/* Starter-category setup: the control, then its error beside it */
+.ac-setup{display:flex;flex-direction:column;align-items:center;gap:6px}
+.ac-setup .ac-err{margin:0;max-width:44ch;text-align:center}

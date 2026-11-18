@@ -12,16 +12,17 @@
      • images are read with getBlob (auth-checked by storage.rules) → object URLs;
        no download URLs are ever requested or stored. */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { acquireShared, releaseShared, sharedState, sessionGen, cachedImageUrl, storeImageUrl, retainImage, releaseImage, onAcademyClear, clearAcademySession } from "./academyCache.js";
+import { acquireShared, releaseShared, restartShared, sharedState, sessionGen, cachedImageUrl, storeImageUrl, retainImage, releaseImage, onAcademyClear, clearAcademySession } from "./academyCache.js";
 import {
   collection, collectionGroup, doc, query, where, onSnapshot, getDoc, getDocs, getDocsFromServer,
   setDoc, updateDoc, deleteDoc, addDoc, writeBatch, serverTimestamp, deleteField, FieldPath, runTransaction,
 } from "firebase/firestore";
 import { db, callFunction, getStorageInstance } from "./firebase";
 import { logIssue } from "./logging";
-import { courseCounters, newId, toMs, normalizeCategory, normalizeTopics, nameKey, slugId, defaultCategoryRecords,
+import { courseCounters, newId, toMs, normalizeCategory, normalizeTopics, nameKey, slugId,
   isAcademyEditor, ACADEMY_CATEGORIES, LEGACY_CATEGORY_IDS, quizMode, publishBlockers, flatLessons, categoryIdFromName } from "./academyProgress.js";
 import { videoRecord } from "./academyVideo.js";
+import { createStarterCategories } from "./academyBootstrap.js";
 import { runCourseDeletion, pathsReferencingCourse } from "./academyDeletion.js";
 import { courseRow } from "./academyCategoryDeletion.js";
 import { GUIDE_CONTENT_FIELDS, guideDraftFromLive, guidePublishIssues, guideRow } from "./academyGuides.js";
@@ -87,20 +88,47 @@ function useQueryDocs(build, deps, enabled, shareKey = null) {
    Shared + lingering (see useShared). */
 const D_IDLE = { data: undefined, loaded: false, error: null, pending: false, confirmed: undefined };
 const D_OFF = { data: null, loaded: true, error: null, pending: false, confirmed: null };
+const docKey = (path, withPending = false) => `d:${withPending ? 1 : 0}:${path}`;
+const startDoc = (path, withPending = false) => (set) => onSnapshot(doc(db, path), { includeMetadataChanges: withPending },
+  (snap) => {
+    const data = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    const pending = withPending && snap.metadata.hasPendingWrites;
+    set((prev) => ({ data, loaded: true, error: null, pending, confirmed: pending ? (prev.confirmed === undefined ? null : prev.confirmed) : data }));
+  },
+  (err) => {
+    // permission-denied for a draft/missing course reads as "not available".
+    set({ data: null, loaded: true, error: err, pending: false, confirmed: null }, { ended: true });
+    if (err.code !== "permission-denied") logIssue({ kind: "error", action: `academy doc read failed: ${path}`, message: err.message, code: err.code });
+  });
 function useDocState(path, enabled, withPending = false) {
   const on = !!(enabled && path);
-  const st = useShared(on ? `d:${withPending ? 1 : 0}:${path}` : null, (set) => onSnapshot(doc(db, path), { includeMetadataChanges: withPending },
-    (snap) => {
-      const data = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-      const pending = withPending && snap.metadata.hasPendingWrites;
-      set((prev) => ({ data, loaded: true, error: null, pending, confirmed: pending ? (prev.confirmed === undefined ? null : prev.confirmed) : data }));
-    },
-    (err) => {
-      // permission-denied for a draft/missing course reads as "not available".
-      set({ data: null, loaded: true, error: err, pending: false, confirmed: null }, { ended: true });
-      if (err.code !== "permission-denied") logIssue({ kind: "error", action: `academy doc read failed: ${path}`, message: err.message, code: err.code });
-    }), D_IDLE);
+  const st = useShared(on ? docKey(path, withPending) : null, startDoc(path, withPending), D_IDLE);
   return on ? st : D_OFF;
+}
+/* A SET of documents through the same shared, lingering subscriptions as
+   useDocState (same keys, so a doc read elsewhere is reused, and a revisit
+   renders at once from the last data). A denied or missing doc resolves to
+   null. Returns { byPath, loaded }. */
+export function useSharedDocs(paths) {
+  const key = paths.join("|");
+  const g = sessionGen();
+  const subscribe = useCallback((cb) => {
+    const held = key ? key.split("|").map((p) => [docKey(p), acquireShared(docKey(p), startDoc(p), D_IDLE)]) : [];
+    held.forEach(([, s]) => s.listeners.add(cb));
+    return () => held.forEach(([k, s]) => releaseShared(k, s, cb));
+  }, [key, g]); // eslint-disable-line react-hooks/exhaustive-deps
+  // useSyncExternalStore needs a stable snapshot: rebuild only when a member's state object changes
+  const last = useRef({ key: null, states: [], value: { byPath: {}, loaded: true } });
+  const snap = () => {
+    const list = key ? key.split("|") : [];
+    const states = list.map((p) => sharedState(docKey(p)) || D_IDLE);
+    const L = last.current;
+    if (L.key === key && L.states.length === states.length && L.states.every((x, i) => x === states[i])) return L.value;
+    const value = { byPath: Object.fromEntries(list.map((p, i) => [p, states[i].loaded ? states[i].data ?? null : undefined]).filter(([, d]) => d !== undefined)), loaded: states.every((x) => x.loaded) };
+    last.current = { key, states, value };
+    return value;
+  };
+  return useSyncExternalStore(subscribe, snap, snap);
 }
 
 /* Listen to an arbitrary SET of document paths (path resolution needs the
@@ -131,6 +159,12 @@ export const useCategoryIndex = () => {
   const s = useDocState("academySettings/categoryIndex", true);
   return useMemo(() => ({ ...s, hidden: s.data?.hidden || [] }), [s]);
 };
+/* "Try again" after a failed category read: restart the records query and the
+   hidden-category index for everything currently showing them. */
+export function retryCategoryReads() {
+  restartShared("q:academyCategories", startQuery(() => collection(db, "academyCategories")), Q_IDLE);
+  restartShared(docKey("academySettings/categoryIndex"), startDoc("academySettings/categoryIndex"), D_IDLE);
+}
 const stamp = (me, create = false) => ({ updatedAt: serverTimestamp(), updatedBy: me.id, ...(create ? { createdAt: serverTimestamp(), createdBy: me.id } : {}) });
 /* Create: id = slug of the name (stable afterwards); refuses a taken id. */
 export async function createCategory(me, { name, description = "", short = "" }, existingIds = []) {
@@ -178,11 +212,9 @@ export async function reorderCategories(me, orderedIds) {
   await b.commit();
 }
 /* Bootstrap the six defaults (only offered when no record exists yet). */
-export async function createDefaultCategories(me) {
-  const b = writeBatch(db);
-  for (const r of defaultCategoryRecords()) b.set(doc(db, "academyCategories", r.id), { ...r, ...stamp(me, true) });
-  await b.commit();
-}
+/* "Create the starter categories": creates only the missing ones, confirmed by
+   the server (academyBootstrap.js). Rejects on failure — callers show it. */
+export const createDefaultCategories = (me) => createStarterCategories(db, me?.id);
 /* Everything that references a category (editors read all statuses). */
 export async function categoryReferences(categoryId) {
   const ids = [categoryId, ...Object.entries({ videography: "filmmaking", "social-media": "social-media-storytelling" }).filter(([, v]) => v === categoryId).map(([k]) => k)];
@@ -326,16 +358,23 @@ function useLearnerCategoryIds() {
     const base = recs.docs.length ? recs.docs.filter((r) => r.hidden !== true).map((r) => r.id) : ACADEMY_CATEGORIES.map((c) => c.id);
     const vis = base.filter((id) => !idx.hidden.includes(id));
     const legacy = Object.entries(LEGACY_CATEGORY_IDS).filter(([, to]) => vis.includes(to)).map(([from]) => from);
-    return { ids: [...new Set([...vis, ...legacy])].sort(), loaded: recs.loaded && idx.loaded };
-  }, [recs.docs, recs.loaded, idx.hidden, idx.loaded]);
+    // a FAILED read is never "no records" (which would fall back to the starter
+    // set): learner content queries wait until both reads succeed
+    const ok = recs.loaded && idx.loaded && !recs.error && !idx.error;
+    return { ids: ok ? [...new Set([...vis, ...legacy])].sort() : [], loaded: ok };
+  }, [recs.docs, recs.loaded, recs.error, idx.hidden, idx.loaded, idx.error]);
 }
 
 /* Content lists. Editors (admin / academyEditor) read every doc. Learners read
    published docs filed under a VISIBLE category — the query carries
    `category in [...]` so firestore.rules can prove the hidden-category check
    for every result (rules are not filters). Paths aren't category-gated. */
-function useContentList(coll, format, me) {
-  const editor = isAcademyEditor(me);
+/* `learnerView`: read exactly what a learner reads even when `me` is an editor
+   (the learner-facing landing page shows only published, visible content, so
+   it needn't download every draft and hidden item; management screens keep the
+   full lists). */
+function useContentList(coll, format, me, { learnerView = false } = {}) {
+  const editor = isAcademyEditor(me) && !learnerView;
   const cats = useLearnerCategoryIds();
   const key = cats.ids.join(",");
   const learnerIds = !editor && coll !== "paths";
@@ -366,16 +405,16 @@ function useContentList(coll, format, me) {
   if (!me?.id || empty) return Q_OFF;
   return st;
 }
-export function useCourses(me) {
-  const s = useContentList("courses", "course", me);
+export function useCourses(me, opts) {
+  const s = useContentList("courses", "course", me, opts);
   return useMemo(() => ({ courses: s.docs, loaded: s.loaded, error: s.error }), [s]);
 }
-export function useGuides(me) {
-  const s = useContentList("guides", "guide", me);
+export function useGuides(me, opts) {
+  const s = useContentList("guides", "guide", me, opts);
   return useMemo(() => ({ guides: s.docs, loaded: s.loaded, error: s.error }), [s]);
 }
-export function usePaths(me) {
-  const s = useContentList("paths", "path", me);
+export function usePaths(me, opts) {
+  const s = useContentList("paths", "path", me, opts);
   return useMemo(() => ({ paths: s.docs, loaded: s.loaded, error: s.error }), [s]);
 }
 export const useGuide = (guideId) => useDocState(guideId ? `guides/${guideId}` : null, !!guideId);
