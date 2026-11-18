@@ -90,7 +90,7 @@ export function Flash({ R }) {
   return (
     <div className="ac-wsnote ac-ok ac-flash" role="status">
       <CheckCircleIcon className="hi hi-sm" aria-hidden="true" /><span>{msg}</span>
-      <button type="button" className="ac-link" onClick={() => R.navigate({ pathname: R.location.pathname, search: R.location.search }, { replace: true, state: null })}>Dismiss</button>
+      <span className="ac-wsnoteacts"><button type="button" className="sb-btn quiet compact ac-wsnotedismiss" onClick={() => R.navigate({ pathname: R.location.pathname, search: R.location.search }, { replace: true, state: null })}>Dismiss</button></span>
     </div>
   );
 }
@@ -441,7 +441,7 @@ function CategoryWorkspace({ me, id: routeIdProp, R, onCreated }) {
         <div className="ac-wsnote ac-blockers" role="status">
           <ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true" />
           <span><b>Deleting “{label}” isn't finished.</b> Nothing new can be added to or published in this category until it's finished or stopped.</span>
-          {admin && <span className="ac-wsnoteacts"><button type="button" className="ac-link" onClick={() => setConfirm("delete")}>Finish or stop…</button></span>}
+          {admin && <span className="ac-wsnoteacts"><button type="button" className="sb-btn ghost compact" onClick={() => setConfirm("delete")}>Finish or stop…</button></span>}
         </div>
       )}
       <div className="ac-wshead">
@@ -954,9 +954,9 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
               : publish.already ? "This version was already published, so learners already see it."
               : publish.first || publish.categoryShown ? "Course published and visible to learners." : "Changes published. Learners now see this version."}</span>
             <span className="ac-wsnoteacts">
-              <AppLink className="ac-link" to={learnPath(cid)} navigate={R.navigate}>View course</AppLink>
-              {!visible && admin && cat && <AppLink className="ac-link" to={learnManagePath({ view: "category", id: cat.id })} navigate={R.navigate}>Manage category</AppLink>}
-              <button type="button" className="ac-link" onClick={() => setPublish({ state: "idle" })}>Dismiss</button>
+              <AppLink className="sb-btn ghost compact" to={learnPath(cid)} navigate={R.navigate}>View course</AppLink>
+              {!visible && admin && cat && <AppLink className="sb-btn ghost compact" to={learnManagePath({ view: "category", id: cat.id })} navigate={R.navigate}>Manage category</AppLink>}
+              <button type="button" className="sb-btn quiet compact ac-wsnotedismiss" onClick={() => setPublish({ state: "idle" })}>Dismiss</button>
             </span>
           </div>
         );
@@ -964,7 +964,7 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
       {publish.state !== "done" && liveHidden && (
         <div className="ac-wsnote ac-note-info" role="status"><EyeSlashIcon className="hi hi-sm" aria-hidden="true" />
           <span>Published, but its category “{liveCat.label}” is hidden, so learners can't see this course.{!admin && " An admin needs to show the category."}</span>
-          {admin && <span className="ac-wsnoteacts"><button type="button" className="ac-link" onClick={() => setDialog({ kind: "showcat", catId: liveCat.id, label: liveCat.label })}>Show category…</button></span>}
+          {admin && <span className="ac-wsnoteacts"><button type="button" className="sb-btn ghost compact" onClick={() => setDialog({ kind: "showcat", catId: liveCat.id, label: liveCat.label })}>Show category…</button></span>}
         </div>
       )}
       {publish.state === "error" && publish.kind !== "blocked" && (
@@ -972,15 +972,15 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
           {publish.kind === "network" ? <ArrowPathIcon className="hi hi-sm" aria-hidden="true" /> : publish.kind === "permission" ? <NoSymbolIcon className="hi hi-sm" aria-hidden="true" /> : <ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true" />}
           <span><b>Not published.</b> {publish.message}</span>
           <span className="ac-wsnoteacts">
-            {(publish.kind === "network" || publish.kind === "error" || publish.kind === "uploading") && <button type="button" className="ac-link" onClick={() => doPublish({ showCategory: publish.showCategory })}>Try again</button>}
-            <button type="button" className="ac-link" onClick={() => setPublish({ state: "idle" })}>Dismiss</button>
+            {(publish.kind === "network" || publish.kind === "error" || publish.kind === "uploading") && <button type="button" className="sb-btn ghost compact" onClick={() => doPublish({ showCategory: publish.showCategory })}>Try again</button>}
+            <button type="button" className="sb-btn quiet compact ac-wsnotedismiss" onClick={() => setPublish({ state: "idle" })}>Dismiss</button>
           </span>
         </div>
       )}
       {publish.state === "error" && publish.kind === "blocked" && !issues.length && publish.blockers && (
         <div className="ac-blockers ac-wsnote" role="alert"><b>Not published.</b> The server found problems to fix first:
           <ul>{publish.blockers.map((b, i) => <li key={i}><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true" />{b}</li>)}</ul>
-          <button type="button" className="ac-link" onClick={() => setPublish({ state: "idle" })}>Dismiss</button></div>
+          <span className="ac-wsnoteacts"><button type="button" className="sb-btn quiet compact ac-wsnotedismiss" onClick={() => setPublish({ state: "idle" })}>Dismiss</button></span></div>
       )}
     </header>
   );

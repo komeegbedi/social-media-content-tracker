@@ -3962,6 +3962,12 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .ac-poster:focus-visible{outline:2px solid var(--focus-ring);outline-offset:3px}
 .ac-srcthumb{position:relative;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;background:#0b0b0d;overflow:hidden}
 .ac-srcthumb img{width:100%;height:100%;object-fit:contain;display:block}
+/* Pre-play POSTER only: the artwork fills the 16:9 frame (proportional cover,
+   centred; never stretched). A provider's 4:3 YouTube thumbnail of a 16:9 video
+   carries black bars baked in above and below — cover trims exactly those, while
+   contain added side bars too. Cards, editor previews and the player itself
+   (iframe) keep their own sizing. */
+.ac-poster .ac-srcthumb img{object-fit:cover;object-position:50% 50%}
 .ac-attrib{flex-basis:100%}
 .ac-vprev{display:grid;grid-template-columns:160px minmax(0,1fr);gap:12px;align-items:start;background:var(--surface-muted);border:1px solid var(--border);border-radius:var(--r-card);padding:10px;margin:-4px 0 14px}
 @media(max-width:520px){.ac-vprev{grid-template-columns:1fr}}
@@ -4156,10 +4162,7 @@ body.ac-dragging,body.ac-dragging *{cursor:grabbing !important;-webkit-user-sele
 .ac-wspills{display:inline-flex;flex-wrap:wrap;gap:6px}
 .ac-wsbaractions{flex-wrap:wrap;gap:8px;justify-content:flex-end}
 .ac-wsbaractions .sb-btn{width:auto}
-.ac-wsnote{margin-top:10px}
-.ac-wsnote .ac-link{margin-inline-start:auto}
-.ac-ok.ac-wsnote{background:var(--success-muted);border-radius:var(--r-card);padding:10px 14px;align-items:center}
-.ac-ok.ac-wsnote > span{flex:1}
+.ac-ok.ac-wsnote{background:var(--success-muted)}
 .ac-wsgrid{display:grid;grid-template-columns:320px minmax(0,1fr);gap:20px;align-items:start}
 @media(min-width:1200px){.ac-wsgrid{grid-template-columns:340px minmax(0,1fr)}}
 
@@ -4667,15 +4670,28 @@ a.ac-catbtn:visited,a.ac-cardbtn:visited,a.ac-recbtn:visited,a.ac-contcard:visit
 .ac-readytext b{font-weight:600;overflow-wrap:anywhere}
 .ac-readytext span{color:var(--text-secondary)}
 .ac-readylist .sb-btn{width:auto}
-.ac-wsnote{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:9px 12px;border-radius:var(--r-card);font-size:var(--text-support)}
+/* Workspace notes (publish outcomes, hidden-category and other notices) — ONE
+   layout for every variant: icon + message grouped on the left; the actions in a
+   compact group on the right (a secondary button, then a quieter Dismiss). When
+   the row is too narrow the actions wrap below the message; on phones they line
+   up under the message text. Variants only change colours. */
+.ac-wsnote{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:10px;padding:10px 14px;
+  border-radius:var(--r-card);font-size:var(--text-support);line-height:1.45}
 .ac-wsnote > .hi{flex:none}
-.ac-wsnote > span:not(.ac-wsnoteacts){flex:1 1 240px;min-width:0}
-.ac-wsnoteacts{display:inline-flex;flex-wrap:wrap;gap:2px;margin-inline-start:auto}
-.ac-wsnoteacts .ac-link{margin-inline-start:0}
+.ac-wsnote > span:not(.ac-wsnoteacts){flex:1 1 260px;min-width:0;overflow-wrap:anywhere}
+.ac-wsnoteacts{display:flex;flex:0 1 auto;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;margin-inline-start:auto;max-width:100%}
+.ac-wsnoteacts .sb-btn{width:auto;margin:0;white-space:nowrap}
+.ac-wsnoteacts .sb-btn.quiet{border-color:transparent;color:inherit}
+.ac-wsnoteacts .sb-btn.quiet:hover{border-color:var(--border-strong)}
+@media(max-width:599px){
+  .ac-wsnoteacts{flex-basis:100%;justify-content:flex-start;margin-inline-start:0}
+  .ac-wsnote > .hi ~ .ac-wsnoteacts{padding-inline-start:calc(var(--icon-sm) + 12px)}
+}
 .ac-note-info{background:var(--surface-muted);color:var(--text-primary);border:1px solid var(--border)}
 .ac-note-info > .hi{color:var(--text-secondary)}
 .ac-note-err{background:var(--danger-muted);color:var(--danger-foreground);border:1px solid color-mix(in srgb,var(--danger) 35%,var(--border))}
 .ac-blockers.ac-wsnote{display:block}
+.ac-blockers.ac-wsnote .ac-wsnoteacts{justify-content:flex-start;margin-top:8px;padding-inline-start:0}
 @media(prefers-reduced-motion:reduce){.ac-readychev{transition:none}}
 
 /* Publish / visibility dialogs */
