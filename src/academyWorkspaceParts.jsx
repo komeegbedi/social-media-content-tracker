@@ -571,10 +571,10 @@ export function ContentChoices({ onPick }) {
   ));
 }
 /* "Add content" button + anchored menu (portal — never clipped by the outline). */
-export function AddContentMenu({ onPick, label = "Add content", className = "sb-btn ghost compact ac-addbtn" }) {
+export function AddContentMenu({ onPick, label = "Add content", className = "sb-btn ghost compact ac-addbtn", menuLabel = "Add content" }) {
   return (
-    <MenuButton label="Add content" renderTrigger={({ ref, toggle, props }) => (
-      <button ref={ref} type="button" className={className} onClick={toggle} {...props}><PlusIcon className="hi hi-sm" aria-hidden="true" /><span>{label}</span></button>
+    <MenuButton label={menuLabel} renderTrigger={({ ref, toggle, props }) => (
+      <button ref={ref} type="button" className={className} onClick={toggle} aria-label={menuLabel !== label ? menuLabel : undefined} {...props}><PlusIcon className="hi hi-sm" aria-hidden="true" /><span>{label}</span></button>
     )}>
       {(close) => <ContentChoices onPick={(k) => { close(); onPick(k); }} />}
     </MenuButton>

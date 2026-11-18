@@ -2528,3 +2528,83 @@ Firestore rules last, if at all (the new fields are optional).
   work, they may need a manual reload.
 
 Immediate revocation and a scheduled image sweep need separate proposals.
+
+### Course outline sections (fix, 2026-11-18)
+
+**Cause of the confusing sections.**
+* Whether section headers showed depended on how MANY modules a course had
+  (`modules.length > 1`), not on whether a section was named.
+* New courses start with an unnamed module (`m1`). "Add section" added another
+  unnamed module, so one click showed two sections ("Section 1" was the hidden
+  starter module).
+* Removing sections down to one named section hid its header (it seemed to
+  vanish), and adding a section brought it back.
+* Removing a section silently moved its lessons into the previous section.
+* Outline actions worked on a render-time copy of the outline, so an immediate
+  action could overwrite a just-committed rename.
+
+**Model (no new fields, no rules / functions change, no migration).** `modules`
+keeps its shape `{ id, title, lessonIds }`, which publishing, the publish check,
+the rules and learners already use.
+* A module **with a title** is a named section. It's always shown, even when
+  it's the only one.
+* A module **without a title** holds the lessons in **No section**. Learners
+  see those lessons without any heading; the workspace labels the area "No
+  section".
+* Sections are optional: a course can have no sections, or a mix of grouped
+  and ungrouped lessons.
+* An **empty** untitled module is a stored structure and is not shown. Older
+  courses can have several; none of them produces a container, and none is
+  removed or rewritten by opening the editor.
+* A **populated** untitled module is shown where it is, as a dashed "No
+  section" group, even between named sections. Its lessons are never merged to
+  the top or bottom. Where a course has more than one such area, selectors and
+  dialogs name each by position: "No section, at the top", "No section, after
+  “Exposure”".
+* "No section" as a destination means the top: the first module when it is
+  untitled (reused even when empty), otherwise a new untitled module inserted
+  first, created only when a lesson actually moves there.
+* Curriculum order is unchanged everywhere (outline, learners, prerequisites,
+  Next/Previous, publishing): modules in order, then each module's lessons;
+  unlisted legacy lessons are still appended as "More lessons".
+
+**Authoring.**
+* Add section creates exactly one named section ("Section N", unique) and puts
+  its name field in focus. An empty name is refused.
+* Every outline action starts from the latest model. A rename committed by
+  leaving the field is never overwritten by the add, move or remove that
+  follows.
+* Each section is one container: header, lessons indented inside, a readable
+  count ("3 lessons") stacked under the name, and a compact "No lessons yet" +
+  Add content row that doubles as a drop target. Empty named sections are never
+  removed automatically. The header has its own Add content.
+* Section names wrap to as many lines as they need. The name field is sized by
+  a hidden copy of its text in the same CSS grid cell (`.ac-secgrow`), so the
+  height follows the width, font loading and text-size changes without script.
+  The drag handle, Add and the menu line up with the first line of the name.
+* The main Add content asks where first (No section or a section). The lesson
+  editor has a Section selector, and Move to… offers No section plus a
+  position.
+* Dragging highlights the destination group and labels the insertion line
+  ("Move to “Understanding light”, position 2", "Move to No section…").
+  Keyboard moves announce the same words. Escape cancels pointer and keyboard
+  drags. A section drags with its lessons.
+* When no ungrouped lessons are shown at the top, dragging a lesson reveals one
+  labelled zone above the first section ("No section: outside any section").
+  It is an overlay, so the list doesn't shift; it is the same slot keyboard
+  users reach with Home.
+* Auto-scroll is capped at the scroll range measured when the drag starts, and
+  the lifted row is kept inside the list. Before, a downward drag near the
+  bottom edge could stretch the scroll area and run on into blank space.
+* Every move and section removal offers a one-use Undo.
+* Removing a section with lessons asks where they go (No section, or another
+  section), keeping their order. An empty section goes at once (with Undo).
+  Lessons are only ever deleted from their own menu.
+* Reordering can expose prerequisite problems. They're flagged and block
+  publishing; prerequisites are never removed automatically.
+
+Checks: `src/academyWorkspace.test.js` (model, hidden empty modules, ungrouped
+areas, drops past hidden modules), `src/AcademyWorkspaceParts.ui.test.jsx`
+(drag list: blocks, pointer Escape, announcements, the outside-sections zone). The isolated end-to-end
+authoring journey covers adding, renaming, removing, reloading, drags, Undo,
+keyboard, simulated touch, publishing and learner order.
