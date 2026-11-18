@@ -34,3 +34,9 @@ exports.requestQuizAttempt = academyCompletion.requestQuizAttempt;
 exports.checkCoursePrerequisites = academyCompletion.checkCoursePrerequisites;
 exports.fetchVideoMetadata = require("./videoMetadata").fetchVideoMetadata;
 exports.fetchLinkMetadata = require("./linkMetadata").fetchLinkMetadata;
+// Learner image access markers (storage.rules reads users + ONE marker: the
+// two-document limit of Storage rules — see academyLearnerMedia.js).
+const academyLearnerMedia = require("./academyLearnerMedia");
+exports.onAcademyCourseMedia = academyLearnerMedia.onAcademyCourseMedia;
+exports.onAcademyGuideMedia = academyLearnerMedia.onAcademyGuideMedia;
+exports.onAcademyCategoryIndexMedia = academyLearnerMedia.onAcademyCategoryIndexMedia;

@@ -15,6 +15,7 @@
     "test:emulator": "node scripts/emulator-test.mjs --project demo-rules-suite --only firestore -- node --test --test-concurrency=1 test/*.test.js",
     "test:academy": "node scripts/emulator-test.mjs --project demo-academy-test --only firestore,storage -- node --test --test-concurrency=1 test/academy.rules.test.js test/academyBootstrap.rules.test.js test/storage/storage.rules.test.js",
     "test:trigger": "node scripts/emulator-test.mjs --project demo-mention-trigger --only firestore,functions -- node --test test/trigger/mention-trigger.test.js",
+    "test:trigger:media": "node scripts/emulator-test.mjs --project demo-learner-media --only firestore,functions -- node --test test/trigger/learner-media-trigger.test.js",
     "test:headers": "npm run build && node scripts/emulator-test.mjs --project demo-headers --only hosting -- node scripts/verify-headers.mjs",
     "verify": "npm run build && npm test && npm run test:ui && npm run test:functions && npm run test:emulator",
     "deploy": "npm run build && firebase deploy --only hosting,firestore:rules,firestore:indexes",

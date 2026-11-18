@@ -16,7 +16,10 @@ import {
 import { Portal } from "./overlay.jsx";
 import { BusyButton, Skeleton } from "./loading.jsx";
 import { Toggle } from "./controls.jsx";
-import { ConfirmDialog } from "./App.jsx";
+import { ConfirmDialog, useUnsavedGuard } from "./App.jsx";
+import { registerUnsaved, useAppUpdate, STALE_MESSAGE } from "./appUpdate.js";
+import { SaveAndReloadButton } from "./appUpdateUi.jsx";
+import { uploadsInFlight } from "./academyUploads.js";
 import { learnPath } from "./nav.js";
 import { formatDateTime } from "./dateFormat.js";
 import {
@@ -29,6 +32,8 @@ import {
 import { parseVideoLink, videoFromRecord, VIDEO_PROVIDERS } from "./academyVideo.js";
 import { MARKDOWN_HELP, isSafeHref } from "./academyMarkdown.js";
 import { validateImageFile, defaultCrop, cropFromControls, imagePath, processImage, imageDimensions, IMAGE_KINDS } from "./academyImage.js";
+import { uploadErrorMessage, shouldRecordUploadError, uploadDiagnostics } from "./academyUploadErrors.js";
+import { logIssue } from "./logging";
 import {
   useCourses, useCourse, useLessons, useImageUrl, setCourseStatus, setContentStatus, deleteCourseHard,
   uploadImage, deleteImage, savePurposeVideo,
@@ -426,14 +431,18 @@ export function ImagePicker({ kind, label, value, courseId, lessonId, guideId, p
       onChange({ path, version: path.split("/").pop().replace(/\.jpg$/, ""), contentType: out.contentType, bytes: meta.bytes, w: out.width, h: out.height }, value);
       setFile(null); setDims(null); if (src) URL.revokeObjectURL(src); setSrc(null);
     } catch (x) {
-      if (!current() || x?.code === "canceled") return;                    // cancelled: cancelUpload already said so
+      // cancelled (Cancel, a newer image, or leaving): cancelUpload already said so.
+      // The server may already hold the bytes, so remove this attempt's object —
+      // its versioned path is unique to the attempt and referenced by nothing —
+      // now and once more after 5 s. BEST EFFORT: a commit landing after both
+      // deletes, or a page closed first, can leave an unreferenced object
+      // (docs/academy.md, "Storage rules document budget").
+      if (!current() || x?.code === "canceled") { if (path) { const drop = () => deleteImage(path).catch(() => {}); drop(); setTimeout(drop, 5000); } return; }
       if (uploaded && path) deleteImage(path).catch(() => {});             // uploaded but couldn't be saved: don't leave a stray file
-      // plain words; the chosen (cropped) image stays so "Try again" re-sends it
-      const code = `${x?.code || ""} ${x?.message || ""}`;
-      setErr(/stalled|timeout/.test(code) ? "The upload stopped responding, so the image wasn't saved. Your image is still selected. Try again."
-        : !navigator.onLine || /fetch|network|offline|dynamically imported|retry-limit|storage\/(unknown|retry)/i.test(code) ? "Couldn't upload the image because the connection dropped. Your image is still selected. Try again when you're back online."
-        : x?.code === "storage/unauthorized" ? "You don't have permission to upload images here."
-        : x?.message || "The upload failed, so the image wasn't saved. Try again.");
+      // plain words; the chosen (cropped) image stays so "Try again" re-sends it.
+      // A refusal isn't necessarily a missing role, so it's recorded for review.
+      setErr(uploadErrorMessage(x, navigator.onLine));
+      if (shouldRecordUploadError(x)) logIssue({ kind: "error", action: `academy image upload failed (${kind})`, code: x?.code || "", message: uploadDiagnostics(x, path) }).catch(() => {});
     }
     finally { if (current()) setBusy(false); }
   };
@@ -483,26 +492,48 @@ export function ImagePicker({ kind, label, value, courseId, lessonId, guideId, p
    Purpose video (Learn home)
    =================================================================== */
 export function PurposeVideoEditor({ me, current, onClose }) {
-  const [f, setF] = useState({ title: current?.title || "The Heart Behind the Creative", intro: current?.intro || "", videoUrl: current?.video ? (videoFromRecord(current.video)?.url || "") : "", thumb: current?.thumb || null });
+  // Older intros (an uploaded thumbnail, no mode) keep the upload selected.
+  const initial = useMemo(() => ({
+    title: current?.title || "The Heart Behind the Creative", intro: current?.intro || "",
+    videoUrl: current?.video ? (videoFromRecord(current.video)?.url || "") : "",
+    thumb: current?.thumb || null, thumbMode: current?.thumbMode || (current?.thumb ? "custom" : "source"),
+    videoMeta: current?.videoMeta || null,
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [f, setF] = useState(initial);
+  const update = useAppUpdate();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const uploaded = useRef(new Set());
   const toDelete = useRef(new Set());
   const parsed = useMemo(() => f.videoUrl.trim() ? parseVideoLink(f.videoUrl) : null, [f.videoUrl]);
   const set = (p) => setF((x) => ({ ...x, ...p }));
-  const close = async () => { for (const p of uploaded.current) { try { await deleteImage(p); } catch {} } onClose(); };
-  const save = async (e) => {
-    e.preventDefault();
-    if (f.videoUrl.trim() && !parsed?.ok) { setErr(parsed.reason); return; }
+  const fRef = useRef(f); fRef.current = f;
+  const dirty = JSON.stringify({ ...f, videoMeta: null }) !== JSON.stringify({ ...initial, videoMeta: null }) || (f.videoMeta?.thumbnailUrl || "") !== (initial.videoMeta?.thumbnailUrl || "");
+  const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
+  const discard = async () => { for (const p of uploaded.current) { try { await deleteImage(p); } catch {} } onClose(); };
+  const { requestClose, leaveGuard } = useUnsavedGuard(dirty, discard);
+  /* Validate and store. Resolves once saved (the dialog then closes); throws
+     with the reason otherwise — the dialog and every field stay as they are. */
+  const persist = async () => {
+    const cur = fRef.current;
+    const p = cur.videoUrl.trim() ? parseVideoLink(cur.videoUrl) : null;
+    if (cur.videoUrl.trim() && !p?.ok) { setErr(p.reason); throw new Error(p.reason); }
+    if (uploadsInFlight() > 0) { const m = "An image is still uploading. Wait for it to finish, then save."; setErr(m); throw new Error(m); }
     setBusy(true); setErr("");
     try {
-      await savePurposeVideo(me, { title: f.title, intro: f.intro, video: parsed?.ok ? parsed : null, thumb: f.thumb });
-      for (const p of toDelete.current) { try { await deleteImage(p); } catch {} }
-      uploaded.current.clear(); onClose();
-    } catch (x) { setErr(x?.message || "Couldn't save."); setBusy(false); }
+      await savePurposeVideo(me, { title: cur.title, intro: cur.intro, video: p?.ok ? p : null, videoMeta: p?.ok ? cur.videoMeta : null, thumb: cur.thumb, thumbMode: cur.thumbMode });
+      for (const x of toDelete.current) { try { await deleteImage(x); } catch {} }
+      uploaded.current.clear(); dirtyRef.current = false;
+      onClose();
+    } catch (x) { const m = x?.message || "Couldn't save."; setErr(m); setBusy(false); throw x; }
   };
+  const save = (e) => { e.preventDefault(); persist().catch(() => {}); };
+  // a newer release: "Save and reload" saves this dialog first (or stops, keeping it open)
+  useEffect(() => registerUnsaved("purpose-video", { label: "the introduction", isDirty: () => dirtyRef.current, save: persist }), []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <Sheet title="Purpose video" onClose={close}>
+    <Sheet title="Purpose video" onClose={requestClose}>
+      {/* the app-wide notice sits behind this dialog, so a newer release is announced here too */}
+      {update.status === "stale" && <div className="sb-updatebanner ac-dialogupdate" role="status"><span>{STALE_MESSAGE}</span><SaveAndReloadButton /></div>}
       <form onSubmit={save}>
         <Field id="pv-title" label="Title"><input id="pv-title" value={f.title} onChange={(e) => set({ title: e.target.value })} maxLength={120} /></Field>
         <Field id="pv-intro" label="Short intro"><textarea id="pv-intro" rows={3} value={f.intro} onChange={(e) => set({ intro: e.target.value })} maxLength={4000} /></Field>
@@ -510,10 +541,15 @@ export function PurposeVideoEditor({ me, current, onClose }) {
           <input id="pv-video" type="url" inputMode="url" value={f.videoUrl} onChange={(e) => set({ videoUrl: e.target.value })} />
           {parsed && (parsed.ok ? <div className="ac-ok"><CheckCircleIcon className="hi hi-sm" aria-hidden="true" />{parsed.capabilities.label}</div> : <div className="ac-err" role="alert">{parsed.reason}</div>)}
         </Field>
-        <ImagePicker kind="purpose" label="Thumbnail (16:9)" value={f.thumb} onChange={(ref, old) => { set({ thumb: ref }); if (ref) uploaded.current.add(ref.path); if (old?.path) toDelete.current.add(old.path); }} />
+        {/* the same preview as lesson videos; a newer link always wins, and a changed link drops the old metadata */}
+        {parsed?.ok && <VideoPreview parsed={parsed} meta={f.videoMeta} onMeta={(m) => set({ videoMeta: m })} probe={false} duration={false} staleAction={false} />}
+        <ThumbnailChoice f={f} set={set} parsed={parsed?.ok ? parsed : null} uploaded={uploaded} toDelete={toDelete}
+          picker={{ kind: "purpose" }} sourceLabel="Use video thumbnail"
+          hint="Shown on the Learn introduction card before the video plays." />
         {err && <div className="ac-err" role="alert">{err}</div>}
-        <div className="ac-actions"><BusyButton type="submit" className="sb-btn compact" busy={busy}>Save</BusyButton><button type="button" className="sb-btn quiet compact" onClick={close}>Cancel</button></div>
+        <div className="ac-actions"><BusyButton type="submit" className="sb-btn compact" busy={busy}>Save</BusyButton><button type="button" className="sb-btn quiet compact" onClick={requestClose}>Cancel</button></div>
       </form>
+      {leaveGuard}
     </Sheet>
   );
 }
@@ -712,7 +748,7 @@ function ItemPicker({ type, courses, guides, onPick, onClose }) {
 /* A) source thumbnail (default when available)  B) custom upload (16:9 crop).
    The custom image is app-owned; the source one is provider-hosted and never
    copied or deleted. The old custom image is only removed after a save. */
-export function ThumbnailChoice({ f, set, parsed, uploaded, toDelete, picker, ensureTarget }) {
+export function ThumbnailChoice({ f, set, parsed, uploaded, toDelete, picker, ensureTarget, sourceLabel = "Use source thumbnail", hint = null }) {
   const hasSource = !!(parsed?.ok && sourceThumbUrl(parsed, f.videoMeta));
   const mode = f.thumbMode === "custom" && f.thumb ? "custom" : "source";
   const previewItem = { video: parsed?.ok ? parsed : null, videoMeta: f.videoMeta, thumb: f.thumb, thumbMode: mode };
@@ -720,13 +756,13 @@ export function ThumbnailChoice({ f, set, parsed, uploaded, toDelete, picker, en
     <div className="sb-field">
       <span className="ac-fieldlabel">Thumbnail (16:9)</span>
       <div className="ac-thumbchoice" role="radiogroup" aria-label="Thumbnail source">
-        <label className={"ac-opt" + (mode === "source" ? " on" : "")}><input type="radio" name={`thumbmode-${picker.lessonId || picker.guideId || "x"}`} checked={mode === "source"} onChange={() => set({ thumbMode: "source" })} /><span>Use source thumbnail{hasSource ? "" : " (none available, so a placeholder is shown)"}</span></label>
+        <label className={"ac-opt" + (mode === "source" ? " on" : "")}><input type="radio" name={`thumbmode-${picker.lessonId || picker.guideId || "x"}`} checked={mode === "source"} onChange={() => set({ thumbMode: "source" })} /><span>{sourceLabel}{hasSource ? "" : " (none available yet, so a placeholder is shown)"}</span></label>
         <label className={"ac-opt" + (mode === "custom" ? " on" : "")}><input type="radio" name={`thumbmode-${picker.lessonId || picker.guideId || "x"}`} checked={mode === "custom"} disabled={!f.thumb} onChange={() => set({ thumbMode: "custom" })} /><span>Upload custom thumbnail{!f.thumb ? " (upload one below first)" : ""}</span></label>
       </div>
       <div className="ac-thumbprev"><VideoThumb item={previewItem} /></div>
       <ImagePicker kind={picker.kind} label="Custom thumbnail" value={f.thumb} courseId={picker.courseId} lessonId={picker.lessonId} guideId={picker.guideId} ensureTarget={ensureTarget}
         onChange={(ref, old) => { set({ thumb: ref, thumbMode: ref ? "custom" : "source" }); if (ref) uploaded?.current?.add(ref.path); if (old?.path) toDelete?.current?.add(old.path); }} />
-      <div className="ac-hint">{picker.guideId ? "Shown on this resource's card and, for a video, before it plays. The embedded player shows its own artwork once playing." : "Controls this lesson's cards and the pre-play image in the app. The embedded provider player shows its own artwork once playing."}</div>
+      <div className="ac-hint">{hint || (picker.guideId ? "Shown on this resource's card and, for a video, before it plays. The embedded player shows its own artwork once playing." : "Controls this lesson's cards and the pre-play image in the app. The embedded provider player shows its own artwork once playing.")}</div>
     </div>
   );
 }

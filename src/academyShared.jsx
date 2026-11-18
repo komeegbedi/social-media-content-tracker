@@ -94,8 +94,11 @@ export function CategoryArt({ category, imageRef, className = "", ratio = "3 / 4
 /* Source thumbnail URL (provider-hosted; never copied into our storage, never
    "deleted" by us). Only the `thumbnail_url` the provider returned through its
    documented oEmbed endpoint is used — no guessed URL patterns. Drive has none. */
-export function sourceThumbUrl(_video, meta) {
-  return meta?.thumbnailUrl && /^https:\/\//.test(meta.thumbnailUrl) ? meta.thumbnailUrl : "";
+export function sourceThumbUrl(video, meta) {
+  if (!(meta?.thumbnailUrl && /^https:\/\//.test(meta.thumbnailUrl))) return "";
+  // metadata of ANOTHER video (the link changed) never supplies this one's thumbnail
+  if (video?.id && meta.id && String(meta.id) !== String(video.id)) return "";
+  return meta.thumbnailUrl;
 }
 
 /* 16:9 thumbnail for a lesson/guide: custom upload (app-owned) when thumbMode is

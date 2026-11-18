@@ -327,10 +327,12 @@ Known limitations (by design, documented in the UI copy):
 * Reads go through the Firebase SDK (`getBlob` → object URL, cached per session).
   No `getDownloadURL` is ever called and no public or long-lived token URLs are
   stored, so reads follow the same access model as the course docs.
-* `storage.rules`: reads require an approved profile and (published course or
-  course editor); writes require a course editor, `image/jpeg|png|webp`, ≤ 2 MB;
-  everything outside `academy/**` is denied. The rules use cross-service
-  `firestore.get` lookups.
+* `storage.rules`: reads require an approved profile and (a published item in a
+  visible category, or an Academy editor); writes require an Academy editor,
+  `image/jpeg|png|webp`, ≤ 2 MB; everything outside `academy/**` is denied. The
+  rules use cross-service `firestore.get` / `firestore.exists` lookups, which are
+  limited to **two documents per request** — see *Storage rules document budget*
+  below.
 
 ---
 
@@ -391,6 +393,7 @@ npm run test:academy       # emulators:exec --only firestore,storage →
                            #   test/academy.rules.test.js (Firestore rules)
                            #   test/storage/storage.rules.test.js (Storage rules)
 npm run test:emulator      # existing Firestore rules suite (unchanged scope)
+npm run test:trigger:media # emulators:exec --only firestore,functions → the learner-media triggers
 npm run build
 ```
 
@@ -2286,3 +2289,242 @@ ones), a private short TMPDIR (Storage blobs; the Functions emulator's Unix
 socket must stay under macOS's 104-character limit), and a test-only dummy for
 declared secrets (email sending stays off in the emulator). Destructive suites
 also refuse the real project id (`test/emulatorGuard.js`).
+
+### Storage rules document budget (fix, 2026-11-18)
+
+**Cause of "You don't have permission to upload images here."** A Cloud Storage
+rules evaluation may access at most two Firestore documents ("No more than two
+Firestore documents may be accessed in a single Rules evaluation" — Storage
+security rules docs, *Enhance with Cloud Firestore*). The `d3ae810` rules
+checked `users/{uid}` + `courses/{id}` + `courseDrafts/{id}` for an upload to a
+course that exists only as a draft — three documents — so production refused
+it as `storage/unauthorized`, for an approved admin. Learner reads of published
+course and resource images (`users` + the item + `academySettings/categoryIndex`)
+and the delete clean-up had the same problem. Neither the emulator nor the Rules
+test API enforces the limit, which is why every emulator test passed.
+
+**Design now — at most two documents per request, every Academy path:**
+
+| Path | Read | Upload / replace | Delete |
+|---|---|---|---|
+| `covers/{courseId}`, `lessonThumbs/{courseId}/…` | editor: `users`; learner: `users` + `academyLearnerMedia/course_{id}` | `users` + `courseDrafts/{id}` | `users` (Academy editor) |
+| `guideThumbs/{guideId}` | editor: `users`; learner: `users` + `academyLearnerMedia/guide_{id}` | `users` + `guideDrafts/{id}` | `users` (Academy editor) |
+| `pathCovers/{pathId}` | `users` + `paths/{id}` | `users` + `paths/{id}` | `users` + `paths/{id}` |
+| `catCovers/{categoryId}` | `users` | `users` + `academyCategories/{id}` | `users` (admin) |
+| `purpose/`, `categoryArt/` | `users` | `users` (admin) / never | `users` (admin) |
+
+* **Learner reads:** `academyLearnerMedia/{course|guide}_{id}` stands for
+  "published and its category isn't hidden" — the test `firestore.rules`
+  applies to the item. Three Firestore triggers
+  (`functions/academyLearnerMedia.js`: `onAcademyCourseMedia`,
+  `onAcademyGuideMedia`, `onAcademyCategoryIndexMedia`) keep it in step; each
+  sync recomputes from the current documents in a transaction, so retries,
+  duplicates and out-of-order events converge on the state of the last write.
+  Clients can't read or write the collection (no rule matches it).
+* **Timing — eventually consistent, NOT immediate.** Granting is fail-closed:
+  until the trigger runs after a publish (or showing a category), images stay
+  hidden. **Revocation is not:** after unpublishing, archiving, deleting or
+  hiding a category, Firestore refuses the item at once, but the existing
+  marker keeps allowing approved learners to read that item's images until its
+  trigger has run successfully. Firebase documents no latency bound for
+  Firestore triggers, delivers events at least once and in no guaranteed order,
+  and retries a failed 2nd-gen event for up to 24 hours. The window is normally
+  short, but it is not bounded. Only approved members can read during it, and
+  only objects of that item.
+* **Detecting and repairing failed updates:** a failed sync is logged
+  (`academy learner media sync failed`, with the item) and the event retried.
+  `node scripts/reconcile-learner-media.mjs --project <id>` compares every
+  marker with the published items and lists **missing** markers (images
+  hidden) and **stale** ones (revocation that didn't land); it is read-only
+  unless `--apply`, which re-syncs exactly those items. Run it after deploying,
+  after restoring data by import (imports fire no triggers), after any
+  "sync failed" log entry, and after hiding or unpublishing something whose
+  images must be unavailable at once.
+* **Immediate revocation (not implemented — would need a different design):**
+  revoke in the same write. Firestore rules would let Academy editors *delete*
+  markers (never create or update them) and require that a course/resource
+  update to anything other than `published`, or its deletion, removes the marker
+  in the same batch (`existsAfter`); the client's unpublish / archive / delete /
+  publish-changes flows would add that delete. Hiding a category affects many
+  items, which rules can't enumerate, so that path would move to a callable
+  function that hides the category and removes its markers in one server
+  transaction (or stay trigger-based with the window above). Scope: a Firestore
+  rules deploy, one new callable, client changes in those flows, and tests;
+  the triggers remain as the backstop for granting and repair.
+* **Uploads** are checked against the item's private draft: both workspaces
+  create and confirm the draft before any upload (`ensureSaved`), for a
+  never-published item and when editing a published one.
+* **Deletes** (replacements, cancelled uploads, clean-up after a delete): any
+  Academy editor — exactly what the previous rule reduced to. The client still
+  keeps an image that another course, draft, resource, path or category uses.
+* **Editors read** every course / resource image (as in `firestore.rules`).
+* **Regression checks:** `src/storageRulesBudget.test.js` inlines the rules and
+  fails if any request to any path could touch more than two documents (it
+  reports three or four for the `d3ae810` rules); the Storage emulator suite
+  covers the draft-only, published, hidden and clean-up states with the real
+  sync code; `npm run test:trigger:media` runs the real triggers.
+* **Upload errors:** a refusal no longer says "You don't have permission"; it
+  says the server didn't accept the upload, keeps the image selected, and
+  suggests reloading. The code, HTTP status, bucket, object path and server
+  answer (tokens removed) go to the issue log.
+* **Cancelled uploads — best-effort clean-up, with a known limitation.** On
+  Cancel (or a newer image, or leaving the picker), the client deletes that
+  attempt's object at once and again after 5 seconds, in case the server had
+  already received the bytes. An object can still be left behind,
+  unreferenced, if the server commits it after both deletes, if the page is
+  closed within those 5 seconds, or if an upload aborted as stalled, timed out
+  or offline had in fact reached the server (those attempts aren't deleted).
+  Such an object is never referenced by any record, lives only in that item's
+  own folder, and is at most 2 MB (normally ≤ ~250 KB). It isn't removed by the
+  permanent course delete, which removes only images that records reference.
+  The existing durable mechanism (`academySettings/pendingCleanup`) doesn't fit:
+  only admins can write it, and its "Retry clean-up" runs the permanent course
+  deletion. A durable fix would be a scheduled server-side sweep of `academy/**`
+  objects older than a day that nothing references (new function; not in this
+  release).
+* **Deploy scope:** exactly the three new functions, `storage.rules` and
+  Hosting. No Firestore rules, index or configuration changes. Order:
+  1. Deploy the three triggers (only those three).
+  2. Immediately afterwards — with the triggers live, so nothing published from
+     then on can be missed — run the reconcile **dry run** against production.
+     If it reports missing markers (content published before the triggers
+     existed), run it with `--apply` and repeat the dry run until it reports
+     no drift.
+  3. Release `storage.rules`.
+  4. Deploy Hosting.
+* **Rollback — rules first, triggers last.** Live rules depend on the markers,
+  so markers must keep being maintained for as long as those rules are live:
+  1. Re-release Storage rules that don't read markers (the previous ruleset;
+     note it brings back the draft-upload refusal).
+  2. Roll back Hosting if needed (either Hosting version works with either
+     ruleset).
+  3. Only then delete the three triggers. Leftover markers are inert once no
+     rule reads them.
+
+### Stale application modules after a release (fix, 2026-11-18)
+
+**Cause (confirmed read-only).** A tab opened before a release keeps running
+that release's entry script and loads its lazy chunks later. The Firebase
+Functions SDK is one of them (`fetchVideoMetadata`, the first time a video link
+is checked). After the next release that chunk no longer exists on Hosting, and
+the catch-all rewrite (`"source": "**"`) answered with `index.html`: **200,
+`text/html`, and the `/assets/**` `immutable` cache header**. The browser
+rejects HTML as a module ("Failed to fetch dynamically imported module",
+MIME type text/html), and the editor printed that raw message. The service
+worker (`firebase-messaging-sw.js`) has no fetch handler and isn't involved.
+Neither the link nor CORS caused it.
+
+**Recovery in the app** (`src/appUpdate.js`, `src/appUpdateUi.jsx`):
+* Lazy modules (Functions, Storage, Learn, Admin, the Academy editors) load
+  through `guardedImport`, which classifies a module failure:
+  * **stale**: the served `index.html` names a different entry, or the module
+    URL answers with HTML or 404;
+  * **offline**;
+  * **unreachable**: the request itself failed (blocked or dropped).
+
+  The result is a typed error with a plain message; the original stays as
+  `cause` for the issue log. Once a tab is known to be stale, modules it hasn't
+  loaded yet fail at once instead of being requested again.
+* The editor and the main area say "A newer version of the app is available.
+  Save your changes, then reload to continue." This replaces Retry, because
+  repeating the import in a stale tab can't succeed. Offline or blocked loads
+  keep a Retry that really re-imports: a failed lazy screen is re-created
+  rather than replaying React's cached failure.
+* **Nothing reloads by itself.** "Save and reload":
+  * first saves every open editor that registered (course workspace,
+    resource workspace, the intro dialog);
+  * refuses while an image is uploading, or when a save fails, and says why —
+    the editor and its content stay;
+  * then reloads once, to the editor's own URL: same course, selected item and
+    valid learning-path context.
+
+  A reload that didn't reach a newer build isn't repeated, so there's no loop.
+  Dialogs show their own notice, because the page-level one sits behind them.
+* The video link stays editable and saveable whatever the metadata does.
+
+**Hosting.**
+* `firebase.json` now rewrites `"!/assets/**"` to `index.html` (the documented
+  exclusion pattern). A missing hashed file is a real **404**, never HTML
+  labelled as a module. App routes still get `index.html`, and the
+  hashed-asset `immutable` caching is unchanged. `npm run test:headers` checks
+  both.
+* Release step, **bounded**: `node scripts/carry-over-assets.mjs --dist dist --release <label>
+  --commit <sha> --from <label>:<clean build>:<its SHA256SUMS> [--from …]` copies the
+  previous release(s)' hashed files into the new build. The rules:
+  * Sources must be each release's clean original build, proven byte-for-byte against the
+    checksums recorded when it was built. An assembled deploy folder is refused, so carried
+    files never accumulate from release to release.
+  * At most two earlier releases are kept (`--keep`).
+  * Only missing files are copied; same-named files must be identical.
+  * `index.html` always comes from the new build.
+  * A manifest of what was retained is written beside the folder
+    (`<dist>.release-manifest.json`), never inside it, so it can't be deployed.
+
+  `scripts/verify-headers.mjs` (`VERIFY_DIST=<assembled folder> HOSTING_ORIGIN=<origin>`)
+  then checks what Hosting actually serves:
+  * `index.html` byte-for-byte, naming this release's entry;
+  * every asset, carried-over ones included, as 200 with the right content type, the same
+    bytes and `immutable`;
+  * a deliberately nonexistent asset as 404;
+  * deep links as `index.html`.
+* A browser that already cached the old HTML-as-module response
+  (`immutable`) keeps that cached copy; the notice handles that case.
+* **Older clients:** tabs still running a build from BEFORE this release have no update
+  notice. If one of them hits a missing module, it shows the old error. After saving their
+  work, people may need to reload the page manually. The carried-over assets make this
+  unlikely for the previous two releases.
+
+### Intro video thumbnails (2026-11-18)
+
+* The intro ("Purpose video") editor uses the lesson-video preview and the
+  shared 16:9 thumbnail choice: "Use video thumbnail" or "Upload custom
+  thumbnail".
+* The provider's thumbnail comes from the existing metadata callable in the
+  editor and is stored with the intro (`videoMeta`). The Learn card reads
+  only stored data, so learners' pages make no metadata request.
+* No provider URLs are guessed. Without metadata, the card shows a
+  placeholder.
+* Metadata is kept only for the current link: a changed URL drops the
+  previous video's thumbnail, and responses for an older link are ignored.
+  Metadata failure never blocks saving a valid link.
+* Older intros (an upload, no mode) stay on the custom image. Choosing the
+  video thumbnail keeps the upload, as lessons do.
+* Custom-image replacement and cancellation clean-up are unchanged.
+* Unsaved changes in the dialog are protected: closing asks first, and a
+  reload saves first.
+* **Rules change:** the `academySettings/{id}` write rule allows two optional
+  fields, `thumbMode` (`source`|`custom`) and `videoMeta` (`validVideoMeta`).
+  This is a Firestore rules deploy; it must precede Hosting.
+
+### Combined release scope (storage fix + stale modules + intro thumbnails)
+
+1. **Functions:** the three marker triggers only (`onAcademyCourseMedia`,
+   `onAcademyGuideMedia`, `onAcademyCategoryIndexMedia`).
+2. Learner-media reconcile dry run (initialise with `--apply` only if it
+   reports missing markers).
+3. **Firestore rules:** the intro fields. Additive; older clients are
+   unaffected.
+4. **Storage rules.**
+5. **Hosting**, as one exact artifact:
+   * Build once from a clean checkout of the merged commit. Its files must match the
+     reviewed candidate's.
+   * Assemble it with the previous two releases' clean builds, and record its checksums.
+   * Deploy that folder to a **preview channel** and run `verify-headers.mjs` against the
+     preview URL.
+   * Promote the verified preview version to live with `firebase hosting:clone`, so nothing
+     is rebuilt or re-uploaded. Re-check the checksums before each step.
+
+No index or other configuration changes.
+
+**Rollback:** Hosting first (the previous version also restores the old
+rewrite). Then Storage rules that don't read markers, then the triggers.
+Firestore rules last, if at all (the new fields are optional).
+
+**Still-open limitations (unchanged):**
+* Learner image access through markers is eventually consistent. Revocation
+  is not immediate and has no documented bound.
+* Cancelled-upload clean-up is best effort; an unreferenced object can remain.
+* Older clients (builds from before this release) have no update notice. After saving their
+  work, they may need a manual reload.
+
+Immediate revocation and a scheduled image sweep need separate proposals.

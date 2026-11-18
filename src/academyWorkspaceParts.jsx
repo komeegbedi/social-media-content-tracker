@@ -143,6 +143,8 @@ export function useCourseDraft(cid, me, { blank = null, onFirstSave } = {}) {
     imageReplaced: (path) => { if (path) images.current.add(path); },
     flushNow: () => flush(),
     getModel: () => m.current,
+    /* Anything typed that the server hasn't confirmed yet (used before a reload). */
+    hasUnsaved: () => saving.current || dirty.current.course || dirty.current.lessons.size > 0 || dirty.current.deleted.size > 0,
     /* Wait for in-flight saves, then save everything still dirty. Resolves to
        the saved rev, or throws with the reason (used before Publish/Preview). */
     settle: async ({ force = false } = {}) => {

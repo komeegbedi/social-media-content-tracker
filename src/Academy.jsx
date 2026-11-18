@@ -56,10 +56,12 @@ import {
 } from "./academyData.js";
 /* Editing code is its own chunk (round 7): learners never download the
    workspace or the editors. Each editor is wrapped in the editor scope it needs. */
-const AcademyWorkspace = React.lazy(() => import("./AcademyWorkspace.jsx"));
-const PurposeVideoEditor = React.lazy(() => import("./AcademyManage.jsx").then((m) => ({ default: (p) => <m.AcademyEditorScope me={p.me}><m.PurposeVideoEditor {...p} /></m.AcademyEditorScope> })));
-const PathEditor = React.lazy(() => import("./AcademyManage.jsx").then((m) => ({ default: (p) => <m.AcademyEditorScope me={p.me}><m.PathEditor {...p} /></m.AcademyEditorScope> })));
+const AcademyWorkspace = retryableLazy(() => guardedImport("AcademyWorkspace", () => import("./AcademyWorkspace.jsx")));
+const PurposeVideoEditor = retryableLazy(() => guardedImport("AcademyManage", () => import("./AcademyManage.jsx")).then((m) => ({ default: (p) => <m.AcademyEditorScope me={p.me}><m.PurposeVideoEditor {...p} /></m.AcademyEditorScope> })));
+const PathEditor = retryableLazy(() => guardedImport("AcademyManage", () => import("./AcademyManage.jsx")).then((m) => ({ default: (p) => <m.AcademyEditorScope me={p.me}><m.PathEditor {...p} /></m.AcademyEditorScope> })));
 import { ConfirmDialog } from "./App.jsx";
+import { guardedImport } from "./appUpdate.js";
+import { retryableLazy } from "./appUpdateUi.jsx";
 import { courseTimeFacts, formatClock } from "./academyDrafts.js";
 import { StoredImage, CategoryArt, VideoThumb, Markdown, SafeText, renderInlines, PushPinIcon, AppLink } from "./academyShared.jsx";
 export { StoredImage, CategoryArt, Markdown, SafeText, renderInlines };
@@ -351,7 +353,8 @@ function LearnHome({ me, users, isAdmin, R }) {
           <div className="ac-start2-row">
             <button type="button" className="ac-purpose-play ac-start2-thumb" onClick={() => setShowPurpose(true)} disabled={!purposeVideo}
               aria-label={purposeVideo ? `Watch: ${introTitle}` : "No introduction video yet"}>
-              <StoredImage imageRef={purpose.data?.thumb} alt="" ratio="16 / 9" placeholder={<PlayIcon className="hi" aria-hidden="true" />} />
+              {/* the chosen thumbnail: custom upload, or the provider's (stored, no request) */}
+              <VideoThumb item={{ video: purpose.data?.video || null, videoMeta: purpose.data?.videoMeta || null, thumb: purpose.data?.thumb || null, thumbMode: purpose.data?.thumbMode ?? null }} placeholder={<PlayIcon className="hi" aria-hidden="true" />} />
               {purposeVideo && <span className="ac-playbadge sm" aria-hidden="true"><PlayIcon className="hi" /></span>}
             </button>
             <div className="ac-start2-text">

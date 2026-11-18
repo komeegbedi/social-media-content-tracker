@@ -18,6 +18,7 @@ import {
   setDoc, updateDoc, deleteDoc, addDoc, writeBatch, serverTimestamp, deleteField, FieldPath, runTransaction,
 } from "firebase/firestore";
 import { db, callFunction, getStorageInstance } from "./firebase";
+import { guardedImport } from "./appUpdate.js";
 import { logIssue } from "./logging";
 import { courseCounters, newId, toMs, normalizeCategory, normalizeTopics, nameKey, slugId,
   isAcademyEditor, ACADEMY_CATEGORIES, LEGACY_CATEGORY_IDS, quizMode, publishBlockers, flatLessons, categoryIdFromName } from "./academyProgress.js";
@@ -879,12 +880,24 @@ export const lessonShape = (d) => ({
   },
 });
 
-export async function savePurposeVideo(me, data) {
-  await setDoc(doc(db, `academySettings/${PURPOSE_DOC}`), {
+/* The Learn introduction. Like a lesson video: `thumbMode` "source" shows the
+   provider's thumbnail (stored in videoMeta when the editor fetched it, so
+   learners' pages never request metadata), "custom" the uploaded 16:9 image.
+   Metadata is kept only when it belongs to THIS link (a changed URL never keeps
+   the previous video's thumbnail). Older docs (thumb, no thumbMode) stay custom. */
+export function purposeRecord(me, data) {
+  const video = data.video ? videoRecord(data.video.ok ? data.video : { ok: true, ...data.video }) : null;
+  const metaFits = video && data.videoMeta && (!data.videoMeta.id || data.videoMeta.id === video.id);
+  const thumb = data.thumb || null;
+  return {
     title: String(data.title || "").slice(0, 120), intro: String(data.intro || "").slice(0, 4000),
-    video: data.video ? videoRecord(data.video.ok ? data.video : { ok: true, ...data.video }) : null,
-    thumb: data.thumb || null, updatedAt: serverTimestamp(), updatedBy: me.id,
-  });
+    video, videoMeta: metaFits ? shapeVideoMeta({ ...data.videoMeta, id: video.id }) : null,
+    thumb, thumbMode: thumb && data.thumbMode !== "source" ? "custom" : "source",
+    updatedAt: serverTimestamp(), updatedBy: me.id,
+  };
+}
+export async function savePurposeVideo(me, data) {
+  await setDoc(doc(db, `academySettings/${PURPOSE_DOC}`), purposeRecord(me, data));
 }
 
 /* ---- Storage -------------------------------------------------------------- */
@@ -905,7 +918,7 @@ export async function uploadImage(path, blob, contentType, { timeoutMs = 90000, 
     const t = setTimeout(() => reject(fail("stalled")), stallMs);
     p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
   });
-  const [{ ref, uploadBytesResumable }, st] = await withStall(Promise.all([import("firebase/storage"), getStorageInstance()]));
+  const [{ ref, uploadBytesResumable }, st] = await withStall(Promise.all([guardedImport("firebase/storage", () => import("firebase/storage")), getStorageInstance()]));
   const task = uploadBytesResumable(ref(st, path), blob, { contentType, cacheControl: "private, max-age=3600" });
   return new Promise((resolve, reject) => {
     let done = false, stall = 0;
@@ -919,7 +932,9 @@ export async function uploadImage(path, blob, contentType, { timeoutMs = 90000, 
     armStall();
     window.addEventListener("offline", onOffline);
     signal?.addEventListener("abort", onAbort);
-    task.then((snap) => finish(() => resolve({ path, bytes: snap.metadata.size, contentType })), (e) => finish(() => reject(e)));
+    // the bucket is attached for the issue log (academyUploadErrors.uploadDiagnostics)
+    task.then((snap) => finish(() => resolve({ path, bytes: snap.metadata.size, contentType })),
+      (e) => finish(() => { try { e.bucket = st?.app?.options?.storageBucket || ""; } catch { /* frozen error */ } reject(e); }));
   });
 }
 /* Which of `paths` are still used by anything OTHER than course `courseId`:
@@ -962,7 +977,7 @@ async function safeToDeleteFor(courseId, paths) {
 }
 
 export async function deleteImage(path) {
-  const [{ ref, deleteObject }, st] = await Promise.all([import("firebase/storage"), getStorageInstance()]);
+  const [{ ref, deleteObject }, st] = await Promise.all([guardedImport("firebase/storage", () => import("firebase/storage")), getStorageInstance()]);
   await deleteObject(ref(st, path));
 }
 /* Images (round 7). Reads stay auth-checked (getBlob under storage.rules →
@@ -978,7 +993,7 @@ export async function deleteImage(path) {
 export const IMAGE_TIMEOUT_MS = 15000;
 const IMAGE_PARALLEL = 4;
 let _storageMod = null;          // the Storage SDK module, imported once on first use
-const storageModule = () => (_storageMod ||= import("firebase/storage"));
+const storageModule = () => (_storageMod ||= guardedImport("firebase/storage", () => import("firebase/storage")).catch((e) => { _storageMod = null; throw e; }));
 const _inflight = new Map();   // path → { promise, job }
 const _queue = [];
 let _active = 0;

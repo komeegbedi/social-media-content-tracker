@@ -281,6 +281,24 @@ test("academySettings (purpose video): approved read; admin-only write with a st
   await assertFails(setDoc(doc(as("admin"), "academySettings", "purposeVideo"), { ...ok, video: { provider: "youtube", id: "x", src: "https://evil" } }));
 });
 
+test("intro video thumbnails: thumbMode + provider metadata as on lessons; older docs (no mode) stay valid; bad values refused", async () => {
+  const base = { title: "Why", intro: "x", video: { provider: "youtube", id: "LZxtveAHWsM" }, thumb: null, updatedAt: serverTimestamp(), updatedBy: "admin" };
+  const meta = { id: "LZxtveAHWsM", title: "T", author: "A", authorUrl: "https://www.youtube.com/@a", thumbnailUrl: "https://i.ytimg.com/vi/LZxtveAHWsM/hqdefault.jpg", sourceUrl: "https://www.youtube.com/watch?v=LZxtveAHWsM", fetchedAt: 1 };
+  const custom = { path: "academy/purpose/v1.jpg", version: "v1", contentType: "image/jpeg", bytes: 1000, w: 1280, h: 720 };
+  const put = (d) => setDoc(doc(as("admin"), "academySettings", "purposeVideo"), d);
+  await assertSucceeds(put(base));                                                        // the previous shape still saves
+  await assertSucceeds(put({ ...base, thumbMode: "source", videoMeta: meta }));
+  await assertSucceeds(put({ ...base, thumbMode: "custom", thumb: custom, videoMeta: meta }));
+  await assertSucceeds(put({ ...base, thumbMode: "source", thumb: custom, videoMeta: null }));  // custom kept while the source is used
+  await assertFails(put({ ...base, thumbMode: "remote" }));
+  await assertFails(put({ ...base, videoMeta: { ...meta, thumbnailUrl: "http://insecure/x.jpg" } }));
+  await assertFails(put({ ...base, videoMeta: { ...meta, script: "x" } }));
+  await assertFails(put({ ...base, thumb: { ...custom, path: "elsewhere/x.jpg" } }));
+  await assertFails(setDoc(doc(as("inst"), "academySettings", "purposeVideo"), { ...base, thumbMode: "source", videoMeta: meta, updatedBy: "inst" }));
+  // other settings docs gain nothing: categoryIndex keeps its own strict shape
+  await assertFails(setDoc(doc(as("admin"), "academySettings", "categoryIndex"), { hidden: [], thumbMode: "source", updatedAt: serverTimestamp(), updatedBy: "admin" }));
+});
+
 /* ===================== v2: quick guides, learning paths, reviews ===================== */
 const guide = (over = {}) => ({
   title: "Export for web", category: "photography", topics: ["Exporting and delivering images"], status: "published", instructorUid: "inst", instructorName: "Ines",

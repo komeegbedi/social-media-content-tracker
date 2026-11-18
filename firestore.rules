@@ -1052,11 +1052,14 @@ service cloud.firestore {
     match /academySettings/{id} {
       allow read: if isApproved() && id != 'pendingCleanup';
       allow write: if isAdmin() && id != 'categories' && id != 'categoryIndex' && id != 'pendingCleanup'
-        && request.resource.data.keys().hasOnly(['title', 'intro', 'video', 'thumb', 'updatedAt', 'updatedBy'])
+        // the Learn introduction video: thumbMode + videoMeta (provider thumbnail) as on lessons
+        && request.resource.data.keys().hasOnly(['title', 'intro', 'video', 'thumb', 'thumbMode', 'videoMeta', 'updatedAt', 'updatedBy'])
         && request.resource.data.get('title', '') is string && request.resource.data.get('title', '').size() <= 120
         && request.resource.data.get('intro', '') is string && request.resource.data.get('intro', '').size() <= 4000
         && validVideoRef(request.resource.data.get('video', null))
         && validImageRef(request.resource.data.get('thumb', null))
+        && request.resource.data.get('thumbMode', 'source') in ['source', 'custom']
+        && validVideoMeta(request.resource.data.get('videoMeta', null))
         && request.resource.data.updatedAt == request.time;
     }
 
