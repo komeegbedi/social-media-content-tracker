@@ -4207,6 +4207,17 @@ body.ac-dragging,body.ac-dragging *{cursor:grabbing !important;-webkit-user-sele
    their full hit areas: only the visible icon moves inside them. */
 .ac-outlesson{--ac-line:calc(var(--text-body) * 1.35);align-items:flex-start}
 .ac-outlesson > .ac-handle,.ac-outlesson > .ac-iconbtn{align-self:flex-start;align-items:flex-start;padding-top:calc(8px + var(--ac-line) / 2 - var(--icon-sm) / 2)}
+/* Lesson-type icon (play, written, exercise, resource): its visible artwork is
+   centred on the title's first line at half the font's real cap height (`cap`
+   follows Inter's optical sizing at every text size; these icons' artwork is
+   vertically centred in their 24-unit box). It hangs from the title's BASELINE
+   and sits a WHOLE number of pixels from it: text and SVG are each snapped to the
+   pixel grid when painted, so a whole-pixel distance renders the same on every
+   row. Older browsers keep the line-box rule above. */
+@supports (top:round(1cap,1px)){
+  .ac-outmain{align-items:baseline}
+  .ac-outmain > .ac-kindicon{position:relative;font-size:var(--text-body);margin-top:calc(-1 * var(--icon-sm));top:round(calc(var(--icon-sm) / 2 - .5cap),1px)}
+}
 .ac-outlesson.on{box-shadow:inset 3px 0 0 var(--accent-fill)}
 /* Outline groups (v7): with sections, every group is ONE visible container —
    its header (a named section, or "No section"), then its lessons (indented)
