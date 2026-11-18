@@ -18,6 +18,8 @@
    it started reports nothing (no-op → no Undo). The caller reorders its data
    synchronously; transitions are disabled for that frame so rows don't jump.
 
+   Escape cancels a pointer drag too (nothing moves).
+
    Keyboard: focus a handle, Space/Enter to lift, ↑/↓ (Home/End) to move
    between allowed slots, Space/Enter to drop, Escape to cancel; every step is
    announced in a polite live region. Callers also offer "Move to position…". */
@@ -48,12 +50,14 @@ function measure(listEl, items, startIndex, span) {
   const restTop = rest.map((i) => rects[i].top - (i >= end ? blockH : 0));
   const lastBottom = rest.length ? restTop[rest.length - 1] + rects[rest[rest.length - 1]].height + gap : 0;
   const slotY = (s) => (s < rest.length ? restTop[s] : lastBottom);
-  return { rects, gap, end, blockTop, blockH, rest, slotY };
+  const listH = listEl.getBoundingClientRect().height;
+  return { rects, gap, end, blockTop, blockH, rest, slotY, listH };
 }
 
 export function SortableList({
   items, getLabel, canDrag = () => true, onMove, renderItem, className = "", disabled = false,
   spanOf = () => 1, canDropAt = () => true, positionLabel,
+  dropHint = null, dropTargetOf = null, topZoneLabel = null,
 }) {
   const listRef = useRef(null);
   const [drag, setDrag] = useState(null);        // { id, start, span, slot, dy, kind: "pointer"|"keyboard" }
@@ -70,7 +74,14 @@ export function SortableList({
     for (let s = 0; s <= rest.length; s++) if (canDropAt(item, s, rest)) out.push(s);
     return out;
   };
-  const describe = (item, slot, slots) => (positionLabel ? positionLabel(item, slot, slots) : `position ${slots.indexOf(slot) + 1} of ${slots.length}`);
+  // keyboard announcements use the SAME words as the on-screen label when the caller gives them
+  const describe = (item, slot, slots) => {
+    if (dropHint) { const start = indexOf(item.id); return dropHint(item, slot, restItems(start, Math.max(1, spanOf(item, start, items) || 1))); }
+    return positionLabel ? positionLabel(item, slot, slots) : `position ${slots.indexOf(slot) + 1} of ${slots.length}`;
+  };
+  /* Destination words beside the insertion line (and what a drop would do): the
+     caller describes the slot among the rows that remain without the dragged block. */
+  const hintFor = (d) => (d && dropHint ? dropHint(d.item || items[d.start], d.slot, restItems(d.start, d.span)) : "");
 
   /* Settle: after a drop the parent re-renders in the new order; transforms go
      to zero WITHOUT a transition for one frame so nothing visibly jumps. */
@@ -106,7 +117,14 @@ export function SortableList({
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* old browsers */ }
     const b = begin(item, "pointer");
     const scroller = scrollParent(listRef.current);
-    st.current = { ...b, pointerId: e.pointerId, startY: e.clientY, startListTop: listRef.current.getBoundingClientRect().top, lastY: e.clientY, scroller, moved: false, raf: 0 };
+    // Escape during a pointer (mouse / pen / touch) drag cancels it: nothing moves
+    const onEsc = (ev) => { if (ev.key === "Escape" && st.current.item) { ev.preventDefault(); ev.stopPropagation(); cancel(`Move cancelled. ${getLabel(item)} is back where it was.`); } };
+    window.addEventListener("keydown", onEsc, true);
+    // the scroll range is fixed at lift: the lifted row is transformed, and a
+    // transform past the list's end would otherwise grow the scroll area, so
+    // auto-scroll could run on into blank space below the last row
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    st.current = { ...b, pointerId: e.pointerId, startY: e.clientY, startListTop: listRef.current.getBoundingClientRect().top, lastY: e.clientY, scroller, maxScroll, moved: false, raf: 0, onEsc };
     document.body.classList.add("ac-dragging");
     setDrag({ id: item.id, start: b.start, span: b.span, slot: b.from, dy: 0, kind: "pointer" });
     const tick = () => {
@@ -116,7 +134,7 @@ export function SortableList({
       let v = 0;
       if (y < r.top + edge) v = -Math.ceil(((r.top + edge - y) / edge) * 14);
       else if (y > r.bottom - edge) v = Math.ceil(((y - (r.bottom - edge)) / edge) * 14);
-      if (v) { const before = s.scroller.scrollTop; s.scroller.scrollTop += v; if (s.scroller.scrollTop !== before) follow(y); }
+      if (v) { const before = s.scroller.scrollTop; const next = Math.max(0, Math.min(s.maxScroll, before + v)); if (next !== before) { s.scroller.scrollTop = next; follow(y); } }
       s.raf = requestAnimationFrame(tick);
     };
     st.current.raf = requestAnimationFrame(tick);
@@ -127,13 +145,17 @@ export function SortableList({
     if (Math.abs(clientY - s.startY) > 3) s.moved = true;
     // pointer position in list coordinates, so scrolling is accounted for
     const listTop = listRef.current.getBoundingClientRect().top;
-    const dy = (clientY - listTop) - (s.startY - s.startListTop);
+    // the lifted row stays within the list (a little room above it for the
+    // outside-sections zone): never below the last row, so it can't stretch the scroll area
+    const raw = (clientY - listTop) - (s.startY - s.startListTop);
+    const dy = Math.max(-s.g.blockTop - 56, Math.min(s.g.listH - s.g.blockTop - (s.g.blockH - s.g.gap), raw));
     const slot = nearestSlot(s, s.g.blockTop + dy);
     setDrag((d) => (d && d.kind === "pointer" ? (d.dy === dy && d.slot === slot ? d : { ...d, dy, slot }) : d));
   };
   const finishPointer = (commit) => {
     const s = st.current; if (!s.item) return;
     cancelAnimationFrame(s.raf);
+    if (s.onEsc) window.removeEventListener("keydown", s.onEsc, true);
     document.body.classList.remove("ac-dragging");
     st.current = {};
     const d = dragRef.current;
@@ -150,11 +172,20 @@ export function SortableList({
     }
   };
   const cancel = (why) => {
-    if (st.current.item) { cancelAnimationFrame(st.current.raf); document.body.classList.remove("ac-dragging"); st.current = {}; }
+    if (st.current.item) {
+      cancelAnimationFrame(st.current.raf); document.body.classList.remove("ac-dragging");
+      if (st.current.onEsc) window.removeEventListener("keydown", st.current.onEsc, true);
+      if (st.current.moved) {   // the release that follows a cancelled drag must not click anything either
+        const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+        window.addEventListener("click", swallow, { capture: true, once: true });
+        setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 400);
+      }
+      st.current = {};
+    }
     setSettling(true); setDrag(null);
     if (why) setMsg(why);
   };
-  useEffect(() => () => { cancelAnimationFrame(st.current.raf); document.body.classList.remove("ac-dragging"); }, []);
+  useEffect(() => () => { cancelAnimationFrame(st.current.raf); document.body.classList.remove("ac-dragging"); if (st.current.onEsc) window.removeEventListener("keydown", st.current.onEsc, true); }, []);
 
   /* ---- keyboard ---- */
   const kb = useRef(null);
@@ -168,7 +199,7 @@ export function SortableList({
         const b = begin(item, "keyboard");
         kb.current = b;
         setDrag({ id: item.id, start: b.start, span: b.span, slot: b.from, dy: 0, kind: "keyboard" });
-        setMsg(`Picked up ${getLabel(item)}${b.span > 1 ? ` and its ${b.span - 1} item${b.span === 2 ? "" : "s"}` : ""}. ${describe(item, b.from, b.slots)}. Use the arrow keys to move, Space to drop, Escape to cancel.`);
+        setMsg(`Picked up ${getLabel(item)}${b.span > 1 ? ` and its ${b.span - 1} item${b.span === 2 ? "" : "s"}` : ""}. ${dropHint ? "Use the arrow keys to choose where it goes" : `${describe(item, b.from, b.slots)}. Use the arrow keys to move`}, Space to drop, Escape to cancel.`);
       }
       return;
     }
@@ -184,7 +215,7 @@ export function SortableList({
     } else if (k === " " || k === "Enter") {
       e.preventDefault();
       kb.current = null; setSettling(true); setDrag(null);
-      if (d.slot !== b.from) { onMove(item.id, d.slot); setMsg(`Dropped ${getLabel(item)}, ${describe(item, d.slot, b.slots)}.`); }
+      if (d.slot !== b.from) { const words = describe(item, d.slot, b.slots); onMove(item.id, d.slot); setMsg(dropHint ? `Dropped ${getLabel(item)}. ${words.replace(/^Move /, "Moved ")}.` : `Dropped ${getLabel(item)}, ${words}.`); }
       else setMsg(`${getLabel(item)} not moved.`);
     } else if (k === "Escape") {
       e.preventDefault(); kb.current = null; cancel(`Move cancelled. ${getLabel(item)} is back where it was.`);
@@ -201,6 +232,17 @@ export function SortableList({
     return (k >= drag.slot ? g.blockH : 0) - (i >= g.end ? g.blockH : 0);
   };
   const lineY = drag && g ? g.slotY(drag.slot) - Math.max(2, g.gap / 2) - 1 : null;
+  const from = drag ? (drag.kind === "keyboard" ? kb.current?.from : st.current.from) : null;
+  const moved = !!drag && drag.slot !== from;
+  // which group the pending drop lands in (rows highlight it); null when nothing would change
+  const target = drag && moved && dropTargetOf ? dropTargetOf(items[drag.start], drag.slot, restItems(drag.start, drag.span)) : null;
+  const hint = moved ? hintFor(drag) : "";
+  /* An optional destination ABOVE the first row (e.g. "outside any section"),
+     shown only while dragging an item that may go there. It's drawn over the
+     space above the list (absolutely), so starting a drag shifts nothing. */
+  const zoneLabel = drag && topZoneLabel ? topZoneLabel(items[drag.start]) : null;
+  const zoneSlots = drag ? (drag.kind === "keyboard" ? kb.current?.slots : st.current.slots) : null;
+  const showZone = !!zoneLabel && !!zoneSlots && zoneSlots.includes(0) && drag.start !== 0;
 
   const handleFor = (item) => (canDrag(item) ? {
     "aria-label": `Reorder ${getLabel(item)}`,
@@ -229,12 +271,15 @@ export function SortableList({
           <div key={item.id} data-sort-row={item.id}
             className={"ac-dragrow" + (inBlock ? " dragging" : "") + (inBlock && drag.kind === "keyboard" ? " lifted" : "")}
             style={y ? { transform: `translate3d(0, ${y}px, 0)` } : undefined}>
-            {renderItem(item, { handle: handleFor(item), index: i, dragging: !!inBlock })}
+            {renderItem(item, { handle: handleFor(item), index: i, dragging: !!inBlock, dropTarget: target, sorting: !!drag })}
           </div>
         );
       })}
-      {lineY != null && drag.slot !== (drag.kind === "keyboard" ? kb.current?.from : st.current.from) && (
-        <div className="ac-dropline" aria-hidden="true" style={{ transform: `translate3d(0, ${lineY}px, 0)` }} />
+      {showZone && <div className={"ac-topdrop" + (drag.slot === 0 && moved ? " on" : "")} aria-hidden="true">{zoneLabel}</div>}
+      {lineY != null && moved && (
+        <div className="ac-dropline" aria-hidden="true" style={{ transform: `translate3d(0, ${lineY}px, 0)` }}>
+          {hint && <span className="ac-drophint">{hint}</span>}
+        </div>
       )}
     </div>
   );

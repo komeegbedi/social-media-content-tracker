@@ -25,7 +25,7 @@ import {
   ChevronRightIcon, ChevronLeftIcon, EyeIcon, PlusIcon, TrashIcon, EllipsisHorizontalIcon, PlayIcon, DocumentTextIcon,
   LinkIcon, PencilSquareIcon, Cog6ToothIcon, ExclamationTriangleIcon, CheckCircleIcon, EyeSlashIcon, ArrowUturnLeftIcon,
   ArchiveBoxIcon, BookOpenIcon, ArrowPathIcon, ArrowsUpDownIcon, XMarkIcon, ChevronDownIcon, ClipboardDocumentCheckIcon,
-  InformationCircleIcon, CloudArrowUpIcon, NoSymbolIcon,
+  InformationCircleIcon, CloudArrowUpIcon, NoSymbolIcon, FolderIcon, QueueListIcon,
 } from "@heroicons/react/24/outline";
 import { BusyButton, Skeleton } from "./loading.jsx";
 import { useMediaQuery } from "./overlay.jsx";
@@ -40,7 +40,9 @@ import {
 } from "./academyProgress.js";
 import { parseVideoLink, videoFromRecord, videoRecord, VIDEO_PROVIDERS } from "./academyVideo.js";
 import { blankCourse, hasUnpublishedChanges, courseRuntime, formatRuntime, formatClock } from "./academyDrafts.js";
-import { moveId, outlineRows, moveLessonInOutline, moveLessonToModule, insertLesson, removeLesson, orderCourses, lessonPosition, moveModule, moduleIndexFromSlot, outlineSpan, outlineCanDrop } from "./academyOrder.js";
+import { moveId, outlineRows, moveLessonInOutline, moveLessonToModule, insertLesson, removeLesson, orderCourses, lessonPosition, moveModule, moduleIndexFromSlot, outlineSpan, outlineCanDrop,
+  NO_SECTION, isNamedSection, namedSections, topNoSectionId, ensureNoSection, defaultSectionName, addSection, renameSection, removeSectionTo, moveLessonToGroup, describeDrop, dropGroup, moveSectionAmongNamed,
+  lessonDestinations, ungroupedLabel } from "./academyOrder.js";
 import {
   useCategoryRecords, useCategoryIndex, useCategoryArt, useCourses, useCourseDrafts, createCategoryDraft, newCategoryId,
   updateCategory, setCategoryHidden, reorderCategories, setCategoryCourseOrder, createDefaultCategories, deleteImage,
@@ -719,6 +721,7 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
   const undo = useUndo();
   const online = useOnline();
   const [dialog, setDialog] = useState(null);             // { kind: "move"|"movesection"|"bulk"|"keepmine", ... }
+  const [focusSection, setFocusSection] = useState(null);  // a just-added section: its name field takes focus
   const [publish, setPublish] = useState({ state: "idle" });
   const outlineScroll = useRef(0);
   const autoTitles = useRef({});                          // lesson id → last auto-filled title
@@ -772,8 +775,13 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
 
   const { course, lessons, head, liveCourse } = model;
   const modules = course.modules && course.modules.length ? course.modules : [{ id: "m1", title: "", lessonIds: [] }];
-  const showHeaders = modules.length > 1;
-  const rows = outlineRows(modules, { showHeaders }).map((r) => ({ ...r, lesson: r.type === "lesson" ? lessons[r.id] : null })).filter((r) => r.type === "module" || r.lesson);
+  // Sections are optional: a TITLED module is a named section (always shown, even
+  // alone); untitled modules hold the lessons in "No section" (academyOrder.js).
+  const sectionsOn = modules.some(isNamedSection);
+  const rowsFor = (mods) => outlineRows(mods).map((r) => ({ ...r, lesson: r.type === "lesson" ? lessons[r.id] : null })).filter((r) => r.type !== "lesson" || r.lesson);
+  const rows = rowsFor(modules);
+  const named = namedSections(modules);
+  const groupCount = (group) => rows.filter((r) => r.type === "lesson" && r.group === group).length;
   const cat = categoryIn(tax.categories, course.category);
   const liveStatus = !liveCourse ? "never" : liveCourse.status;
   const changes = model.draftExists && liveCourse?.status === "published" && head.rev > head.publishedRev;
@@ -792,36 +800,68 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
   const busySaving = ["pending", "saving"].includes(save.state);
   const currentModules = () => { const m = store.getModel()?.course?.modules; return m && m.length ? m : [{ id: "m1", title: "", lessonIds: [] }]; };
 
-  /* One undoable outline change (lesson or section move). */
+  /* One undoable outline change. EVERY outline action starts from the LATEST
+     model (store.getModel), never from this render's copy — so a rename that was
+     just committed (a name field's blur fires before the next click) can't be
+     overwritten by an immediate add / remove / move. Undo is one-use. */
   const changeOutline = (after, label, message) => recordMove({
-    before: modules, after, label, message, same: sameData, undo,
+    before: currentModules(), after, label, message, same: sameData, undo,
     save: (m) => store.setModules(m), current: currentModules,
   });
+  const groupName = (mods, group) => { const m = mods.find((x) => x.id === group); return m && isNamedSection(m) ? `“${m.title.trim()}”` : ungroupedLabel(mods, group); };
   const onOutlineMove = (rowId, slot) => {
-    const row = rows.find((r) => r.id === rowId); if (!row) return;
-    if (row.type === "module") changeOutline(moveModule(modules, row.moduleId, moduleIndexFromSlot(rows, row.moduleId, slot)), row.title || "Section", `Moved section “${row.title || "Untitled section"}”.`);
-    else changeOutline(moveLessonInOutline(modules, rowId, slot, { showHeaders }), lessonTitle(row.lesson));
+    const cur = currentModules();
+    const all = rowsFor(cur);
+    const row = all.find((r) => r.id === rowId); if (!row) return;
+    const rest = row.type === "module" ? all.filter((r) => r.moduleId !== row.moduleId) : all.filter((r) => r.id !== rowId);
+    const words = describeDrop(cur, row, slot, rest).replace(/^Move /, "");
+    if (row.type === "module") changeOutline(moveModule(cur, row.moduleId, moduleIndexFromSlot(all, row.moduleId, slot, cur)), row.title, `Moved section “${row.title.trim()}” ${words.replace(/^section /, "")}.`);
+    else changeOutline(moveLessonInOutline(cur, rowId, slot, newId), lessonTitle(row.lesson), `Moved “${lessonTitle(row.lesson)}” ${words}.`);
   };
-
-  const addContent = (kind, afterId = null) => {
-    if (kind === "bulk") { setDialog({ kind: "bulk", afterId }); return; }
+  /* Where new content goes: below a lesson, at the end of a group (a section id
+     or NO_SECTION), or — with no sections — at the end of the course. */
+  const placeNew = (mods, lid, { afterId = null, group = null } = {}) => {
+    if (afterId) return insertLesson(mods, lid, { afterId });
+    // no group: with sections the author always picks one; without sections, the end of the course
+    let target = group ?? (mods.some(isNamedSection) ? topNoSectionId(mods) : (mods[mods.length - 1]?.id || NO_SECTION));
+    let base = mods;
+    if (target === NO_SECTION) [base, target] = ensureNoSection(mods, newId);
+    return insertLesson(base, lid, { moduleId: target });
+  };
+  const addContent = (kind, where = {}) => {
+    if (kind === "bulk") { setDialog({ kind: "bulk", ...where }); return; }
     const lid = newLessonId();
-    const target = afterId ? null : modules[modules.length - 1].id;
-    const host = afterId ? modules.find((m) => (m.lessonIds || []).includes(afterId))?.id : target;
-    const next = insertLesson(modules, lid, { afterId, moduleId: target });
-    store.addLesson(lid, emptyLesson(kind, host || modules[0].id), next);
+    const next = placeNew(currentModules(), lid, where);
+    store.addLesson(lid, emptyLesson(kind, next.find((m) => (m.lessonIds || []).includes(lid))?.id || ""), next);
     select(lid);
   };
-  const addVideos = (cands, afterId = null) => {
-    let mods = modules; const ids = [];
-    let after = afterId;
+  const addVideos = (cands, where = {}) => {
+    let mods = currentModules(); const ids = [];
+    let afterId = where.afterId || null;
     for (const c of cands) {
       const lid = newLessonId(); ids.push(lid);
-      mods = insertLesson(mods, lid, { afterId: after, moduleId: mods[mods.length - 1].id });
-      after = lid;
+      mods = afterId ? insertLesson(mods, lid, { afterId }) : placeNew(mods, lid, { group: where.group });
+      afterId = lid;
       store.addLesson(lid, { ...emptyLesson("video", mods.find((m) => m.lessonIds.includes(lid)).id), title: c.meta?.title || "", video: videoRecord(c.parsed), videoMeta: c.meta ? { ...c.meta, id: c.parsed.id } : null }, mods);
     }
     if (ids[0]) select(ids[0]);
+  };
+  /* Sections: add (named, ready to rename), rename, move a lesson between groups, remove. */
+  const addSectionNow = () => {
+    const cur = currentModules(); const id = newId(); const title = defaultSectionName(cur);
+    changeOutline(addSection(cur, id, title), title, `Added section “${title}”.`);
+    setFocusSection(id);
+  };
+  const renameSectionNow = (id, title) => {
+    const cur = currentModules(); const m = cur.find((x) => x.id === id); const t = String(title || "").trim().slice(0, 120);
+    if (!m || !t || t === m.title) return false;
+    store.setModules(renameSection(cur, id, t));
+    return true;
+  };
+  const moveLessonToSection = (lid, group, index = null) => {
+    const cur = currentModules();
+    const next = moveLessonToGroup(cur, lid, group, index, newId);
+    changeOutline(next, lessonTitle(lessons[lid]), `Moved “${lessonTitle(lessons[lid])}” to ${groupName(next, next.find((m) => m.lessonIds.includes(lid))?.id)}${index == null ? "" : `, position ${index + 1}`}.`);
   };
   /* Removing a lesson other lessons depend on: explain which, and only go
      ahead when the author explicitly removes those prerequisite links too
@@ -854,14 +894,16 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
     store.updateLesson(lid, { prerequisites: cur.filter((p) => p !== prereqId) });
   };
   const prereqFixes = { moveBelow, dropPrereq, makeRequired: (id) => store.updateLesson(id, { bonus: false }), open: (id) => select(id) };
-  const removeSection = (moduleId) => {
-    const i = modules.findIndex((m) => m.id === moduleId); if (i < 0) return;
-    const moved = modules[i].lessonIds || [];
-    const rest = modules.filter((_, k) => k !== i).map((m) => ({ ...m, lessonIds: [...(m.lessonIds || [])] }));
-    let after;
-    if (!rest.length) after = [{ id: "m1", title: "", lessonIds: moved }];
-    else { const t = Math.max(0, i - 1); after = rest.map((m, k) => (k === t ? { ...m, lessonIds: [...m.lessonIds, ...moved] } : m)); }
-    changeOutline(after, modules[i].title || "Section", `Removed section “${modules[i].title || "Untitled section"}”${moved.length ? ` (its ${moved.length} item${moved.length === 1 ? "" : "s"} moved to the previous section)` : ""}.`);
+  /* Remove a section by its stable id. Empty → at once, with Undo. With lessons
+     → ask where they go (No section, or another section); they're never deleted
+     and never moved anywhere the author didn't choose. */
+  const removeSection = (moduleId, dest = null) => {
+    const cur = currentModules(); const sec = cur.find((m) => m.id === moduleId); if (!sec) return;
+    const n = (sec.lessonIds || []).length;
+    if (n && dest == null) { setDialog({ kind: "removesection", id: moduleId }); return; }
+    const after = removeSectionTo(cur, moduleId, dest || NO_SECTION, newId);
+    const where = n ? ` Its ${n} lesson${n === 1 ? "" : "s"} moved to ${groupName(after, dest === NO_SECTION || !dest ? topNoSectionId(after) : dest)}.` : "";
+    changeOutline(after, sec.title, `Removed section “${(sec.title || "").trim()}”.${where}`);
   };
   const onFix = (i) => {
     const target = i.item === "details" ? "details" : i.item;
@@ -1006,39 +1048,76 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
             </ul>
           </div>
         )}
-        {rows.length === 0 && <p className="ac-cardsub ac-outempty">No lessons yet. Add a video or other material to start.</p>}
-        <SortableList className="ac-outlist" items={rows}
-          getLabel={(r) => r.type === "module" ? `section ${r.title || "Untitled section"}` : lessonTitle(r.lesson)}
-          canDrag={(r) => r.type === "lesson" || showHeaders}
+        {rows.length === 0 && <p className="ac-cardsub ac-outempty">No lessons yet. Add a video or other material to start. Sections are optional.</p>}
+        <SortableList className={"ac-outlist" + (sectionsOn ? " has-sections" : "")} items={rows}
+          getLabel={(r) => r.type === "module" ? `section “${r.title.trim()}”` : r.type === "lesson" ? lessonTitle(r.lesson) : "No section"}
+          canDrag={(r) => r.type === "lesson" || r.type === "module"}
           spanOf={(r, i, all) => outlineSpan(all, i)}
           canDropAt={(r, slot, rest) => outlineCanDrop(r, slot, rest)}
-          positionLabel={(r, slot, slots) => r.type === "module" ? `section position ${slots.indexOf(slot) + 1} of ${slots.length}` : `position ${slots.indexOf(slot) + 1} of ${slots.length}`}
+          dropHint={(r, slot, rest) => describeDrop(modules, r, slot, rest)}
+          dropTargetOf={(r, slot, rest) => dropGroup(r, slot, rest)}
+          topZoneLabel={(r) => (r.type === "lesson" && sectionsOn && rows[0]?.type !== "none" ? "No section: outside any section" : null)}
           onMove={onOutlineMove}
-          renderItem={(r, { handle }) => r.type === "module" ? (
-            <SectionRow r={r} modules={modules} handle={handle}
-              onRename={(t) => store.setModules(modules.map((m) => m.id === r.moduleId ? { ...m, title: t } : m))}
-              onMoveTo={() => setDialog({ kind: "movesection", id: r.moduleId })}
-              onRemove={() => removeSection(r.moduleId)} />
-          ) : (
-            <div className={"ac-outrow ac-outlesson" + (item === r.id ? " on" : "")}>
-              <DragHandle handle={handle} />
-              <button type="button" className="ac-outmain" aria-current={item === r.id ? "true" : undefined} onClick={() => select(r.id)}>
-                {(() => { const I = KIND_ICON[r.lesson.kind] || DocumentTextIcon; return <I className="hi hi-sm ac-kindicon" aria-hidden="true" />; })()}
-                <span className="ac-outtext">
-                  <span className="ac-outtitle">{lessonTitle(r.lesson)}</span>
-                  <OutlineSub lesson={r.lesson} problem={issueLessons.has(r.id)} />
-                </span>
-              </button>
-              <LessonMenu title={lessonTitle(r.lesson)}
-                onAddBelow={(kind) => addContent(kind, r.id)}
-                onMove={() => setDialog({ kind: "move", id: r.id })}
-                onDelete={() => removeLessonNow(r.id)} />
-            </div>
-          )} />
+          renderItem={(r, { handle, index, dropTarget }) => {
+            // group container: header, its lessons (or its empty state), last row closes the box
+            const next = rows[index + 1];
+            const last = !next || next.type === "module" || next.type === "none";
+            const grp = sectionsOn ? " ac-grp" + (r.type === "module" || r.type === "none" ? " ac-ghead" : " ac-gbody") + (last ? " ac-glast" : "")
+              + (rows.find((x) => (x.type === "module" || x.type === "none") && x.group === r.group)?.type === "none" ? " ac-gnone" : " ac-gnamed")
+              + (dropTarget != null && dropTarget === r.group ? " ac-droptarget" : "") : "";
+            if (r.type === "module") return (
+              <div className={"ac-grow" + grp}>
+                <SectionHeader r={r} count={groupCount(r.group)} handle={handle} autoFocus={focusSection === r.moduleId} onFocused={() => setFocusSection(null)}
+                  onRename={(t) => renameSectionNow(r.moduleId, t)}
+                  onAdd={(k) => addContent(k, { group: r.moduleId })}
+                  onMoveTo={() => setDialog({ kind: "movesection", id: r.moduleId })}
+                  onRemove={() => removeSection(r.moduleId)} />
+              </div>
+            );
+            if (r.type === "none") return (
+              <div className={"ac-grow" + grp}>
+                <div className="ac-outsection ac-nosection">
+                  <span className="ac-handle-spacer" aria-hidden="true" />
+                  <span className="ac-secname"><span className="ac-sectitle">No section</span><span className="ac-seccount">{countLabel(groupCount(r.group))}</span></span>
+                  <AddContentMenu onPick={(k) => addContent(k, { group: r.moduleId })} label="Add" className="sb-btn quiet compact ac-secadd" menuLabel={`Add content to ${ungroupedLabel(modules, r.moduleId)}`} />
+                </div>
+              </div>
+            );
+            if (r.type === "empty") return (
+              <div className={"ac-grow" + grp}>
+                {/* a named section with no lessons yet: compact; the drop target lights up while dragging */}
+                <div className="ac-gempty">
+                  <span>No lessons yet.</span>
+                  <AddContentMenu onPick={(k) => addContent(k, { group: r.group })} label="Add content" className="ac-linkbtn ac-emptyadd" menuLabel={`Add content to ${groupName(modules, r.group)}`} />
+                </div>
+              </div>
+            );
+            return (
+              <div className={"ac-grow" + grp}>
+                <div className={"ac-outrow ac-outlesson" + (item === r.id ? " on" : "")}>
+                  <DragHandle handle={handle} />
+                  <button type="button" className="ac-outmain" aria-current={item === r.id ? "true" : undefined} onClick={() => select(r.id)}>
+                    {(() => { const I = KIND_ICON[r.lesson.kind] || DocumentTextIcon; return <I className="hi hi-sm ac-kindicon" aria-hidden="true" />; })()}
+                    <span className="ac-outtext">
+                      <span className="ac-outtitle">{lessonTitle(r.lesson)}</span>
+                      <OutlineSub lesson={r.lesson} problem={issueLessons.has(r.id)} />
+                    </span>
+                  </button>
+                  <LessonMenu title={lessonTitle(r.lesson)}
+                    onAddBelow={(kind) => addContent(kind, { afterId: r.id })}
+                    onMove={() => setDialog({ kind: "move", id: r.id })}
+                    onDelete={() => removeLessonNow(r.id)} />
+                </div>
+              </div>
+            );
+          }} />
       </div>
       <div className="ac-outadd">
-        <AddContentMenu onPick={(k) => addContent(k)} label="Add content" />
-        <button type="button" className="sb-btn ghost compact ac-addsection" onClick={() => store.setModules([...modules, { id: newId(), title: "", lessonIds: [] }])}><PlusIcon className="hi hi-sm" aria-hidden="true" /><span>Add section</span></button>
+        {sectionsOn
+          ? <AddContentDestMenu destinations={lessonDestinations(modules).map((d) => ({ group: d.group, label: d.label, area: d.area }))}
+              onPick={(k, group) => addContent(k, { group })} />
+          : <AddContentMenu onPick={(k) => addContent(k)} label="Add content" />}
+        <button type="button" className="sb-btn ghost compact ac-addsection" onClick={addSectionNow}><PlusIcon className="hi hi-sm" aria-hidden="true" /><span>Add section</span></button>
       </div>
     </aside>
   );
@@ -1049,7 +1128,12 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
     <main className="ac-wseditor" aria-label={selected ? `Edit ${lessonTitle(selected)}` : "Course details"} onBlurCapture={markTouched}>
       {narrow && <button type="button" className="ac-back" onClick={() => R.navigate(learnManagePath({ view: "course", id: cid }))}><ChevronLeftIcon className="hi hi-sm" aria-hidden="true" />Course outline</button>}
       {selected
-        ? <LessonPane key={item} lid={item} lesson={selected} cid={cid} store={store} autoTitles={autoTitles} onDelete={() => removeLessonNow(item)} ordered={ordered} onOpenLesson={select} issues={prereqIssues} fixes={prereqFixes} />
+        ? <LessonPane key={item} lid={item} lesson={selected} cid={cid} store={store} autoTitles={autoTitles} onDelete={() => removeLessonNow(item)} ordered={ordered} onOpenLesson={select} issues={prereqIssues} fixes={prereqFixes}
+            section={{
+              value: (() => { const h = modules.find((m) => m.lessonIds.includes(item)); return h ? (h.id === modules[0]?.id && !isNamedSection(h) ? topNoSectionId(modules) : h.id) : NO_SECTION; })(),
+              options: lessonDestinations(modules).map((d) => ({ id: d.group, label: d.label })),
+              onChange: (g) => moveLessonToSection(item, g),
+            }} />
         : <CourseDetailsPane course={course} cid={cid} store={store} tax={tax} me={me} />}
     </main>
   );
@@ -1061,25 +1145,35 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
       {narrow ? (item ? editorWithChecks : outline) : <div className="ac-wsgrid">{outline}{editorWithChecks}</div>}
       {undo.node}
       {dialog?.kind === "move" && (() => {
-        const host = modules.find((m) => m.lessonIds.includes(dialog.id));
+        const cur = currentModules();
+        const host = cur.find((m) => m.lessonIds.includes(dialog.id));
         const within = host ? host.lessonIds.indexOf(dialog.id) : 0;
-        const pos = lessonPosition(modules, dialog.id);
-        return <MoveDialog title={`Move “${lessonTitle(lessons[dialog.id])}”`} count={pos.count} current={showHeaders ? within : pos.index}
-          sections={showHeaders ? modules.map((m) => ({ id: m.id, title: m.title, count: m.lessonIds.length })) : null} currentSection={host?.id}
+        const pos = lessonPosition(cur, dialog.id);
+        const hostGroup = host ? host.id : topNoSectionId(cur);
+        const secs = sectionsOn ? lessonDestinations(cur).map((d) => ({ id: d.group, title: d.label, count: d.count })) : null;
+        return <MoveDialog title={`Move “${lessonTitle(lessons[dialog.id])}”`} count={pos.count} current={sectionsOn ? within : pos.index}
+          sections={secs} currentSection={hostGroup}
           onMove={(index, sec) => {
-            const after = showHeaders
-              ? moveLessonToModule(modules, dialog.id, sec || host.id, index)
-              : moveLessonToModule(modules, dialog.id, modules[0].id, index);
-            changeOutline(after, lessonTitle(lessons[dialog.id]));
+            if (sectionsOn) moveLessonToSection(dialog.id, sec || hostGroup, index);
+            else changeOutline(moveLessonInOutline(cur, dialog.id, index, newId), lessonTitle(lessons[dialog.id]), `Moved “${lessonTitle(lessons[dialog.id])}” to position ${index + 1}.`);
           }} onClose={() => setDialog(null)} />;
       })()}
       {dialog?.kind === "movesection" && (() => {
-        const idx = modules.findIndex((m) => m.id === dialog.id);
-        const m = modules[idx];
-        return <MoveDialog title={`Move section “${m?.title || `Section ${idx + 1}`}”`} unit="section" count={modules.length} current={idx}
-          onMove={(index) => changeOutline(moveModule(modules, dialog.id, index), m?.title || "Section", `Moved section “${m?.title || "Untitled section"}”.`)} onClose={() => setDialog(null)} />;
+        const cur = currentModules();
+        const list = namedSections(cur);
+        const idx = list.findIndex((m) => m.id === dialog.id);
+        const m = list[idx];
+        return <MoveDialog title={`Move section “${(m?.title || "").trim()}”`} unit="section" count={list.length} current={Math.max(0, idx)}
+          onMove={(index) => changeOutline(moveSectionAmongNamed(currentModules(), dialog.id, index), m?.title || "Section", `Moved section “${(m?.title || "").trim()}” to position ${index + 1} of ${list.length}.`)} onClose={() => setDialog(null)} />;
       })()}
-      {dialog?.kind === "bulk" && <BulkVideoDialog existing={Object.values(lessons).map((l) => l.video?.id).filter(Boolean)} onAdd={(c) => { addVideos(c, dialog.afterId); setDialog(null); }} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "removesection" && (() => {
+        const cur = currentModules();
+        const sec = cur.find((m) => m.id === dialog.id);
+        if (!sec) return null;
+        return <RemoveSectionDialog section={sec} others={namedSections(cur).filter((m) => m.id !== sec.id)} lessonNames={(sec.lessonIds || []).map((id) => lessonTitle(lessons[id]))}
+          onRemove={(dest) => { removeSection(sec.id, dest); setDialog(null); }} onClose={() => setDialog(null)} />;
+      })()}
+      {dialog?.kind === "bulk" && <BulkVideoDialog existing={Object.values(lessons).map((l) => l.video?.id).filter(Boolean)} onAdd={(c) => { addVideos(c, { afterId: dialog.afterId, group: dialog.group }); setDialog(null); }} onClose={() => setDialog(null)} />}
       {dialog?.kind === "deps" && (() => {
         const target = lessons[dialog.id];
         const names = dialog.deps.map((id) => `“${lessonTitle(lessons[id])}”`);
@@ -1345,26 +1439,110 @@ function OutlineSub({ lesson, problem = false }) {
   return <span className="ac-outsub"><span className="sb-vh">{lessonKindMeta(lesson).label}{bits.length ? ", " : ""}</span>{bits.join(" · ")}{problem && <span className="ac-outwarn"><ExclamationTriangleIcon className="hi hi-xs" aria-hidden="true" />Prerequisite problem</span>}</span>;
 }
 
-function SectionRow({ r, modules, handle, onRename, onMoveTo, onRemove }) {
+const countLabel = (n) => `${n} lesson${n === 1 ? "" : "s"}`;
+/* A named section's header: drag handle, its name (wraps; Enter or leaving the
+   field saves; an empty name is refused — a section always has a name), a
+   readable count, Add content INTO this section, and its menu. */
+function SectionHeader({ r, count, handle, autoFocus, onFocused, onRename, onAdd, onMoveTo, onRemove }) {
   const [t, setT] = useState(r.title || "");
-  useEffect(() => setT(r.title || ""), [r.title]);
-  const i = modules.findIndex((m) => m.id === r.moduleId);
-  const count = modules[i]?.lessonIds?.length || 0;
+  const [err, setErr] = useState("");
+  const ref = useRef(null);
+  const title = (r.title || "").trim();
+  // follow outside changes (undo, another tab) unless the author is typing here
+  useEffect(() => { if (document.activeElement !== ref.current) setT(r.title || ""); }, [r.title]);
+  // The field's height comes from CSS (a hidden copy of the text sizes it, see
+  // .ac-secgrow), so it follows width, font loading and text-size changes too.
+  useEffect(() => { if (autoFocus && ref.current) { ref.current.focus(); ref.current.select(); onFocused?.(); } }, [autoFocus]); // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = () => {
+    const v = t.replace(/\s+/g, " ").trim();
+    if (!v) { setT(r.title || ""); setErr("A section needs a name. To take lessons out of sections, move them to No section."); return; }
+    setErr("");
+    if (v !== title) onRename(v);
+    if (t !== v) setT(v);
+  };
   return (
     <div className="ac-outsection">
       <DragHandle handle={handle} />
-      <label htmlFor={`sec-${r.moduleId}`} className="sb-vh">Section name</label>
-      <input id={`sec-${r.moduleId}`} value={t} placeholder={`Section ${i + 1}`} onChange={(e) => setT(e.target.value)} onBlur={() => t !== (r.title || "") && onRename(t)} maxLength={120} />
-      <span className="ac-outseccount" aria-hidden="true">{count}</span>
-      <MenuButton label={`Section actions: ${r.title || `Section ${i + 1}`}`} align="end" renderTrigger={({ ref, toggle, props }) => (
-        <button ref={ref} type="button" className="ac-iconbtn" onClick={toggle} aria-label={`Section actions: ${r.title || `Section ${i + 1}`}`} {...props}><EllipsisHorizontalIcon className="hi hi-sm" aria-hidden="true" /></button>
+      <span className="ac-secname">
+        <label htmlFor={`sec-${r.moduleId}`} className="sb-vh">Section name</label>
+        <span className="ac-secgrow" data-value={t}>
+        <textarea id={`sec-${r.moduleId}`} ref={ref} rows={1} className="ac-sectitle" value={t} maxLength={120} spellCheck
+          aria-describedby={`sec-${r.moduleId}-count${err ? ` sec-${r.moduleId}-err` : ""}`}
+          onChange={(e) => setT(e.target.value.replace(/\n/g, " "))} onBlur={commit}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } else if (e.key === "Escape") { setT(r.title || ""); setErr(""); requestAnimationFrame(() => e.target.blur()); } }} />
+        </span>
+        <span className="ac-seccount" id={`sec-${r.moduleId}-count`}>{countLabel(count)}</span>
+        {err && <span className="ac-fielderr" id={`sec-${r.moduleId}-err`} role="alert">{err}</span>}
+      </span>
+      <AddContentMenu onPick={onAdd} label="Add" className="sb-btn quiet compact ac-secadd" menuLabel={`Add content to “${title}”`} />
+      <MenuButton label={`Section actions: ${title}`} align="end" renderTrigger={({ ref: tref, toggle, props }) => (
+        <button ref={tref} type="button" className="ac-iconbtn" onClick={toggle} aria-label={`Section actions: ${title}`} {...props}><EllipsisHorizontalIcon className="hi hi-sm" aria-hidden="true" /></button>
       )}>
         {(close) => <>
           <button type="button" role="menuitem" className="ac-menuitem" onClick={() => { close({ refocus: true }); onMoveTo(); }}><ArrowsUpDownIcon className="hi hi-sm" aria-hidden="true" /><span><b>Move to position…</b></span></button>
-          <button type="button" role="menuitem" className="ac-menuitem danger" onClick={() => { close(); onRemove(); }}><TrashIcon className="hi hi-sm" aria-hidden="true" /><span><b>Remove section</b><span className="ac-cardsub">{count ? "Its items move to the previous section" : "It's empty"}</span></span></button>
+          <button type="button" role="menuitem" className="ac-menuitem danger" onClick={() => { close(); onRemove(); }}><TrashIcon className="hi hi-sm" aria-hidden="true" /><span><b>Remove section{count ? "…" : ""}</b><span className="ac-cardsub">{count ? `You choose where its ${countLabel(count)} go. No lesson is deleted.` : "It's empty. You can undo this."}</span></span></button>
         </>}
       </MenuButton>
     </div>
+  );
+}
+
+/* The outline's main "Add content" once a course has sections: first WHERE
+   (No section or a named section), then what — so a new lesson never lands
+   somewhere the author didn't choose. */
+function AddContentDestMenu({ destinations, onPick }) {
+  const [dest, setDest] = useState(null);
+  return (
+    <MenuButton label={dest ? `Add content to ${dest.area ? dest.label : `“${dest.label}”`}` : "Add content to…"} onOpenChange={(o) => { if (!o) setDest(null); }}
+      renderTrigger={({ ref, toggle, props }) => (
+        <button ref={ref} type="button" className="sb-btn ghost compact ac-addbtn" onClick={toggle} {...props}><PlusIcon className="hi hi-sm" aria-hidden="true" /><span>Add content</span></button>
+      )}>
+      {(close) => dest ? (
+        <>
+          <div className="ac-menuhead" aria-hidden="true">Add to {dest.area ? dest.label : `“${dest.label}”`}</div>
+          <ContentChoices onPick={(k) => { close(); setDest(null); onPick(k, dest.group); }} />
+        </>
+      ) : (
+        <>
+          <div className="ac-menuhead" aria-hidden="true">Add content to…</div>
+          {destinations.map((d) => (
+            <button key={d.group} type="button" role="menuitem" className="ac-menuitem" onClick={(e) => { setDest(d); requestAnimationFrame(() => e.currentTarget?.closest?.('[role="menu"]')?.querySelector('[role="menuitem"]')?.focus()); }}>
+              {d.area ? <QueueListIcon className="hi hi-sm" aria-hidden="true" /> : <FolderIcon className="hi hi-sm" aria-hidden="true" />}
+              <span><b>{d.label}</b>{d.area && <span className="ac-cardsub">Outside any section</span>}</span>
+            </button>
+          ))}
+        </>
+      )}
+    </MenuButton>
+  );
+}
+
+/* Removing a section that has lessons: where do they go? (order kept; nothing deleted) */
+function RemoveSectionDialog({ section, others, lessonNames, onRemove, onClose }) {
+  const [mode, setMode] = useState("none");
+  const [to, setTo] = useState(others[0]?.id || "");
+  const n = lessonNames.length;
+  const name = (section.title || "").trim();
+  return (
+    <SmallDialog title={`Remove section “${name}”?`} onClose={onClose} actions={<>
+      <button type="button" className="sb-btn ghost compact" onClick={onClose}>Cancel</button>
+      <button type="button" className="sb-btn compact" onClick={() => onRemove(mode === "other" && to ? to : NO_SECTION)}>Remove section</button></>}>
+      <div className="ac-dlgbody">
+        <p>“{name}” has {countLabel(n)}. Removing the section keeps every lesson, in the same order. Choose where they go:</p>
+        <ul className="ac-dlglist">{lessonNames.slice(0, 5).map((t, i) => <li key={i}>{t}</li>)}{n > 5 && <li>and {n - 5} more</li>}</ul>
+        <fieldset className="ac-radiogroup">
+          <legend className="sb-vh">Where the lessons go</legend>
+          <label className="ac-opt"><input type="radio" name="rmsec" checked={mode === "none"} onChange={() => setMode("none")} /><span><b>Move them to No section</b><span className="ac-cardsub">Outside any section, at the top of the course</span></span></label>
+          <label className="ac-opt"><input type="radio" name="rmsec" checked={mode === "other"} disabled={!others.length} onChange={() => setMode("other")} /><span><b>Move them to another section</b>{!others.length && <span className="ac-cardsub">There's no other section</span>}</span></label>
+        </fieldset>
+        {mode === "other" && others.length > 0 && (
+          <div className="sb-field"><label htmlFor="rmsec-to">Section</label>
+            <select id="rmsec-to" value={to} onChange={(e) => setTo(e.target.value)}>{others.map((m) => <option key={m.id} value={m.id}>{m.title.trim()}</option>)}</select>
+            <div className="ac-hint">They're added at the end of that section.</div></div>
+        )}
+        <p className="ac-cardsub">To delete a lesson, use Remove in that lesson's menu instead.</p>
+      </div>
+    </SmallDialog>
   );
 }
 
@@ -1641,7 +1819,7 @@ export function CompletionAccess({ lid, lesson, ordered, up, onOpenLesson, issue
   );
 }
 
-function LessonPane({ lid, lesson, cid, store, autoTitles, onDelete, ordered = [], onOpenLesson, issues = [], fixes = {} }) {
+function LessonPane({ lid, lesson, cid, store, autoTitles, onDelete, ordered = [], onOpenLesson, issues = [], fixes = {}, section = null }) {
   const up = (patch) => store.updateLesson(lid, patch);
   const err = usePublishErr(lid);
   const kind = lesson.kind || (lesson.video ? "video" : "written");
@@ -1671,6 +1849,15 @@ function LessonPane({ lid, lesson, cid, store, autoTitles, onDelete, ordered = [
         <span className="ac-pill">{lessonKindMeta({ kind }).label}</span>
         <button type="button" className="sb-btn ghost subtle-danger compact" onClick={onDelete}><TrashIcon className="hi hi-sm" aria-hidden="true" /><span>Remove</span></button>
       </div>
+      {section && (
+        <div className="sb-field ac-lessonsection">
+          <label htmlFor={`ls-sec-${lid}`}>Section</label>
+          <select id={`ls-sec-${lid}`} value={section.value} onChange={(e) => section.onChange(e.target.value)}>
+            {section.options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+          <div className="ac-hint">{section.options.length > 1 ? "Moving it to another section puts it at the end of that section." : "Sections are optional. Add one in the outline to group lessons."}</div>
+        </div>
+      )}
       {kind === "video" && (
         <>
           <Field id={`ls-url-${lid}`} label="Video link" required error={parsed && !parsed.ok ? "" : err("video", `ls-url-${lid}`)} hint="YouTube, Vimeo or Google Drive. The video stays on its own site.">

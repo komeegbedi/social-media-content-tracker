@@ -57,13 +57,73 @@ describe("SortableList — keyboard", () => {
 
 function Outline({ onModules }) {
   const [mods, setMods] = useState([{ id: "m1", title: "Basics", lessonIds: ["a", "b"] }, { id: "m2", title: "More", lessonIds: ["c"] }]);
-  const rows = outlineRows(mods, { showHeaders: true });
+  const rows = outlineRows(mods);   // named sections only: no permanent No-section container
   return (
     <SortableList items={rows} getLabel={(r) => r.type === "module" ? r.title : r.id} spanOf={(r, i, all) => outlineSpan(all, i)} canDropAt={outlineCanDrop}
-      onMove={(id, slot) => { const r = rows.find((x) => x.id === id); if (r.type !== "module") return; const next = moveModule(mods, r.moduleId, moduleIndexFromSlot(rows, r.moduleId, slot)); setMods(next); onModules(next); }}
-      renderItem={(r, { handle }) => <div><DragHandle handle={handle} /><span data-testid="row">{r.type === "module" ? `#${r.title}` : r.id}</span></div>} />
+      canDrag={(r) => r.type === "module" || r.type === "lesson"}
+      onMove={(id, slot) => { const r = rows.find((x) => x.id === id); if (r.type !== "module") return; const next = moveModule(mods, r.moduleId, moduleIndexFromSlot(rows, r.moduleId, slot, mods)); setMods(next); onModules(next); }}
+      renderItem={(r, { handle }) => <div><DragHandle handle={handle} /><span data-testid="row">{r.type === "module" ? `#${r.title}` : r.type === "lesson" ? r.id : `(${r.type})`}</span></div>} />
   );
 }
+describe("SortableList — pointer drag cancelled with Escape", () => {
+  test("Escape during a mouse/touch drag cancels it: releasing afterwards moves nothing", () => {
+    const onMoved = vi.fn();
+    render(<List initial={["A", "B", "C"]} onMoved={onMoved} />);
+    const handle = screen.getAllByRole("button")[0];
+    handle.setPointerCapture = () => {}; handle.releasePointerCapture = () => {};
+    fireEvent.pointerDown(handle, { pointerId: 1, button: 0, clientY: 10, pointerType: "mouse" });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientY: 200 });
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientY: 200 });
+    expect(onMoved).not.toHaveBeenCalled();
+    expect(rows()).toEqual(["A", "B", "C"]);
+    expect(screen.getByRole("status").textContent).toMatch(/Move cancelled/);
+  });
+});
+
+describe("SortableList — destination words", () => {
+  test("keyboard announcements use the caller's destination words (the same as the on-screen label)", () => {
+    const items = [{ id: "a", t: "A" }, { id: "b", t: "B" }];
+    render(<SortableList items={items} getLabel={(x) => x.t} onMove={() => {}} dropHint={(item, slot) => `Move to “Light”, position ${slot + 1}`}
+      renderItem={(x, { handle }) => <div><DragHandle handle={handle} /><span>{x.t}</span></div>} />);
+    const handle = screen.getByRole("button", { name: "Reorder A" });
+    handle.focus();
+    fireEvent.keyDown(handle, { key: " " });
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+    expect(screen.getByRole("status").textContent).toMatch(/A: Move to “Light”, position 2/);
+    fireEvent.keyDown(handle, { key: " " });
+    expect(screen.getByRole("status").textContent).toMatch(/Dropped A\. Moved to “Light”, position 2/);
+  });
+});
+
+describe("SortableList — outside-sections drop zone", () => {
+  const items = [{ id: "h", t: "Light" }, { id: "a", t: "A" }, { id: "b", t: "B" }];
+  const zone = (item) => (item.id === "h" ? null : "No section: outside any section");
+  const mount = () => render(<SortableList items={items} getLabel={(x) => x.t} onMove={() => {}} topZoneLabel={zone}
+    renderItem={(x, { handle }) => <div><DragHandle handle={handle} /><span>{x.t}</span></div>} />);
+  test("hidden at rest; one labelled zone appears only while a lesson is being moved", () => {
+    const { container } = mount();
+    expect(container.querySelectorAll(".ac-topdrop")).toHaveLength(0);
+    const handle = screen.getByRole("button", { name: "Reorder B" });
+    handle.focus();
+    fireEvent.keyDown(handle, { key: " " });
+    expect(container.querySelectorAll(".ac-topdrop")).toHaveLength(1);
+    expect(container.querySelector(".ac-topdrop").textContent).toBe("No section: outside any section");
+    expect(container.querySelector(".ac-topdrop.on")).toBeNull();
+    fireEvent.keyDown(handle, { key: "ArrowUp" }); fireEvent.keyDown(handle, { key: "ArrowUp" });
+    expect(container.querySelector(".ac-topdrop.on")).not.toBeNull();   // highlighted when it's the target
+    fireEvent.keyDown(handle, { key: "Escape" });
+    expect(container.querySelectorAll(".ac-topdrop")).toHaveLength(0);
+  });
+  test("never shown for items the caller doesn't label (e.g. sections)", () => {
+    const { container } = mount();
+    const handle = screen.getByRole("button", { name: "Reorder Light" });
+    handle.focus();
+    fireEvent.keyDown(handle, { key: " " });
+    expect(container.querySelectorAll(".ac-topdrop")).toHaveLength(0);
+  });
+});
+
 describe("SortableList — section blocks", () => {
   test("a section moves with all its items, only to section boundaries (keyboard)", () => {
     const onModules = vi.fn();
@@ -75,7 +135,7 @@ describe("SortableList — section blocks", () => {
     fireEvent.keyDown(handle, { key: "ArrowUp" });
     fireEvent.keyDown(handle, { key: "ArrowUp" });            // already at the first allowed slot
     fireEvent.keyDown(handle, { key: "Enter" });
-    expect(rows()).toEqual(["#More", "c", "#Basics", "a", "b"]);
+    expect(rows()).toEqual(["#More", "c", "#Basics", "a", "b"]);   // no permanent No-section container above it
     expect(onModules.mock.calls[0][0].map((m) => m.lessonIds)).toEqual([["c"], ["a", "b"]]);   // same ids, membership intact
   });
   test("dropping where it started reports no move", () => {

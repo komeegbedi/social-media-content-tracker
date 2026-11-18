@@ -4196,11 +4196,73 @@ body.ac-dragging,body.ac-dragging *{cursor:grabbing !important;-webkit-user-sele
 .ac-outsub:empty{display:none}
 .ac-outlesson .ac-handle{align-self:center}
 .ac-outlesson.on{box-shadow:inset 3px 0 0 var(--accent-fill)}
-.ac-outsection{display:flex;align-items:center;gap:2px;padding:8px 0 2px;border-top:1px solid var(--border);margin-top:4px;background:var(--surface)}
-.ac-outseccount{flex:none;min-width:22px;text-align:center;font-size:var(--text-meta);color:var(--text-muted);font-variant-numeric:tabular-nums}
-.ac-outsection input{flex:1;min-width:0;font:inherit;font-size:var(--text-label);font-weight:650;text-transform:uppercase;letter-spacing:.05em;color:var(--text-secondary);background:none;border:1px solid transparent;border-radius:var(--r-control);padding:6px 8px}
-.ac-outsection input:hover{border-color:var(--border)}
-.ac-outsection input:focus{border-color:var(--focus-ring);background:var(--field);outline:none}
+/* Outline groups (v7): with sections, every group is ONE visible container —
+   its header (a named section, or "No section"), then its lessons (indented)
+   or an empty-state drop target; the last row closes the box. Rows stay
+   siblings in the sortable list (so drags can cross groups); the container is
+   drawn by the rows' borders, so there are no gaps between them. */
+.ac-outlist.has-sections{gap:0}
+.ac-grp > *{border-inline:1px solid var(--border);background:var(--card)}
+.ac-grp.ac-ghead{padding-top:12px}
+.ac-outlist > .ac-dragrow:first-of-type .ac-grp.ac-ghead{padding-top:0}
+.ac-grp.ac-ghead > *{border-top:1px solid var(--border);border-radius:var(--r-card) var(--r-card) 0 0;background:var(--surface-muted)}
+.ac-grp.ac-glast > *{border-bottom:1px solid var(--border);border-radius:0 0 var(--r-card) var(--r-card)}
+.ac-grp.ac-ghead.ac-glast > *{border-radius:var(--r-card)}
+.ac-grp.ac-gbody > *{padding-inline-start:10px}
+.ac-grp.ac-gbody .ac-outrow{border-radius:0}
+/* No section: the same box, drawn dashed (only the sides the box actually has —
+   setting border-style on all four would switch on medium-width top/bottom borders) */
+.ac-grp.ac-gnone > *{border-inline-style:dashed;border-inline-color:var(--border-strong)}
+.ac-grp.ac-gnone.ac-ghead > *{border-top-style:dashed;border-top-color:var(--border-strong);background:transparent}
+.ac-grp.ac-gnone.ac-glast > *{border-bottom-style:dashed;border-bottom-color:var(--border-strong)}
+/* while dragging: the destination group lights up */
+.ac-grp.ac-droptarget > *{border-inline-color:var(--accent-fill);border-inline-style:solid;background:color-mix(in srgb,var(--accent-muted) 70%,var(--card))}
+.ac-grp.ac-droptarget.ac-ghead > *{border-top-color:var(--accent-fill);border-top-style:solid}
+.ac-grp.ac-droptarget.ac-glast > *{border-bottom-color:var(--accent-fill);border-bottom-style:solid}
+.ac-grp.ac-droptarget.ac-ghead > *{background:var(--accent-muted)}
+.ac-outsection{display:flex;align-items:flex-start;gap:2px;padding:6px 4px 6px 0;min-height:48px}
+/* controls line up with the FIRST line of the name, so a long wrapped name never leaves them floating mid-block */
+.ac-outsection > .ac-handle,.ac-outsection > .ac-iconbtn,.ac-outsection > .ac-secadd{align-self:flex-start}
+.ac-secname{display:flex;flex-direction:column;gap:3px;flex:1 1 auto;min-width:0;padding-block:2px}
+/* The name field sizes itself from a hidden copy of its text in the same grid
+   cell (pure CSS): it always fits the whole name — including the 1px borders a
+   border-box height measured from scrollHeight left out (2px clipped) — and it
+   follows width changes, font loading and text-size changes, not only typing. */
+.ac-secgrow{display:grid;min-width:0}
+.ac-secgrow::after{content:attr(data-value) " ";visibility:hidden}
+.ac-secgrow > textarea.ac-sectitle,.ac-secgrow::after{grid-area:1/1/2/2;min-width:0;margin:0;padding:3px 6px;font:inherit;font-size:var(--text-support);
+  font-weight:650;line-height:1.35;border:1px solid transparent;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
+.ac-secgrow > textarea.ac-sectitle{height:auto;min-height:0;overflow:hidden;resize:none}
+.ac-sectitle{display:block;width:100%;min-width:0;margin:0;padding:3px 6px;font:inherit;font-size:var(--text-support);font-weight:650;line-height:1.35;
+  color:var(--text-primary);background:none;border:1px solid transparent;border-radius:var(--r-control);resize:none;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere}
+/* bare until hovered / focused, in BOTH themes (the dark theme paints every textarea as a field) */
+.ac-outsection textarea.ac-sectitle,[data-theme] .ac-outsection textarea.ac-sectitle{background:transparent;border-color:transparent;color:var(--text-primary);-webkit-appearance:none;appearance:none;box-shadow:none}
+.ac-outsection textarea.ac-sectitle:hover,[data-theme] .ac-outsection textarea.ac-sectitle:hover{border-color:var(--border)}
+.ac-outsection textarea.ac-sectitle:focus,[data-theme] .ac-outsection textarea.ac-sectitle:focus{border-color:var(--focus-ring);background:var(--field);outline:none}
+.ac-nosection .ac-sectitle{color:var(--text-secondary);padding-block:4px}
+.ac-seccount{padding-inline:7px;font-size:var(--text-meta);line-height:1.3;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.ac-secname .ac-fielderr{padding-inline:7px}
+.ac-secadd.sb-btn.compact{min-height:32px;padding:4px 10px;margin-inline-end:2px}
+.ac-gempty{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-height:48px;padding:10px 18px 10px 22px;font-size:var(--text-support);color:var(--text-secondary);line-height:1.4}
+/* the drop zone inside an empty group */
+.ac-grp.ac-gbody > .ac-gempty{padding-inline-start:22px}
+.ac-gempty::before{content:"";position:absolute;inset:6px 8px 6px 12px;border:1px dashed var(--border-strong);border-radius:var(--r-control);pointer-events:none}
+.ac-grp.ac-droptarget .ac-gempty::before{border-color:var(--accent-fill);border-style:solid}
+.ac-gempty .ac-emptyadd{display:inline;padding:0;border:0;background:none;color:var(--accent-foreground);font:inherit;text-decoration:underline;cursor:pointer}
+.ac-gempty .ac-emptyadd .hi{display:none}
+/* while dragging a lesson: the "outside any section" destination, above the list */
+.ac-topdrop{position:absolute;inset-inline:0;bottom:calc(100% + 4px);min-height:40px;display:flex;align-items:center;justify-content:center;padding:6px 10px;
+  border:1.5px dashed var(--accent-border);border-radius:var(--r-card);background:var(--surface);color:var(--text-secondary);
+  font-size:var(--text-support);font-weight:600;text-align:center;z-index:2;pointer-events:none}
+.ac-topdrop.on{border-style:solid;border-color:var(--accent-fill);background:var(--accent-muted);color:var(--accent-foreground)}
+/* the destination words beside the insertion line */
+.ac-drophint{position:absolute;inset-inline-end:6px;top:-12px;max-width:calc(100% - 12px);padding:2px 9px;border-radius:999px;
+  background:var(--accent-fill);color:var(--on-accent,#fff);font-size:12px;font-weight:600;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:var(--shadow-sm)}
+.ac-lessonsection{margin:0 0 14px}
+.ac-lessonsection select{max-width:100%}
+.ac-radiogroup{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.ac-radiogroup .ac-opt{display:flex;align-items:flex-start;gap:10px}
+.ac-radiogroup .ac-opt > span{display:flex;flex-direction:column;gap:2px}
 .ac-outadd{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:10px;border-top:1px solid var(--border);background:var(--surface)}
 .ac-outadd .sb-btn{width:100%}
 .ac-outadd .ac-addsection{width:auto}

@@ -10,6 +10,8 @@ import {
 import {
   moveId, outlineRows, moveLessonInOutline, moveLessonToModule, insertLesson, removeLesson, lessonPosition, orderCourses,
   moveModule, moduleIndexFromSlot, outlineSpan, outlineCanDrop,
+  NO_SECTION, isNamedSection, ensureNoSection, defaultSectionName, addSection, renameSection, removeSectionTo, moveLessonToGroup, describeDrop, dropGroup,
+  lessonDestinations, ungroupedLabel, topNoSectionId,
 } from "./academyOrder.js";
 import { normalizeLinkInput, isValidResourceUrl, sourceLabel, fileTypeFromUrl, fallbackLabel, applyLinkMeta, newLink } from "./academyLinks.js";
 
@@ -112,19 +114,96 @@ test("moveId moves by stable id (bottom → top, top → bottom, clamped)", () =
   assert.deepEqual(moveId(["a", "b"], "zz", 0), ["a", "b"]);
 });
 
-test("outline drag: within one section, and across sections via the flat row position", () => {
+test("outline drag: lessons with no sections, named sections, and No section at the top", () => {
   const one = [{ id: "m1", title: "", lessonIds: ["a", "b", "c"] }];
-  assert.deepEqual(outlineRows(one).map((r) => r.id), ["a", "b", "c"], "single section: no header rows");
+  assert.deepEqual(outlineRows(one).map((r) => r.id), ["a", "b", "c"], "no named sections: just the lessons, no headers");
   assert.deepEqual(ids(moveLessonInOutline(one, "c", 0)), ["c,a,b"]);
   const two = [{ id: "m1", title: "Basics", lessonIds: ["a", "b"] }, { id: "m2", title: "More", lessonIds: ["c"] }];
-  const rows = outlineRows(two, { showHeaders: true });
-  assert.deepEqual(rows.map((r) => r.id), ["module:m1", "a", "b", "module:m2", "c"]);
-  // rows without "a": [H1, b, H2, c] — index 3 = right after H2 → first in "More"
-  assert.deepEqual(ids(moveLessonInOutline(two, "a", 3, { showHeaders: true })), ["b", "a,c"]);
-  // c to the very top lands in the first section
-  assert.deepEqual(ids(moveLessonInOutline(two, "c", 0, { showHeaders: true })), ["c,a,b", ""]);
-  // end of section 1 (just before H2)
-  assert.deepEqual(ids(moveLessonInOutline(two, "c", 3, { showHeaders: true })), ["a,b,c", ""]);
+  const rows = outlineRows(two);
+  assert.deepEqual(rows.map((r) => r.id), ["module:m1", "a", "b", "module:m2", "c"], "no permanent No section container");
+  assert.deepEqual(ids(moveLessonInOutline(two, "a", 3, () => "ns")), ["b", "a,c"], "right after H2 → first in “More”");
+  assert.deepEqual(ids(moveLessonInOutline(two, "c", 3, () => "ns")), ["a,b,c", ""], "end of section 1");
+  // above the first header = No section at the top: a new untitled module is created ONLY by this move
+  const out = moveLessonInOutline(two, "c", 0, () => "ns");
+  assert.deepEqual(out.map((m) => `${m.id}:${m.title}:${m.lessonIds.join(",")}`), ["ns::c", "m1:Basics:a,b", "m2:More:"]);
+});
+
+test("empty untitled modules are stored structures, not visible groups; populated ones keep their place", () => {
+  const empties = [{ id: "m1", title: "", lessonIds: [] }, { id: "s1", title: "Exposure", lessonIds: ["e1"] }, { id: "u2", title: "", lessonIds: [] }, { id: "s2", title: "Motion", lessonIds: [] }, { id: "u3", title: "", lessonIds: [] }];
+  assert.deepEqual(outlineRows(empties).map((r) => r.id), ["module:s1", "e1", "module:s2", "empty:s2"], "three empty untitled modules → no rows at all");
+  // dropping above the first section REUSES the empty top module (no new module)
+  const back = moveLessonInOutline(empties, "e1", 0, () => "NEW");
+  assert.deepEqual(back.map((m) => `${m.id}:${m.lessonIds.join(",")}`), ["m1:e1", "s1:", "u2:", "s2:", "u3:"]);
+  const legacy = [{ id: "u0", title: "", lessonIds: ["w"] }, { id: "s1", title: "Exposure", lessonIds: ["a"] }, { id: "u1", title: "", lessonIds: ["b1", "b2"] }, { id: "s2", title: "Motion", lessonIds: ["c"] }];
+  assert.deepEqual(outlineRows(legacy).map((r) => r.id), ["none:u0", "w", "module:s1", "a", "none:u1", "b1", "b2", "module:s2", "c"], "ungrouped lessons stay where they are");
+  assert.deepEqual(lessonDestinations(legacy).map((d) => d.label), ["No section, at the top", "Exposure", "No section, after “Exposure”", "Motion"]);
+  assert.deepEqual(lessonDestinations(empties).map((d) => `${d.group}:${d.label}`), ["m1:No section", "s1:Exposure", "s2:Motion"], "empty internal modules aren't destinations; the top one is reused");
+  assert.equal(topNoSectionId([{ id: "s1", title: "A", lessonIds: [] }]), NO_SECTION);
+  assert.equal(ungroupedLabel([{ id: "u", title: "", lessonIds: ["x"] }, { id: "s", title: "S", lessonIds: [] }], "u"), "No section");
+  assert.equal(ungroupedLabel([{ id: "s0", title: "", lessonIds: [] }, { id: "u", title: "", lessonIds: ["x"] }, { id: "s", title: "Later", lessonIds: [] }], "u"), "No section, before “Later”");
+});
+
+test("a named section stays a section even when it's the only one (and when it's empty)", () => {
+  const solo = [{ id: "s1", title: "Understanding light", lessonIds: ["a"] }];
+  assert.deepEqual(outlineRows(solo).map((r) => r.type), ["module", "lesson"]);
+  const empty = [{ id: "m1", title: "", lessonIds: [] }, { id: "s1", title: "Light", lessonIds: [] }];
+  assert.deepEqual(outlineRows(empty).map((r) => r.id), ["module:s1", "empty:s1"]);
+  assert.equal(isNamedSection({ title: "  " }), false);
+  assert.equal(isNamedSection({ title: "A" }), true);
+});
+
+test("Add section creates exactly ONE named section; remove by stable id never resurrects it", () => {
+  let mods = [{ id: "m1", title: "", lessonIds: [] }];
+  mods = addSection(mods, "s1", defaultSectionName(mods));
+  assert.deepEqual(mods.map((m) => `${m.id}:${m.title}`), ["m1:", "s1:Section 1"]);
+  mods = renameSection(mods, "s1", "Understanding light");
+  mods = addSection(mods, "s2", defaultSectionName(mods));
+  assert.equal(mods[2].title, "Section 2");
+  mods = removeSectionTo(mods, "s2");
+  assert.deepEqual(mods.map((m) => `${m.id}:${m.title}`), ["m1:", "s1:Understanding light"]);
+  mods = addSection(mods, "s3", defaultSectionName(mods));
+  assert.deepEqual(mods.map((m) => m.id), ["m1", "s1", "s3"], "s2 never comes back");
+  assert.equal(defaultSectionName([{ id: "a", title: "Section 1", lessonIds: [] }, { id: "b", title: "Section 2", lessonIds: [] }]), "Section 3");
+  assert.equal(defaultSectionName([{ id: "a", title: "Section 2", lessonIds: [] }]), "Section 3", "never duplicates a name");
+});
+
+test("removing a populated section moves its lessons, in order, to No section (top) or another section — never deletes them", () => {
+  const mods = [{ id: "s1", title: "A", lessonIds: ["a", "b"] }, { id: "s2", title: "B", lessonIds: ["c"] }];
+  assert.deepEqual(removeSectionTo(mods, "s1", NO_SECTION, () => "ns").map((m) => `${m.id}:${m.title}:${m.lessonIds.join(",")}`), ["ns::a,b", "s2:B:c"]);
+  assert.deepEqual(removeSectionTo(mods, "s1", "s2").map((m) => `${m.id}:${m.lessonIds.join(",")}`), ["s2:c,a,b"]);
+  const withTop = [{ id: "m1", title: "", lessonIds: ["x"] }, ...mods];
+  assert.deepEqual(removeSectionTo(withTop, "s2", NO_SECTION).map((m) => `${m.id}:${m.lessonIds.join(",")}`), ["m1:x,c", "s1:a,b"]);
+  // a legacy untitled module further down is NOT "No section (top)": a top one is made
+  const mid = [{ id: "s1", title: "A", lessonIds: ["a"] }, { id: "u1", title: "", lessonIds: ["u"] }, { id: "s2", title: "B", lessonIds: ["c"] }];
+  assert.deepEqual(removeSectionTo(mid, "s2", NO_SECTION, () => "top").map((m) => `${m.id}:${m.lessonIds.join(",")}`), ["top:c", "s1:a", "u1:u"]);
+  assert.deepEqual(removeSectionTo(mods, "nope", NO_SECTION), mods);
+  const [made, id] = ensureNoSection(mods, () => "s1");   // an id clash never reuses an existing section's id
+  assert.notEqual(id, "s1"); assert.equal(made[0].title, "");
+});
+
+test("drop words and targets: section + position, No section, ungrouped areas, empty sections", () => {
+  const mods = [{ id: "m1", title: "", lessonIds: ["a"] }, { id: "s1", title: "Understanding light", lessonIds: ["b", "c"] }, { id: "s2", title: "Empty", lessonIds: [] }];
+  const rows = outlineRows(mods);
+  const a = rows.find((r) => r.id === "a"), rest = rows.filter((r) => r.id !== "a");
+  // rest: [none:m1, module:s1, b, c, module:s2, empty:s2]
+  assert.equal(describeDrop(mods, a, 3, rest), "Move to “Understanding light”, position 2");
+  assert.equal(describeDrop(mods, a, 1, rest), "Move to No section, position 1");
+  assert.equal(describeDrop(mods, a, 5, rest), "Move to “Empty”, position 1");
+  assert.equal(dropGroup(a, 5, rest), "s2");
+  assert.equal(outlineCanDrop(a, 0, rest), false, "a visible No section at the top: its first position is the same place");
+  assert.equal(outlineCanDrop(a, 6, rest), false, "below an empty-state row = the same place; one slot only");
+  assert.deepEqual(ids(moveLessonToGroup(mods, "b", "s2", 0)), ["a", "c", "b"]);
+  const sec = rows.find((r) => r.id === "module:s2");
+  assert.equal(describeDrop(mods, sec, 1, rows.filter((r) => r.moduleId !== "s2")), "Move section to position 1 of 2");
+  // no ungrouped lessons: the spot above the first section = No section at the top
+  const named = [{ id: "m0", title: "", lessonIds: [] }, { id: "s1", title: "Light", lessonIds: ["x", "y"] }];
+  const nrows = outlineRows(named); const x = nrows.find((r) => r.id === "x"); const nrest = nrows.filter((r) => r.id !== "x");
+  assert.equal(outlineCanDrop(x, 0, nrest), true);
+  assert.equal(describeDrop(named, x, 0, nrest), "Move to No section, position 1");
+  assert.equal(dropGroup(x, 0, nrest), NO_SECTION);
+  const legacy = [{ id: "s1", title: "Exposure", lessonIds: ["e"] }, { id: "u1", title: "", lessonIds: ["b"] }, { id: "s2", title: "Motion", lessonIds: ["m"] }];
+  const lrows = outlineRows(legacy); const m = lrows.find((r) => r.id === "m"); const lrest = lrows.filter((r) => r.id !== "m");
+  assert.equal(describeDrop(legacy, m, 4, lrest), "Move to No section, after “Exposure”, position 2");
 });
 
 test("explicit Move to section / position, insertion points and removal", () => {
@@ -176,22 +255,30 @@ test("fetched titles fill the name but NEVER overwrite a custom name; private li
 
 test("sections move as a block (same lesson ids and membership); drops only land on section boundaries", () => {
   const mods = [{ id: "m1", title: "A", lessonIds: ["a", "b"] }, { id: "m2", title: "B", lessonIds: ["c"] }, { id: "m3", title: "C", lessonIds: [] }];
-  const rows = outlineRows(mods, { showHeaders: true });
-  assert.deepEqual(rows.map((r) => r.id), ["module:m1", "a", "b", "module:m2", "c", "module:m3"]);
+  const rows = outlineRows(mods);
+  assert.deepEqual(rows.map((r) => r.id), ["module:m1", "a", "b", "module:m2", "c", "module:m3", "empty:m3"]);
   assert.equal(outlineSpan(rows, 0), 3);
   assert.equal(outlineSpan(rows, 3), 2);
-  assert.equal(outlineSpan(rows, 5), 1);
+  assert.equal(outlineSpan(rows, 5), 2, "an empty section carries its empty-state row");
   assert.equal(outlineSpan(rows, 1), 1);
-  // dragging section m1: remaining rows = [H2, c, H3]; slots 0 / 2 / 3 are boundaries, 1 is not
-  const rest = rows.filter((r) => r.moduleId !== "m1");
-  assert.deepEqual([0, 1, 2, 3].map((s) => outlineCanDrop(rows[0], s, rest)), [true, false, true, true]);
-  assert.equal(moduleIndexFromSlot(rows, "m1", 2), 1);
-  assert.equal(moduleIndexFromSlot(rows, "m1", 3), 2);
+  const rest = rows.filter((r) => r.moduleId !== "m1");      // [H2, c, H3, e3]
+  assert.deepEqual([0, 1, 2, 3, 4].map((s) => outlineCanDrop(rows[0], s, rest)), [true, false, true, false, true]);
+  assert.equal(moduleIndexFromSlot(rows, "m1", 2, mods), 1);
+  assert.equal(moduleIndexFromSlot(rows, "m1", 4, mods), 2);
   assert.deepEqual(ids(moveModule(mods, "m1", 2)), ["c", "", "a,b"]);
-  // lessons may not land above the first section header
-  assert.equal(outlineCanDrop(rows[1], 0, rows.filter((r) => r.id !== "a")), false);
+  assert.equal(outlineCanDrop(rows[1], 0, rows.filter((r) => r.id !== "a")), true, "above the first named section = No section at the top");
   assert.equal(outlineCanDrop(rows[1], 1, rows.filter((r) => r.id !== "a")), true);
 });
+
+test("section drags land correctly even with hidden (empty untitled) modules in between", () => {
+  const mods = [{ id: "m1", title: "", lessonIds: [] }, { id: "s1", title: "A", lessonIds: ["a"] }, { id: "u2", title: "", lessonIds: [] }, { id: "s2", title: "B", lessonIds: ["b"] }, { id: "u3", title: "", lessonIds: [] }];
+  const rows = outlineRows(mods);                                   // [H s1, a, H s2, b]
+  const toEnd = moveModule(mods, "s1", moduleIndexFromSlot(rows, "s1", 2, mods));
+  assert.deepEqual(namedOrder(toEnd), ["B", "A"], "A dragged below B really ends up below B");
+  const toTop = moveModule(mods, "s2", moduleIndexFromSlot(rows, "s2", 0, mods));
+  assert.deepEqual(namedOrder(toTop), ["B", "A"]);
+});
+const namedOrder = (mods) => mods.filter((m) => m.title).map((m) => m.title);
 
 test("images are only ever deleted from the course's OWN folders (a shared or foreign reference is left alone)", async () => {
   const { ownedByCourse } = await import("./academyDrafts.js");
