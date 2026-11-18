@@ -2,7 +2,7 @@
 import { test, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
-  acquireShared, releaseShared, sharedState, sharedStats, sessionGen, clearAcademySession,
+  acquireShared, releaseShared, restartShared, sharedState, sharedStats, sessionGen, clearAcademySession,
   cachedImageUrl, storeImageUrl, retainImage, releaseImage, imageCacheSize, IMAGE_CACHE_MAX, LINGER_MS, MAX_LINGERING,
 } from "./academyCache.js";
 
@@ -100,4 +100,30 @@ test("images: a download that finishes after sign-out is revoked, never cached; 
   clearAcademySession();
   assert.ok(revoked.includes("blob:a") && revoked.includes("blob:b"), "sign-out revokes every cached URL");
   assert.equal(imageCacheSize(), 0);
+});
+
+test("Try again: an ENDED listener restarts in place for its current readers (loading first, never the old error); a live one is untouched", () => {
+  const f = fake(); let notified = 0;
+  const s = acquireShared("q:cats", f.start, INIT); s.listeners.add(() => { notified += 1; });
+  f.set({ docs: [], loaded: true, error: new Error("unavailable") }, { ended: true });
+  assert.equal(sharedState("q:cats").error.message, "unavailable");
+  assert.equal(restartShared("q:cats", f.start, INIT), true);
+  assert.equal(f.unsubs, 1, "the stopped listener is closed");
+  assert.equal(f.starts, 2, "a new listener started");
+  assert.deepEqual(sharedState("q:cats"), INIT, "readers see loading, not the old error");
+  assert.ok(notified >= 2, "readers were told");
+  f.set({ docs: [{ id: "photography" }], loaded: true, error: null });
+  assert.equal(sharedState("q:cats").docs.length, 1);
+  assert.equal(restartShared("q:cats", f.start, INIT), false, "a live listener is not restarted");
+  assert.equal(f.starts, 2);
+  assert.equal(restartShared("q:unknown", f.start, INIT), false);
+});
+
+test("a restart can't resurrect a previous session's listener", () => {
+  const f = fake();
+  const s = acquireShared("q:cats", f.start, INIT); s.listeners.add(() => {});
+  f.set({ docs: [], loaded: true, error: new Error("x") }, { ended: true });
+  clearAcademySession();
+  assert.equal(restartShared("q:cats", f.start, INIT), false, "the new session has no such entry");
+  assert.equal(f.starts, 1);
 });

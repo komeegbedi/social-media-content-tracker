@@ -40,13 +40,27 @@ function close(full, s) {
   try { s.unsub && s.unsub(); } catch { /* already closed */ }
   s.unsub = null;
 }
+/* Opt-in timing trace for performance measurements: a measurement script sets
+   `window.__academyPerf = []` before the app loads; otherwise this does nothing.
+   Records when each shared subscription starts and when its first result
+   (data or error) arrives. No data content is recorded. */
+function trace(ev, key, extra) {
+  try {
+    const t = typeof window !== "undefined" && window.__academyPerf;
+    if (t && typeof t.push === "function") t.push({ ev, key, t: performance.now(), ...extra });
+  } catch { /* never affects the app */ }
+}
 function start(full, s, startFn, initial) {
   const g = gen;
   s.ended = false;
+  const key = full.slice(full.indexOf("|") + 1);
+  let first = true;
+  trace("start", key);
   const set = (next, opts) => {
     if (g !== gen || subs.get(full) !== s) return; // a previous session or a closed entry: ignore
     s.state = typeof next === "function" ? next(s.state) : next;
     if (opts && opts.ended) s.ended = true;          // the listener stopped (e.g. permission error)
+    if (first && s.state && s.state.loaded) { first = false; trace("ready", key, { error: !!s.state.error, n: Array.isArray(s.state.docs) ? s.state.docs.length : undefined }); }
     s.listeners.forEach((l) => l());
   };
   try { s.unsub = startFn(set); } catch (e) { s.state = { ...initial, loaded: true, error: e }; s.ended = true; }
@@ -71,6 +85,21 @@ export function releaseShared(key, s, listener) {
   lingering.add(s);
   s.timer = setTimeout(() => { s.timer = null; if (!s.listeners.size) close(s.full, s); }, LINGER_MS);
   while (lingering.size > MAX_LINGERING) { const oldest = lingering.values().next().value; close(oldest.full, oldest); }
+}
+/* "Try again" for a listener that ENDED (Firestore stops a listener after an
+   error) while readers are still mounted: restart it in place for them. Their
+   view returns to loading (never the failed or older data) until the new
+   listener answers. No-op for a live or unknown entry. */
+export function restartShared(key, startFn, initial) {
+  const full = `${gen}|${key}`;
+  const s = subs.get(full);
+  if (!s || !s.ended) return false;
+  try { s.unsub && s.unsub(); } catch { /* already closed */ }
+  s.unsub = null;
+  s.state = initial;
+  start(full, s, startFn, initial);
+  s.listeners.forEach((l) => l());
+  return true;
 }
 export const sharedState = (key) => subs.get(`${gen}|${key}`)?.state;
 export const sharedStats = () => ({ open: subs.size, lingering: lingering.size, generation: gen });

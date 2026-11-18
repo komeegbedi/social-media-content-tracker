@@ -13,6 +13,7 @@ vi.mock("./logging", () => ({ logIssue: vi.fn(), reportIssue: vi.fn(async () => 
 const data = vi.hoisted(() => ({ setManualDone: null, finishCourse: null, markVideoWatched: null, grant: null, status: null }));
 vi.mock("./academyData.js", () => ({
   useImageUrl: () => ({ url: null, error: false }),
+  useTopicRecords: () => ({ docs: [], byId: {}, loaded: true, error: null }),
   useAttempts: () => ({ docs: [], loaded: true, error: null }),
   submitQuiz: vi.fn(), grantQuizAttempts: (...a) => data.grant(...a), quizAttemptStatus: (...a) => data.status(...a), requestQuizAttempt: vi.fn(),
   useCourses: () => ({ courses: [], loaded: true, error: null }), useCourse: () => ({ data: null, loaded: true }),

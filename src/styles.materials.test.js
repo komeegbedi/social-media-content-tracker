@@ -1,6 +1,9 @@
 /* Material-grammar guards (FOURTH). The app uses four deliberate material levels:
    canvas (opaque), working surfaces (opaque), elevated surfaces (opaque), and
-   navigation glass (translucent+blur, mobile chrome only, with a solid fallback).
+   navigation glass (translucent+blur: the floating bottom bar only, with a solid
+   fallback). The mobile HEADER is solid: nothing scrolls beneath it, and a
+   filtered header layer is the suspected cause of soft header controls in the
+   installed iOS web app.
    These source-level assertions lock in that grammar and its preference-mode
    behaviour so a future edit can't (a) put glass on a content/elevated surface,
    or (b) leave a translucent panel see-through under reduced transparency.
@@ -37,9 +40,23 @@ test("only navigation chrome uses backdrop-filter; content/elevated surfaces nev
     const [, selector, body] = m;
     const bf = body.match(/backdrop-filter\s*:\s*([^;]+)/);
     if (!bf || /^\s*none/.test(bf[1])) continue;                // no blur, or a reset
-    if (!/\.sb-top|\.sb-nav\b|\.sb-modal/.test(selector)) offenders.push(selector.trim().slice(0, 50));
+    if (!/\.sb-nav\b|\.sb-modal/.test(selector)) offenders.push(selector.trim().slice(0, 50));
   }
-  assert.deepEqual(offenders, [], "backdrop-filter appeared on a non-nav/non-scrim surface");
+  assert.deepEqual(offenders, [], "backdrop-filter appeared on a surface other than the bottom bar or the scrim");
+});
+
+test("the mobile header is solid and unfiltered in every mode", () => {
+  const bodies = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  const plain = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  while ((m = re.exec(plain))) if (m[1].split(",").some((sel) => sel.trim() === ".sb-top")) bodies.push(m[2].replace(/\s+/g, ""));
+  assert.ok(bodies.length >= 1, "expected a .sb-top rule");
+  for (const body of bodies) {
+    assert.doesNotMatch(body, /backdrop-filter:(?!none)/, ".sb-top must not use backdrop-filter");
+    assert.doesNotMatch(body, /color-mix|transparent|rgba\(/, ".sb-top must not be translucent");
+  }
+  assert.ok(bodies.some((body) => /background:var\(--background\)/.test(body)), ".sb-top uses the page colour");
 });
 
 test("nav glass declares a solid fallback where backdrop-filter is unsupported", () => {
@@ -47,16 +64,12 @@ test("nav glass declares a solid fallback where backdrop-filter is unsupported",
   // fallback, so they never render fully transparent on unsupported browsers.
   assert.ok(/@supports not \(\(backdrop-filter/.test(css), "expected an @supports-not fallback for glass");
   const flat = css.replace(/\s+/g, "");
-  assert.ok(/@supportsnot\(\(backdrop-filter[^{]*\)\)\{[^}]*\.sb-top\{background:var\(--background\)\}/.test(flat),
-    ".sb-top needs a solid @supports-not fallback");
   assert.ok(/\.sb-nav\{background:var\(--surface\)\}/.test(flat), ".sb-nav needs a solid @supports-not fallback");
 });
 
 test("reduced transparency turns nav glass + scrim into solid/none and strengthens the scrim", () => {
   const b = mediaBlock("prefers-reduced-transparency: reduce");
-  assert.ok(/\.sb-top\{[^}]*backdrop-filter:none/.test(b), ".sb-top must drop its blur");
   assert.ok(/\.sb-nav\{[^}]*backdrop-filter:none/.test(b), ".sb-nav must drop its blur");
-  assert.ok(/\.sb-top\{[^}]*background:var\(--background\)/.test(b), ".sb-top must become solid");
   assert.ok(/\.sb-nav\{[^}]*background:var\(--surface-elevated\)/.test(b), ".sb-nav must become solid");
   assert.ok(/\.sb-modal,\.sb-scrim\{[^}]*backdrop-filter:none/.test(b), "scrim/modal must drop blur");
   // scrim opacity raised above the default .40 so the foreground dominates

@@ -900,15 +900,22 @@ export default function App() {
   const creating = useRef(false);
   const { profile, error: profileError } = useProfile(user?.uid, retryKey);
 
+  // Opening the app ON a Learn page: start downloading the Learn CODE at once,
+  // in parallel with sign-in and the profile read (the same code-only prefetch
+  // used elsewhere; no Academy data is read until Learn renders).
+  const startsOnLearn = useRef(typeof window !== "undefined" && /^\/learn(\/|$)/.test(window.location.pathname)).current;
+  useEffect(() => { if (startsOnLearn) prefetchAcademy(); }, [startsOnLearn]);
   // Warm the Firestore cache in PARALLEL with the profile read: the moment we're
   // authenticated, start fetching the collections Board needs so their data is
   // already local by the time Board mounts — instead of profile → then → data
   // as two sequential round-trips. Best-effort (errors ignored: e.g. a still-
-  // pending user can't read eventSeries yet).
+  // pending user can't read eventSeries yet). Skipped when the app opens on a
+  // Learn page: the shell's own live subscriptions read these collections anyway,
+  // and a second full download would compete with Learn's first reads.
   useEffect(() => {
-    if (!user?.uid) return;
+    if (!user?.uid || startsOnLearn) return;
     for (const c of ["tasks", "users", "eventSeries"]) getDocs(collection(db, c)).catch(() => {});
-  }, [user?.uid]);
+  }, [user?.uid, startsOnLearn]);
   // Account change (sign-out, or a different person signing in) or a change to
   // what this account may access (role, approval, editor flag, disabled): start a
   // new Academy session, dropping shared listeners and cached images, so nothing

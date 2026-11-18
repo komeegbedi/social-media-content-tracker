@@ -44,14 +44,15 @@ import {
 } from "./academyProgress.js";
 import { videoFromRecord, PROVIDER_ORIGINS, shouldPersistPosition, resumePosition, videoWatchedFromEvent, vimeoEventKind, vimeoProvesPlayback, VIMEO_SLOW_MS } from "./academyVideo.js";
 import { parseMarkdown, parseInlines } from "./academyMarkdown.js";
+import { categoryReadState } from "./academyBootstrap.js";
 import {
   useCourses, useCourse, useLessons, usePurposeVideo, useProgress, useAllProgress, useAttempts, useComments,
   useLeaderProgress, useLeaderAttempts, useImageUrl, recordLessonView, startCourse, savePlayback, markVideoWatched,
   setManualDone, finishCourse, submitQuiz, grantQuizAttempts, quizAttemptStatus, requestQuizAttempt, addComment, editComment, deleteComment, pinComment,
-  useGuides, usePaths, useGuide, usePathDoc, useManyDocs, useAllGuideReviews, useGuideReview, setGuideReviewed,
+  useGuides, usePaths, useGuide, usePathDoc, useManyDocs, useSharedDocs, useAllGuideReviews, useGuideReview, setGuideReviewed,
   useAllPathProgress, usePathProgressDoc, recordPathView, recordPathCompleted, useLeaderGuideReviews, useLeaderPathProgress,
   useLeaderCourseProgressIn, useLeaderGuideReviewsIn, useCategoryArt, useIntroState, setIntroWatched,
-  useCategoryRecords, useCategoryIndex, useTopicRecords, loadCourseWorkspace, useCourseDrafts, useGuideDrafts, loadGuideWorkspace,
+  useCategoryRecords, useCategoryIndex, useTopicRecords, retryCategoryReads, loadCourseWorkspace, useCourseDrafts, useGuideDrafts, loadGuideWorkspace,
 } from "./academyData.js";
 /* Editing code is its own chunk (round 7): learners never download the
    workspace or the editors. Each editor is wrapped in the editor scope it needs. */
@@ -94,17 +95,27 @@ function BackLink({ to, label, R }) {
    the whole Learn screen. Components read it through useTax(); without a
    provider (tests) the bootstrap defaults apply. */
 const TaxCtx = React.createContext(null);
-const DEFAULT_TAX = (() => { const categories = mergeCategories([]); return { categories, visible: categories, hidden: [], topicsById: {}, loaded: true }; })();
+const DEFAULT_TAX = (() => { const categories = mergeCategories([]); return { categories, visible: categories, hidden: [], loaded: true }; })();
 export const useTax = () => React.useContext(TaxCtx) || DEFAULT_TAX;
+/* Categories + the hidden-category index: what every Academy page needs before
+   it may show (or query) content. `loaded` means exactly these two — topics are
+   NOT part of it, so they can never hold up the categories. */
 function useTaxonomy() {
   const recs = useCategoryRecords();
   const idx = useCategoryIndex();
-  const topics = useTopicRecords();
   return useMemo(() => {
     const categories = mergeCategories(recs.docs).map((c) => (idx.hidden.includes(c.id) ? { ...c, hidden: true } : c));
     const hidden = [...new Set([...idx.hidden, ...categories.filter((c) => c.hidden).map((c) => c.id)])];
-    return { categories, visible: categories.filter((c) => !c.hidden), hidden, topicsById: topics.byId, loaded: recs.loaded && idx.loaded && topics.loaded };
-  }, [recs.docs, recs.loaded, idx.hidden, idx.loaded, topics.byId, topics.loaded]);
+    // A FAILED read is an error, never "no records" (which shows the starter set).
+    const state = categoryReadState(recs, idx);
+    return { categories, visible: categories.filter((c) => !c.hidden), hidden, loaded: state === "ready" || state === "empty", error: state === "error" };
+  }, [recs, idx]);
+}
+/* Topic records, read only where topics are shown or filtered (Browse, topic
+   chips) through the shared subscription; the landing page never waits for them. */
+function useTopicsById() {
+  const t = useTopicRecords();
+  return { topicsById: t.byId, topicsLoaded: t.loaded };
 }
 /* What a learner may see on discovery surfaces (home, browse, counts,
    recommendations): published + filed under a visible category. Editors get
@@ -186,7 +197,8 @@ export function CategoryCard({ category, count, imageRef, onOpen, href, navigate
 function useContinueLessons(courses, progressByCourse) {
   const targets = useMemo(() => continueTargets(courses, progressByCourse), [courses, progressByCourse]);
   const refs = useMemo(() => targets.filter((t) => t.nextLessonId).map((t) => `courses/${t.course.id}/lessons/${t.nextLessonId}`), [targets]);
-  const docs = useManyDocs(refs);
+  // shared + lingering: returning to Learn shows the Continue card at once
+  const docs = useSharedDocs(refs);
   const lessonsById = useMemo(() => {
     const m = {};
     for (const [path, d] of Object.entries(docs.byPath)) { const x = path.match(/^courses\/([^/]+)\/lessons\/([^/]+)$/); if (x && d) m[`${x[1]}/${x[2]}`] = d; }
@@ -220,9 +232,14 @@ function IntroSummary({ text }) {
 }
 
 function LearnHome({ me, users, isAdmin, R }) {
-  const { courses, loaded: cLoaded, error: cErr } = useCourses(me);
-  const { guides, loaded: gLoaded } = useGuides(me);
-  const { paths } = usePaths(me);
+  const tax = useTax();
+  // The landing page is learner-facing: editors read the same published +
+  // visible lists as learners here (drafts and hidden items live in Manage).
+  const { courses, loaded: cLoaded, error: cErr } = useCourses(me, { learnerView: true });
+  const { guides, loaded: gLoaded } = useGuides(me, { learnerView: true });
+  // only feeds the "Learning paths · N" link: started once the categories are known,
+  // so it never competes with what the first screen needs
+  const { paths, loaded: pathsLoaded, error: pathsError } = usePaths(tax.loaded ? me : null, { learnerView: true });
   const purpose = usePurposeVideo();
   const art = useCategoryArt();
   const intro = useIntroState(me.id);
@@ -231,7 +248,6 @@ function LearnHome({ me, users, isAdmin, R }) {
   const [showPurpose, setShowPurpose] = useState(false);
   const [editPurpose, setEditPurpose] = useState(false);
   const [busyIntro, setBusyIntro] = useState(false);
-  const tax = useTax();
   // Each section renders as soon as ITS data is ready (round 7): categories need
   // only the taxonomy; counts, Continue and For you need courses + progress;
   // Recently added also needs resources.
@@ -243,9 +259,15 @@ function LearnHome({ me, users, isAdmin, R }) {
   const pubGuides = useMemo(() => learnerVisible(guides, tax.hidden), [guides, tax.hidden]);
   const counts = useMemo(() => categoryCounts(me, pubCourses, tax.hidden), [me, pubCourses, tax.hidden]);
   const { lessonsById, loaded: contLessonsLoaded } = useContinueLessons(pubCourses, progress.byCourse);
-  const recsReady = coursesReady && progress.loaded && contLessonsLoaded;
-  // Reserve the Continue slot only for a returning learner (no jump for others)
-  const mayContinue = !recsReady && (!progress.loaded || progress.docs.some((p) => p.startedAt || p.lastLessonId));
+  // History is KNOWN only when it loaded without an error: a failed read is not
+  // an empty history (no suggestions are computed from it, and it says so).
+  const progressKnown = progress.loaded && !progress.error;
+  const recsReady = coursesReady && progressKnown && contLessonsLoaded;
+  // The Continue placeholder needs positive evidence: a started course that
+  // isn't finished. A new learner (or unknown history) never sees one.
+  const resumable = progressKnown && progress.docs.some((p) => (p.startedAt || p.lastLessonId) && !p.finishedAt);
+  const mayContinue = resumable && !recsReady;
+  const noCourses = coursesReady && !cErr && pubCourses.length === 0;
   const recs = useMemo(() => recommendations({ me, courses: pubCourses, progressByCourse: progress.byCourse, lessonsById, max: 4, categories: tax.categories }), [me, pubCourses, progress.byCourse, lessonsById, tax.categories]);
   // A returning learner gets ONE compact Continue shortcut at the top; the same
   // course is not repeated in the For you row below.
@@ -257,6 +279,8 @@ function LearnHome({ me, users, isAdmin, R }) {
       .filter((x) => !(x.item.format === "course" && suggested.has(x.item.id))).slice(0, 5);
   }, [me, pubCourses, pubGuides, tax.hidden, recs]);
   const publishedPaths = paths.filter((p) => p.status === "published").length;
+  // a failed read is not "0 paths": the count shows only when the query succeeded
+  const pathsKnown = tax.loaded && pathsLoaded && !pathsError;
   // The featured "Start here" category is referenced by its STABLE id; a hidden or
   // deleted record simply drops the "More from…" link (no broken route).
   const introCat = categoryIn(tax.categories, INTRO_CATEGORY_ID);
@@ -295,6 +319,7 @@ function LearnHome({ me, users, isAdmin, R }) {
       </div>
 
       {/* Continue learning — one compact shortcut for a returning learner */}
+      {progress.loaded && progress.error && <p className="ac-note ac-historynote" role="status">Your learning history couldn't load right now, so Continue and suggestions are hidden. Your progress is safe.</p>}
       {mayContinue && <div className="ac-continue ac-continue-skel" aria-hidden="true"><span className="ac-continue-cover sb-skel" /><span className="ac-continue-body"><span className="sb-skel ac-skelline" /><span className="sb-skel ac-skelline short" /></span></div>}
       {recsReady && cont && (
         <AppLink className="ac-continue" to={contHref} navigate={R.navigate} aria-label={`Continue learning: ${cont.lesson ? `${cont.lesson.title}, in ${cont.course.title}` : cont.course.title}`}>
@@ -349,7 +374,11 @@ function LearnHome({ me, users, isAdmin, R }) {
       {editPurpose && <PurposeVideoEditor me={me} current={purpose.data} onClose={() => setEditPurpose(false)} />}
 
       {/* B — explore categories: a swipeable row on phones/tablets, a grid on desktop */}
-      {!tax.loaded ? (
+      {tax.error ? (
+        <section aria-labelledby="ac-cats-h"><h2 id="ac-cats-h" className="ac-h2">Explore categories</h2>
+          <div className="sb-empty" role="alert"><p>Couldn't load the Academy's categories. Check your connection, then try again.</p>
+            <button type="button" className="sb-btn compact" onClick={retryCategoryReads}>Try again</button></div></section>
+      ) : !tax.loaded ? (
         <section aria-labelledby="ac-cats-h" className="ac-hsection">
           <div className="sb-shead"><h2 id="ac-cats-h" className="ac-h2">Explore categories</h2></div>
           <div className="ac-hrow ac-hrow-gridwide" aria-busy="true">{[0, 1, 2, 3].map((i) => <div key={i} className="ac-catcard"><div className="ac-catart sb-skel" style={{ aspectRatio: "3 / 4" }} /></div>)}</div>
@@ -363,6 +392,13 @@ function LearnHome({ me, users, isAdmin, R }) {
         </HRow>
       )}
       {cErr && <div className="sb-empty" role="alert">Couldn't load the Academy's courses. Check your connection and try again.</div>}
+      {/* An Academy with categories but nothing published yet: say so once the
+          (empty) course list is confirmed, instead of leaving speculative space */}
+      {noCourses && tax.visible.length > 0 && (
+        <p className="ac-note ac-emptynote" role="status">
+          {editor ? <>No courses are published yet. <AppLink className="ac-link inline" to="/learn/manage" navigate={R.navigate}>Create one in Manage</AppLink>.</> : "No courses are published yet. New courses will appear in these categories."}
+        </p>
+      )}
 
       {/* C — for you: course cards (3:4 covers) in a row; the Continue course above isn't repeated */}
       {recsReady && rowRecs.length > 0 && (
@@ -410,7 +446,7 @@ function LearnHome({ me, users, isAdmin, R }) {
 
       <section className="ac-secondary" aria-label="More ways to learn">
         <AppLink className="ac-link" to={learnBrowsePath({ format: "course" })} navigate={R.navigate}><AcademicCapIcon className="hi hi-sm" aria-hidden="true" />Browse all courses</AppLink>
-        <AppLink className="ac-link" to={learnBrowsePath({ format: "path" })} navigate={R.navigate}><MapIcon className="hi hi-sm" aria-hidden="true" />Learning paths{loaded ? ` · ${publishedPaths}` : ""}</AppLink>
+        <AppLink className="ac-link" to={learnBrowsePath({ format: "path" })} navigate={R.navigate}><MapIcon className="hi hi-sm" aria-hidden="true" />Learning paths{pathsKnown ? ` · ${publishedPaths}` : ""}</AppLink>
         <AppLink className="ac-link" to={learnBrowsePath({ format: "guide" })} navigate={R.navigate}><DocumentTextIcon className="hi hi-sm" aria-hidden="true" />All tips & resources</AppLink>
         <AppLink className="ac-link" to={learnBrowsePath({})} navigate={R.navigate}><BookOpenIcon className="hi hi-sm" aria-hidden="true" />Browse everything</AppLink>
       </section>
@@ -576,9 +612,11 @@ function AllCategories({ me, R }) {
 }
 
 function BrowsePage({ me, isAdmin, browse, R }) {
-  const { courses, loaded: cLoaded, error: cErr } = useCourses(me);
-  const { guides, loaded: gLoaded } = useGuides(me);
-  const { paths, loaded: pLoaded } = usePaths(me);
+  // learner-facing: editors get the same published + visible lists as learners
+  const { courses, loaded: cLoaded, error: cErr } = useCourses(me, { learnerView: true });
+  const { guides, loaded: gLoaded } = useGuides(me, { learnerView: true });
+  const { paths, loaded: pLoaded } = usePaths(me, { learnerView: true });
+  const { topicsById, topicsLoaded } = useTopicsById();
   const progress = useAllProgress(me.id);
   const reviews = useAllGuideReviews(me.id);
   const pathProg = useAllPathProgress(me.id);
@@ -586,11 +624,11 @@ function BrowsePage({ me, isAdmin, browse, R }) {
   useEffect(() => { setQ(browse.q || ""); }, [browse.q]);
   const set = (patch) => R.navigate(learnBrowsePath({ ...browse, ...patch }), { replace: true });
   const tax = useTax();
-  const loaded = cLoaded && gLoaded && pLoaded && tax.loaded;
+  const loaded = cLoaded && gLoaded && pLoaded && tax.loaded && topicsLoaded;
   // Search text includes topic NAMES (renames apply; hidden topics don't match).
   const all = useMemo(() => learnerVisible([...courses, ...guides, ...paths], tax.hidden)
-    .map((x) => ({ ...x, topics: topicNamesFor(x, tax.topicsById) })), [courses, guides, paths, tax.hidden, tax.topicsById]);
-  const topic = browse.topic ? tax.topicsById[browse.topic] : null;
+    .map((x) => ({ ...x, topics: topicNamesFor(x, topicsById) })), [courses, guides, paths, tax.hidden, topicsById]);
+  const topic = browse.topic ? topicsById[browse.topic] : null;
   const topicOk = !!topic && !topic.hidden;
   let list = useMemo(() => {
     const base = filterCourses(all, { q: browse.q, category: browse.category, format: browse.format, categories: tax.categories });
@@ -2660,8 +2698,8 @@ function PathLeaderProgress({ path, ctx, users }) {
    never breaks the link); legacy free-text tags fall back to a text search.
    Hidden topics aren't shown. */
 function TopicChips({ item, R }) {
-  const tax = useTax();
-  const chips = topicChips(item, tax.topicsById);
+  const { topicsById, topicsLoaded } = useTopicsById();
+  const chips = topicsLoaded ? topicChips(item, topicsById) : [];
   if (!chips.length) return null;
   return (
     <div className="ac-topics" aria-label="Topics">
