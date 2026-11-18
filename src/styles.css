@@ -3778,6 +3778,13 @@ input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:1}
 .ac-edgrid{display:grid;grid-template-columns:1fr;gap:4px 24px}
 @media(min-width:760px){.ac-edgrid{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}}
 .ac-row2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+/* Paired fields share their rows (label / control / error / hint), so the two
+   controls line up even when only one label's "Required to publish" badge wraps. */
+@supports (grid-template-rows:subgrid){
+  .ac-row2{grid-template-rows:repeat(4,auto)}
+  .ac-row2 > .sb-field{display:grid;grid-row:span 4;grid-template-rows:subgrid;align-content:start}
+  .ac-row2 > .sb-field > .ac-fieldhint{margin:0}   /* was an inline span: keep its old spacing */
+}
 .ac-fieldlabel{display:block;font-size:var(--text-label);font-weight:600;color:var(--text-secondary);margin-bottom:6px}
 .ac-resrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;gap:6px;margin-bottom:6px;align-items:center}
 .ac-resrow input{min-height:38px}
@@ -4189,12 +4196,17 @@ body.ac-dragging,body.ac-dragging *{cursor:grabbing !important;-webkit-user-sele
 .ac-outlesson:hover{background:var(--surface-muted)}
 .ac-outlesson.on:hover{background:var(--accent-muted)}
 .ac-outmain{flex:1;min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:8px;border:0;background:none;font:inherit;color:inherit;text-align:start;padding:8px 4px;cursor:pointer;border-radius:var(--r-control)}
-.ac-kindicon{color:var(--text-muted);margin-top:2px}
+.ac-kindicon{color:var(--text-muted);margin-top:calc((var(--ac-line) - var(--icon-sm)) / 2)}
 .ac-outtext{display:flex;flex-direction:column;gap:1px;min-width:0}
 .ac-outtitle{font-size:var(--text-body);line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
 .ac-outsub{font-size:var(--text-meta);color:var(--text-muted);font-variant-numeric:tabular-nums}
 .ac-outsub:empty{display:none}
-.ac-outlesson .ac-handle{align-self:center}
+/* Lesson rows: the drag handle, type icon and actions menu line up with the FIRST
+   line of the title (short or wrapped, any text size). --ac-line is the title's line
+   height; the title starts 8px down (.ac-outmain padding). The handle and menu keep
+   their full hit areas: only the visible icon moves inside them. */
+.ac-outlesson{--ac-line:calc(var(--text-body) * 1.35);align-items:flex-start}
+.ac-outlesson > .ac-handle,.ac-outlesson > .ac-iconbtn{align-self:flex-start;align-items:flex-start;padding-top:calc(8px + var(--ac-line) / 2 - var(--icon-sm) / 2)}
 .ac-outlesson.on{box-shadow:inset 3px 0 0 var(--accent-fill)}
 /* Outline groups (v7): with sections, every group is ONE visible container —
    its header (a named section, or "No section"), then its lessons (indented)
@@ -4243,12 +4255,12 @@ body.ac-dragging,body.ac-dragging *{cursor:grabbing !important;-webkit-user-sele
 .ac-seccount{padding-inline:7px;font-size:var(--text-meta);line-height:1.3;color:var(--text-secondary);font-variant-numeric:tabular-nums}
 .ac-secname .ac-fielderr{padding-inline:7px}
 .ac-secadd.sb-btn.compact{min-height:32px;padding:4px 10px;margin-inline-end:2px}
-.ac-gempty{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-height:48px;padding:10px 18px 10px 22px;font-size:var(--text-support);color:var(--text-secondary);line-height:1.4}
+.ac-gempty{position:relative;display:flex;flex-wrap:wrap;align-items:baseline;align-content:center;gap:4px 8px;min-height:48px;padding:10px 18px 10px 22px;font-size:var(--text-support);color:var(--text-secondary);line-height:1.4}
 /* the drop zone inside an empty group */
 .ac-grp.ac-gbody > .ac-gempty{padding-inline-start:22px}
 .ac-gempty::before{content:"";position:absolute;inset:6px 8px 6px 12px;border:1px dashed var(--border-strong);border-radius:var(--r-control);pointer-events:none}
 .ac-grp.ac-droptarget .ac-gempty::before{border-color:var(--accent-fill);border-style:solid}
-.ac-gempty .ac-emptyadd{display:inline;padding:0;border:0;background:none;color:var(--accent-foreground);font:inherit;text-decoration:underline;cursor:pointer}
+.ac-gempty .ac-emptyadd{display:inline;align-self:baseline;padding:0;border:0;background:none;color:var(--accent-foreground);font:inherit;text-decoration:underline;cursor:pointer}
 .ac-gempty .ac-emptyadd .hi{display:none}
 /* while dragging a lesson: the "outside any section" destination, above the list */
 .ac-topdrop{position:absolute;inset-inline:0;bottom:calc(100% + 4px);min-height:40px;display:flex;align-items:center;justify-content:center;padding:6px 10px;
@@ -4668,12 +4680,21 @@ a.ac-catbtn:visited,a.ac-cardbtn:visited,a.ac-recbtn:visited,a.ac-contcard:visit
   border:1px solid var(--field-border);border-radius:var(--r-input);background:var(--field);color:var(--text-primary)}
 .ac-ws .sb-field textarea{min-height:76px;resize:vertical}
 .ac-input:focus{outline:none;border-color:var(--accent-foreground);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 18%,transparent)}
-.ac-ws .sb-field label{gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.ac-ws .sb-field label{gap:4px 8px;flex-wrap:wrap;margin-bottom:6px}
 .ac-ws .sb-field{margin-bottom:14px}
 .ac-ws .sb-field > .ac-hint{margin-top:6px}
 .ac-ws .ac-fieldhint{margin:2px 0 6px}
 .ac-req{display:inline-flex;align-items:center;font-size:10.5px;font-weight:600;letter-spacing:.01em;padding:1px 7px;border-radius:var(--r-pill);background:var(--surface-muted);color:var(--text-secondary);white-space:nowrap;margin-inline-start:8px}
 .ac-fieldlabel .ac-req{vertical-align:1px}
+/* A label with a “Required to publish” badge: beside the label text on the same
+   baseline when it fits, otherwise on its own line, left-aligned with the label. */
+:is(label,.ac-fieldlabel):has(> .ac-req){display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;row-gap:4px}
+:is(label,.ac-fieldlabel):has(> .ac-req) > .ac-req{margin-inline-start:0}
+/* The course cover (the only required image field): a simple left-aligned stack,
+   label, then "Required to publish" as quiet helper text (no pill padding or
+   background), so both lines' text starts on the image's left edge. */
+.ac-imgpick > .ac-fieldlabel:has(> .ac-req){flex-direction:column;align-items:flex-start;row-gap:2px;margin-bottom:0}
+.ac-imgpick > .ac-fieldlabel:has(> .ac-req) > .ac-req{padding:0;background:none;border-radius:0;font-size:var(--text-label);font-weight:500;letter-spacing:0;color:var(--text-muted);white-space:normal}
 .ac-optional{font-weight:500;color:var(--text-muted)}
 .ac-fielderr{color:var(--danger-foreground);font-size:var(--text-label);margin-top:6px;line-height:1.4}
 .ac-ws .sb-field.has-err input,.ac-ws .sb-field.has-err select,.ac-ws .sb-field.has-err textarea,.ac-ws .sb-field input[aria-invalid="true"]{border-color:color-mix(in srgb,var(--danger) 60%,var(--field-border))}
