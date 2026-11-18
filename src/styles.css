@@ -4869,6 +4869,7 @@ a.ac-catbtn:visited,a.ac-cardbtn:visited,a.ac-recbtn:visited,a.ac-contcard:visit
   background:var(--surface);border:1px solid var(--border);border-radius:var(--r-panel)}
 .ac-start2-row{display:grid;grid-template-columns:clamp(112px,36%,240px) minmax(0,1fr);gap:12px;align-items:center}
 .ac-start2-thumb .ac-img{border-radius:var(--r-control)}
+.ac-start2-thumb .ac-srcthumb img{object-fit:cover}
 .ac-playbadge.sm .hi{width:18px;height:18px;padding:10px}
 .ac-start2-title{display:block;font-size:var(--text-card);font-weight:600;line-height:1.3;margin:0}
 .ac-start2-sum{margin:4px 0 0;color:var(--text-secondary);font-size:var(--text-support);line-height:1.45;
@@ -5137,3 +5138,10 @@ a.ac-link:not(.inline):hover{text-decoration:underline}
 /* Starter-category setup: the control, then its error beside it */
 .ac-setup{display:flex;flex-direction:column;align-items:center;gap:6px}
 .ac-setup .ac-err{margin:0;max-width:44ch;text-align:center}
+
+/* A newer release is live: the notice above the page, and the save-and-reload action */
+.sb-updatebanner{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 0 12px;padding:10px 12px;
+  border:1px solid var(--border);border-radius:var(--r-control);background:var(--surface);color:var(--text-primary);font-size:var(--text-support)}
+.ac-reloadact{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.ac-reloadact .ac-err{margin:0}
+.ac-vprevstale{display:flex;flex-wrap:wrap;align-items:center;gap:6px}

@@ -47,8 +47,12 @@ function main() {
   // SHORT — the Functions emulator binds a Unix socket in it, and macOS caps socket paths at
   // 104 characters (a long path fails with EADDRINUSE).
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ifcemu-"));
+  // HOSTING_PUBLIC: serve a specific assembled release folder (e.g. a build with the previous
+  // releases' assets carried over) instead of the repo's dist — it must look like a build.
+  const pub = process.env.HOSTING_PUBLIC ? path.resolve(process.env.HOSTING_PUBLIC) : null;
+  if (pub && !(fs.existsSync(path.join(pub, "index.html")) && fs.existsSync(path.join(pub, "assets")))) throw new Error(`HOSTING_PUBLIC ${pub} is not a build (index.html + assets/)`);
   for (const f of ["firestore.rules", "firestore.indexes.json", "storage.rules", "dist"]) {
-    const target = path.join(REPO, f); if (fs.existsSync(target)) fs.symlinkSync(target, path.join(run, f));
+    const target = f === "dist" && pub ? pub : path.join(REPO, f); if (fs.existsSync(target)) fs.symlinkSync(target, path.join(run, f));
   }
   // functions/: a folder of links to the real source (nothing is written into the repo's
   // functions/) plus a TEST-ONLY .secret.local: functions that declare secrets (e.g. the

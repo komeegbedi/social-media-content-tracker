@@ -1,6 +1,6 @@
 /* IFC Creatives Board — the digital home of the IFC Creative Team.
    (Internal note: powered by StudioBoard architecture.) */
-import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useContext, createContext, lazy, Suspense } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useContext, createContext, Suspense } from "react";
 import { createPortal } from "react-dom";
 import {
   onAuthStateChanged, signOut,
@@ -63,6 +63,8 @@ import RevisionComposer from "./RevisionComposer.jsx";
 import MentionComposer from "./MentionComposer.jsx";
 import AdminOverrideDialog from "./AdminOverrideDialog.jsx";
 import ScreenFallback from "./ScreenFallback.jsx";
+import { guardedImport, classifyLoadFailure, isAppUpdateError, installPreloadListener, noteStartup, STALE_MESSAGE, OFFLINE_MESSAGE, UNREACHABLE_MESSAGE } from "./appUpdate.js";
+import { UpdateBanner, SaveAndReloadButton, retryableLazy, retryLazies } from "./appUpdateUi.jsx";
 import { SaveBanner } from "./saveBanner.jsx";
 import { BusyButton } from "./loading.jsx";
 import { classifyExisting } from "./importPlan.js";
@@ -75,11 +77,14 @@ import { migrate, titleFor, hasOverlay, openComposeNew, withParams, PARAM, notif
 
 /* The admin dashboard is a lazy-loaded chunk (React.lazy). It's only rendered for
    an admin who opens the Admin tab, so non-admins never download it. */
-const Admin = lazy(() => import("./AdminScreen.jsx"));
+const Admin = retryableLazy(() => guardedImport("AdminScreen", () => import("./AdminScreen.jsx")));
 // IFC Creative Academy ("Learn") — its own chunk: player, quiz, discussion and
 // the course editor only download when someone opens Learn.
 const loadAcademy = () => import("./Academy.jsx");
-const Academy = lazy(loadAcademy);
+const Academy = retryableLazy(() => guardedImport("Academy", loadAcademy));
+// stale-release recovery: forget a finished update reload; classify failed preloads
+installPreloadListener();
+noteStartup();
 /* Fetch the Learn code ahead of the first visit (idle time after the shell has
    loaded, or the moment someone points at / touches Learn). Code only: no
    Academy data is read until Learn actually opens. */
@@ -113,19 +118,30 @@ function signOutClean() {
 // ScreenFallback (lazy-screen loading state) lives in its own module so its
 // centering is reusable CSS and unit-testable — imported at the top of this file.
 
-/* Catches a failed lazy chunk load (offline / stale deploy) and offers a safe
-   retry (re-attempts the import) or a full reload — instead of a blank screen. */
+/* Catches a failed lazy chunk load and says WHY: a newer release (only a
+   reload can help — offered after saving any open editor), offline, or a
+   blocked/dropped request (Try again really re-imports: retryLazies). */
 class ChunkBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { err: false }; }
+  constructor(props) { super(props); this.state = { err: false, kind: null }; }
   static getDerivedStateFromError() { return { err: true }; }
-  componentDidCatch(e) { try { logIssue({ kind: "error", action: `chunk load failed: ${this.props.label || ""}`, message: String((e && e.message) || e).slice(0, 300) }); } catch {} }
+  componentDidCatch(e) {
+    try { logIssue({ kind: "error", action: `chunk load failed: ${this.props.label || ""}`, code: e?.code || "", message: String((e?.cause && e.cause.message) || (e && e.message) || e).slice(0, 300) }); } catch {}
+    const known = isAppUpdateError(e) ? e.code.slice(4) : null;
+    if (known) this.setState({ kind: known });
+    else classifyLoadFailure(e).then((k) => this.setState({ kind: k === "other" ? "unreachable" : k })).catch(() => this.setState({ kind: "unreachable" }));
+  }
   render() {
     if (!this.state.err) return this.props.children;
+    const k = this.state.kind;
     return (
-      <div className="sb-empty" style={{ padding: 24, textAlign: "center" }}>
-        <p style={{ marginBottom: 12 }}>Couldn't load this section. Check your connection and try again.</p>
-        <button className="sb-btn" onClick={() => this.setState({ err: false })}>Try again</button>
-        <button className="sb-btn ghost" style={{ marginInlineStart: 8 }} onClick={() => window.location.reload()}>Reload</button>
+      <div className="sb-empty" style={{ padding: 24, textAlign: "center" }} role="alert">
+        <p style={{ marginBottom: 12 }}>{k === "stale" ? STALE_MESSAGE : k === "offline" ? OFFLINE_MESSAGE : k ? UNREACHABLE_MESSAGE : "Couldn't load this section."}</p>
+        {k === "stale"
+          ? <SaveAndReloadButton className="sb-btn" />
+          : <>
+              <button className="sb-btn" onClick={() => { retryLazies(); this.setState({ err: false, kind: null }); }}>Try again</button>
+              <button className="sb-btn ghost" style={{ marginInlineStart: 8 }} onClick={() => window.location.reload()}>Reload</button>
+            </>}
       </div>
     );
   }
@@ -1932,6 +1948,7 @@ function Board({ profile, isAdmin }) {
 
           <main id="sb-main" role="main" className={"sb-content"+(["home","board","team","admin","learn"].includes(tab)?" wide":"")+(showFab?" has-fab":"")} ref={contentRef} tabIndex={-1}>
             <BetaBanner onReport={()=>setShowReport(true)} />
+            <UpdateBanner />
             <div className="sb-pageshow">
             {tab==="home"  && <Home tasks={activeTasks} tasksLoaded={tasksLoaded} users={users} me={me} goTab={setTab} isAdmin={isAdmin} onNewForEvent={newForEvent} onViewEvent={viewEvent} openTask={setOpenId} eventSeries={eventSeries} />}
             {tab==="myday" && <MyDay tasks={activeTasks} me={me} openTask={setOpenId} goTab={setTab} />}

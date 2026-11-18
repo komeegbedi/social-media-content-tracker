@@ -21,6 +21,19 @@ import { PhotoIcon, ExclamationTriangleIcon, ArrowTopRightOnSquareIcon, ArrowPat
 import { fetchVideoMetadata } from "./academyData.js";
 import { sourceThumbUrl } from "./academyShared.jsx";
 import { loadYouTubeApi } from "./youtubeApi.js";
+import { isStale, STALE_MESSAGE } from "./appUpdate.js";
+import { SaveAndReloadButton } from "./appUpdateUi.jsx";
+
+/* What to say when the metadata request fails — never a raw module URL or MIME
+   error. A stale tab (newer release live) can't recover by retrying: it gets
+   the update message and a save-and-reload action instead of Retry. */
+export function metadataFailure(e) {
+  const code = String(e?.code || "");
+  if (code === "app/stale") return { status: "stale", reason: STALE_MESSAGE, retryable: false };
+  if (code === "app/offline" || code === "app/unreachable") return { status: "unavailable", reason: e.message, retryable: true };
+  if (code === "functions/unavailable" || code === "functions/deadline-exceeded") return { status: "unavailable", reason: "The video details service didn't respond.", retryable: true };
+  return { status: "unavailable", reason: "Couldn't load the video's details right now.", retryable: true };
+}
 
 const fmt = (s) => { const t = Math.round(s); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), r = t % 60; return h ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`; };
 
@@ -72,7 +85,7 @@ export function YouTubeProbe({ id, onResult, title = "Video preview" }) {
   return <div className="ac-vprevplayer" ref={host} title={title} />;
 }
 
-export function VideoPreview({ parsed, meta, onMeta, fetcher = fetchVideoMetadata, probe = true }) {
+export function VideoPreview({ parsed, meta, onMeta, fetcher = fetchVideoMetadata, probe = true, duration = true, staleAction = true }) {
   const key = parsed?.ok ? `${parsed.provider}:${parsed.id}:${parsed.hash || ""}` : "";
   const [state, setState] = useState({ key: "", status: "idle", reason: "" });
   const [dur, setDur] = useState({ key: "", state: "idle" });   // duration probe result for `key`
@@ -91,6 +104,7 @@ export function VideoPreview({ parsed, meta, onMeta, fetcher = fetchVideoMetadat
     if (!parsed?.ok) return;
     const mySeq = ++seq.current;
     if (parsed.provider === "gdrive") { setState({ key, status: "unsupported", reason: "Google Drive doesn't publish a title, thumbnail or duration; the lesson can still be saved." }); return; }
+    if (isStale()) { setState({ key, ...metadataFailure({ code: "app/stale" }) }); return; }   // no request that can't succeed
     setState({ key, status: "loading", reason: "" });
     try {
       const m = await fetcher(parsed);
@@ -102,7 +116,7 @@ export function VideoPreview({ parsed, meta, onMeta, fetcher = fetchVideoMetadat
       } else setState({ key, status: "unavailable", reason: m?.reason || "No preview available.", retryable: m?.retryable });
     } catch (e) {
       if (mySeq !== seq.current) return;
-      setState({ key, status: "unavailable", reason: e?.message || "Couldn't fetch the preview.", retryable: true });
+      setState({ key, ...metadataFailure(e) });
     }
   }, [key, parsed, fetcher]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -142,7 +156,8 @@ export function VideoPreview({ parsed, meta, onMeta, fetcher = fetchVideoMetadat
         {state.status === "loading" && <span className="ac-cardsub">Loading preview…</span>}
         {state.status === "ok" && meta && (meta.title || meta.author) && <><b className="ac-vprevtitle">{meta.title || "Untitled video"}</b>{meta.author && <span className="ac-cardsub">{meta.authorUrl ? <a href={meta.authorUrl} target="_blank" rel="noopener noreferrer">{meta.author}</a> : meta.author} · {parsed.capabilities.label}</span>}</>}
         {(state.status === "unavailable" || state.status === "unsupported") && <span className="ac-cardsub"><ExclamationTriangleIcon className="hi hi-xs" aria-hidden="true" /> {state.reason} The link itself is valid and can still be saved.</span>}
-        <span className="ac-vprevdur ac-cardsub">
+        {state.status === "stale" && <span className="ac-cardsub ac-vprevstale" role="status"><ExclamationTriangleIcon className="hi hi-xs" aria-hidden="true" /> {state.reason} The link itself is valid and is kept. {staleAction && <SaveAndReloadButton className="sb-btn compact" />}</span>}
+        {duration && <span className="ac-vprevdur ac-cardsub">
           <ClockIcon className="hi hi-xs" aria-hidden="true" />
           {dur.state === "ok" ? `Duration ${fmt(dur.sec)}`
             : dur.state === "live" ? "Live stream, so there's no fixed length"
@@ -150,7 +165,7 @@ export function VideoPreview({ parsed, meta, onMeta, fetcher = fetchVideoMetadat
             : dur.state === "error" ? dur.reason
             : (dur.reason || "Duration unknown")}
           {parsed.provider === "youtube" && (dur.state === "unknown" || dur.state === "error") && <button type="button" className="ac-link" onClick={() => { setShowPlayer(false); setDur({ key, state: "measuring" }); setTimeout(() => setShowPlayer(true), 30); }}>Measure again</button>}
-        </span>
+        </span>}
         {state.status === "ok" && thumb && !thumbOk && <span className="ac-cardsub">The provider's thumbnail didn't load; a placeholder will be shown.</span>}
         <span className="ac-actions" style={{ marginTop: 6 }}>
           <a className="ac-ext" href={parsed.url} target="_blank" rel="noopener noreferrer"><ArrowTopRightOnSquareIcon className="hi hi-sm" aria-hidden="true" />Open on {parsed.capabilities.label}</a>

@@ -5,6 +5,7 @@
    (view, unpublish, archive, restore, discard changes, delete).
    Learners keep the published version (guides/{id}) until you publish. */
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { registerUnsaved } from "./appUpdate.js";
 import {
   ArrowUturnLeftIcon, EyeIcon, EllipsisHorizontalIcon, EyeSlashIcon, ArchiveBoxIcon, TrashIcon, CheckCircleIcon,
   ExclamationTriangleIcon, ArrowPathIcon,
@@ -90,8 +91,10 @@ function useGuideDraft(gid, me, { blank, onFirstSave }) {
   return {
     status, model, save, update, flushNow, reload: load,
     getModel: () => m.current,
+    hasUnsaved: () => dirty.current || !!inflight.current,
     settle: async () => { const r = await flushNow(); return r ?? m.current.head.rev; },
-    ensureSaved: async () => { if (!m.current.draftExists) { dirty.current = true; await flushNow(); } return { guideId: gid }; },
+    // uploads are checked against the draft (storage.rules), so it must exist first
+    ensureSaved: async () => { if (!m.current.draftExists) { dirty.current = true; await flushNow(); } if (!m.current.draftExists) throw new Error("Couldn't save the resource's draft yet, so the image wasn't uploaded. Check your connection and try again."); return { guideId: gid }; },
     imageReplaced: (p) => { if (p) replaced.current.add(p); },
     overwriteRemote: async () => { const w = await loadGuideWorkspace(gid); commit({ ...m.current, head: w.head, draftExists: w.draftExists }); dirty.current = true; return flushNow(); },
     refreshLive: async () => { const w = await loadGuideWorkspace(gid); commit({ ...m.current, live: w.live, head: w.head, draftExists: w.draftExists }); },
@@ -111,6 +114,14 @@ export function GuideWorkspace({ me, id: routeId, categoryParam = "", pathCtx = 
     blank: routeId === "new" ? { title: "", category: normalizeCategory(categoryParam || ""), topics: [], topicIds: [], video: null, videoMeta: null, thumbMode: "source", body: "", mdVersion: 2, resources: [], thumb: null, durationMinutes: 0 } : null,
     onFirstSave: () => { if (routeId === "new") { onCreated?.(gid); R.replace(learnManagePath({ view: "guide", id: gid })); } },
   });
+  // a newer release: "Save and reload" saves this resource first, then reloads here
+  const gstoreRef = useRef(null); gstoreRef.current = store;
+  useEffect(() => registerUnsaved(`guide:${gid}`, {
+    label: "the resource",
+    isDirty: () => !!gstoreRef.current?.hasUnsaved(),
+    save: () => gstoreRef.current.settle(),
+    url: () => (gstoreRef.current?.getModel()?.draftExists ? learnManagePath({ view: "guide", id: gid, path: pathCtx }) : null),
+  }), [gid, pathCtx]);
   const { status, model, save } = store;
   const leaveGuard = useWorkspaceLeaveGuard(gid, save, store, { isHere: (p) => p === `/learn/manage/guide/${gid}` || p === "/learn/manage/guide/new", what: "resource" });
   const [url, setUrl] = useState(null);

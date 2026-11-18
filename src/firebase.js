@@ -3,6 +3,10 @@ import { getAuth, GoogleAuthProvider, connectAuthEmulator } from "firebase/auth"
 import { initializeFirestore, connectFirestoreEmulator,
   persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
 import { memoizeImport, appCheckPlan, bootstrapFirebase } from "./firebaseBootstrap";
+// lazy SDK modules load through guardedImport: a stale-release / offline module
+// failure becomes a typed, friendly error (appUpdate.js) instead of a raw
+// "Failed to fetch dynamically imported module: <url>".
+import { guardedImport } from "./appUpdate.js";
 // firebase/functions, firebase/messaging AND firebase/app-check are all loaded
 // dynamically (getFunctionsInstance/callFunction, push.js, and the bootstrap
 // below), so they stay out of the initial bundle — app-check only loads when a
@@ -87,7 +91,7 @@ export const firebaseReady = bootstrapFirebase(_plan, {
    of the initial bundle. Memoized on success; a failed import isn't cached, so a
    retry re-imports. */
 export const getFunctionsInstance = memoizeImport(async () => {
-  const { getFunctions, connectFunctionsEmulator } = await import("firebase/functions");
+  const { getFunctions, connectFunctionsEmulator } = await guardedImport("firebase/functions", () => import("firebase/functions"));
   const fns = getFunctions(app, "northamerica-northeast1");
   if (_useEmulator) connectFunctionsEmulator(fns, _emu.host, _emu.functions);
   return fns;
@@ -98,7 +102,7 @@ export const getFunctionsInstance = memoizeImport(async () => {
    READ through the SDK (getBlob → object URL, auth enforced by storage.rules),
    never via public/long-lived download URLs. */
 export const getStorageInstance = memoizeImport(async () => {
-  const { getStorage, connectStorageEmulator } = await import("firebase/storage");
+  const { getStorage, connectStorageEmulator } = await guardedImport("firebase/storage", () => import("firebase/storage"));
   const st = getStorage(app);
   if (_useEmulator) connectStorageEmulator(st, _emu.host, _emu.storage);
   return st;
@@ -109,6 +113,6 @@ export const getStorageInstance = memoizeImport(async () => {
    anywhere pulls the whole functions SDK into the initial bundle. Rejections
    propagate unchanged (same HttpsError .code the callers already map). */
 export async function callFunction(name, payload) {
-  const [{ httpsCallable }, fns] = await Promise.all([import("firebase/functions"), getFunctionsInstance()]);
+  const [{ httpsCallable }, fns] = await Promise.all([guardedImport("firebase/functions", () => import("firebase/functions")), getFunctionsInstance()]);
   return httpsCallable(fns, name)(payload);
 }

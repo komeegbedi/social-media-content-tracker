@@ -1,16 +1,16 @@
 rules_version = '2';
 
-// IFC Creative Academy — Cloud Storage rules (covers + lesson thumbnails ONLY).
+// IFC Creative Academy — Cloud Storage rules (Academy images ONLY).
 //
 // Everything else in the bucket is denied. Images are read through the SDK
 // (getBlob) by signed-in, approved members — there are no public objects and
 // the app never hands out download URLs, so access always follows the same
-// model as the Firestore course docs:
-//   • published course images: any approved member
-//   • draft / archived course images: the course's editors only
-//   • uploads / replacements / deletes: course editors (admin or the course's
-//     instructor) — the client stores a versioned path and only deletes the
-//     previous object AFTER the new reference is saved.
+// model as the Firestore course / resource docs:
+//   • published images in a visible category: any approved member
+//   • draft / archived / hidden-category images: Academy editors only
+//   • uploads / replacements: Academy editors, against the item's draft;
+//     deletes: Academy editors — the client stores a versioned path and only
+//     deletes the previous object AFTER the new reference is saved.
 // Content type and size are enforced here as well as in the client: the client
 // re-encodes to JPEG ≤ ~250 KB, so the 2 MB ceiling is a hard backstop, not the
 // expected size. Firestore lookups are cross-service rules (firestore.get).
@@ -29,49 +29,56 @@ service firebase.storage {
     function isApproved() {
       return hasProfile() && notDisabled() && (me().status == 'approved' || me().role == 'admin');
     }
-    function course(courseId) {
-      return firestore.get(/databases/(default)/documents/courses/$(courseId)).data;
-    }
-    function courseExists(courseId) {
-      return firestore.exists(/databases/(default)/documents/courses/$(courseId));
-    }
-    // v4: global Academy-editor role; hidden categories gate learner reads.
+    // ---------------------------------------------------------------------
+    // DOCUMENT BUDGET: a Storage rules evaluation may access at most TWO
+    // Firestore documents ("No more than two Firestore documents may be accessed
+    // in a single Rules evaluation" — Storage rules docs, "Enhance with Cloud
+    // Firestore"). The emulator does NOT enforce this, so every allow below is
+    // written to need at most users/{uid} + ONE other document, and
+    // src/storageRulesBudget.test.js fails if any request could touch more.
+    // (The previous rules needed users + courses + courseDrafts for a draft-only
+    // course, which production refused as storage/unauthorized.)
+    // ---------------------------------------------------------------------
+    // v4: global Academy-editor role (admin, or academyEditor on the profile).
     function isEditor() {
       return isApproved() && (isAdmin() || me().get('academyEditor', false) == true);
     }
-    function hiddenCategoryIds() {
-      return firestore.exists(/databases/(default)/documents/academySettings/categoryIndex)
-        ? firestore.get(/databases/(default)/documents/academySettings/categoryIndex).data.get('hidden', [])
-        : [];
+    // Learner image access for a course or resource: ONE server-maintained
+    // marker for "published AND its category isn't hidden" — the test
+    // firestore.rules applies to the item (functions/academyLearnerMedia.js).
+    // It is EVENTUALLY consistent: a missing marker hides images (granting is
+    // fail-closed), but after unpublishing / hiding an existing marker keeps
+    // allowing approved learners' reads until its trigger has run (no
+    // documented bound; failures retried, drift found by
+    // scripts/reconcile-learner-media.mjs).
+    function learnerMedia(key) {
+      return firestore.exists(/databases/(default)/documents/academyLearnerMedia/$(key));
     }
-    // v6: a course may exist only as a draft (never published yet); editors can
-    // upload/read its images before the first publish.
+    // Editors see every course and resource (as in firestore.rules); approved
+    // learners see the images of published items in visible categories.
+    function canSeeCourseImages(courseId) {
+      return isEditor() || (isApproved() && learnerMedia('course_' + courseId));
+    }
+    function canSeeGuideImages(guideId) {
+      return isEditor() || (isApproved() && learnerMedia('guide_' + guideId));
+    }
+    // Uploads are made from the editor's private DRAFT, which the workspace
+    // creates (and the server confirms) before any upload — for a never-published
+    // course and when editing a published one. So the draft is the one record
+    // an upload is checked against: users + courseDrafts (or guideDrafts).
     function draftExists(courseId) {
       return firestore.exists(/databases/(default)/documents/courseDrafts/$(courseId));
     }
-    function isCourseEditor(courseId) { return isEditor() && (courseExists(courseId) || draftExists(courseId)); }
-    // Deleting a course removes its Firestore docs FIRST, then its uploads — so
-    // the uploads of a course that no longer exists (neither live nor draft) may
-    // be removed by an Academy editor. (While it exists, isCourseEditor applies.)
-    // The client additionally checks no other course/draft still uses an image.
-    function leftoverOfDeletedCourse(courseId) { return isEditor() && !courseExists(courseId) && !draftExists(courseId); }
-    function canSeeCourse(courseId) {
-      return isApproved() && (isCourseEditor(courseId) || (courseExists(courseId)
-        && course(courseId).status == 'published' && !(course(courseId).get('category', '') in hiddenCategoryIds())));
+    function guideDraftExists(guideId) {
+      return firestore.exists(/databases/(default)/documents/guideDrafts/$(guideId));
     }
-    function guide(guideId) {
-      return firestore.get(/databases/(default)/documents/guides/$(guideId)).data;
-    }
-    function guideExists(guideId) {
-      return firestore.exists(/databases/(default)/documents/guides/$(guideId));
-    }
-    // v6.11: a resource may exist only as a private draft (guideDrafts) until published
-    function guideDraftExists(guideId) { return firestore.exists(/databases/(default)/documents/guideDrafts/$(guideId)); }
-    function isGuideEditor(guideId) { return isEditor() && (guideExists(guideId) || guideDraftExists(guideId)); }
-    function canSeeGuide(guideId) {
-      return isApproved() && guideExists(guideId)
-        && (isEditor() || (guide(guideId).status == 'published' && !(guide(guideId).get('category', '') in hiddenCategoryIds())));
-    }
+    // Deleting course / resource images (replaced images, cancelled uploads,
+    // clean-up after a delete): Academy editors. The previous rule
+    // (editor of an existing course OR leftover of a deleted one) already
+    // reduced to exactly this; the client still keeps any image another
+    // course, draft, resource, path or category uses.
+
+    // Learning paths (users + paths: within the budget, unchanged).
     function pathDoc(pathId) {
       return firestore.get(/databases/(default)/documents/paths/$(pathId)).data;
     }
@@ -92,28 +99,28 @@ service firebase.storage {
 
     // Course covers: academy/covers/{courseId}/{version}.jpg
     match /academy/covers/{courseId}/{file} {
-      allow read: if canSeeCourse(courseId);
-      allow create, update: if isCourseEditor(courseId) && validImage();
-      allow delete: if isCourseEditor(courseId) || leftoverOfDeletedCourse(courseId);
+      allow read: if canSeeCourseImages(courseId);                              // users + marker
+      allow create, update: if isEditor() && draftExists(courseId) && validImage(); // users + courseDrafts
+      allow delete: if isEditor();                                              // users
     }
 
     // Lesson thumbnails: academy/lessonThumbs/{courseId}/{lessonId}/{version}.jpg
     match /academy/lessonThumbs/{courseId}/{lessonId}/{file} {
-      allow read: if canSeeCourse(courseId);
-      allow create, update: if isCourseEditor(courseId) && validImage();
-      allow delete: if isCourseEditor(courseId) || leftoverOfDeletedCourse(courseId);
+      allow read: if canSeeCourseImages(courseId);
+      allow create, update: if isEditor() && draftExists(courseId) && validImage();
+      allow delete: if isEditor();
     }
 
     // Quick-guide thumbnails: academy/guideThumbs/{guideId}/{version}.jpg
     match /academy/guideThumbs/{guideId}/{file} {
-      allow read: if canSeeGuide(guideId) || isGuideEditor(guideId);
-      allow create, update: if isGuideEditor(guideId) && validImage();
-      allow delete: if isGuideEditor(guideId) || (isEditor() && !guideExists(guideId) && !guideDraftExists(guideId));   // clean-up after a delete
+      allow read: if canSeeGuideImages(guideId);                                    // users + marker
+      allow create, update: if isEditor() && guideDraftExists(guideId) && validImage(); // users + guideDrafts
+      allow delete: if isEditor();                                                  // users
     }
 
     // Learning-path covers: academy/pathCovers/{pathId}/{version}.jpg
     match /academy/pathCovers/{pathId}/{file} {
-      allow read: if canSeePath(pathId);
+      allow read: if canSeePath(pathId);                                        // users + paths
       allow create, update: if isPathEditor(pathId) && validImage();
       allow delete: if isPathEditor(pathId);
     }

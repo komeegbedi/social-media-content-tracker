@@ -53,6 +53,7 @@ import { StarterCategoriesSetup, CategoryReadError } from "./academyCategorySetu
 import { categoryCourseGroups, readinessOf, runCategoryPublish, outcomeSummary } from "./academyBulkPublish.js";
 import { useUploadsInFlight, uploadsInFlight, waitForUploads } from "./academyUploads.js";
 import { isOfflineError } from "./useOnline.js";
+import { registerUnsaved } from "./appUpdate.js";
 import {
   Field, CategorySelect, TopicsField, ImagePicker, ThumbnailChoice, ManageGuides, ManagePaths,
   ManageTopics, CoverThumb, AcademyEditorScope, RequiredTag,
@@ -703,6 +704,16 @@ function CourseWorkspace({ me, id: routeIdProp, categoryParam, item, focus = "",
     onFirstSave: () => { if (routeId === "new") { onCreated?.(cid); R.replace(learnManagePath({ view: "course", id: cid, item: itemRef.current })); } },
   });
   const itemRef = useRef(item); itemRef.current = item;
+  // a newer release: "Save and reload" saves this course first, then reloads to
+  // the same course, item and (valid) learning-path context
+  const cstoreRef = useRef(store); cstoreRef.current = store;
+  const pathRef = useRef(pathCtx); pathRef.current = pathCtx;
+  useEffect(() => registerUnsaved(`course:${cid}`, {
+    label: "the course",
+    isDirty: () => !!cstoreRef.current?.hasUnsaved(),
+    save: () => cstoreRef.current.settle(),
+    url: () => (cstoreRef.current?.getModel()?.draftExists ? learnManagePath({ view: "course", id: cid, item: itemRef.current, path: pathRef.current }) : null),
+  }), [cid]);
   const { status, model, save } = store;
   const leaveGuard = useWorkspaceLeaveGuard(cid, save, store);
   const undo = useUndo();

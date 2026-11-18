@@ -81,10 +81,34 @@ describe("VideoPreview", () => {
     expect(screen.getByText("Back online")).toBeInTheDocument();
   });
 
-  test("a thrown error (e.g. network) is handled the same way; private videos aren't retryable", async () => {
-    render(<Harness url="https://youtu.be/dQw4w9WgXcQ" fetcher={vi.fn().mockRejectedValue(new Error("offline"))} />);
-    expect(await screen.findByText(/offline/)).toBeInTheDocument();
+  test("a thrown error is handled the same way, in plain words (never the raw error); it can be retried", async () => {
+    render(<Harness url="https://youtu.be/dQw4w9WgXcQ" fetcher={vi.fn().mockRejectedValue(new Error("TypeError: Failed to fetch https://x/assets/a.js"))} />);
+    expect(await screen.findByText(/Couldn't load the video's details right now\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to fetch|https:\/\/x\/assets/)).toBeNull();
+    expect(screen.getByText(/can still be saved/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  test("a STALE tab (newer release live): the update message and Save and reload — no Retry, no module URL or MIME text", async () => {
+    const stale = Object.assign(new Error("A newer version of the app is available. Save your changes, then reload to continue."), { code: "app/stale", cause: new Error("Failed to fetch dynamically imported module: https://ifc.example/assets/index.esm-Di5kQlnq.js") });
+    const fetcher = vi.fn().mockRejectedValue(stale);
+    render(<Harness url="https://youtu.be/LZxtveAHWsM" fetcher={fetcher} />);
+    expect(await screen.findByText(/A newer version of the app is available\. Save your changes, then reload to continue\./)).toBeInTheDocument();
+    expect(screen.getByText(/The link itself is valid and is kept/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByRole("button", { name: /reload/i })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/index\.esm|MIME|dynamically imported|https:\/\/ifc\.example/);
+  });
+
+  test("offline / unreachable module: says so and Retry really tries again", async () => {
+    const off = Object.assign(new Error("You're offline, so this part of the app couldn't load. Reconnect, then try again."), { code: "app/offline" });
+    const fetcher = vi.fn().mockRejectedValueOnce(off).mockResolvedValue(ytMeta("Back online"));
+    render(<Harness url="https://youtu.be/LZxtveAHWsM" fetcher={fetcher} />);
+    expect(await screen.findByText(/You're offline, so this part of the app couldn't load/)).toBeInTheDocument();
+    expect(screen.queryByText(/newer version/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Back online")).toBeInTheDocument();
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   test("Google Drive: no metadata request; an explicit 'no preview' note", () => {
