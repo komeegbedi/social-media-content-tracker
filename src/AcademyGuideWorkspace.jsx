@@ -255,12 +255,12 @@ export function GuideWorkspace({ me, id: routeId, categoryParam = "", pathCtx = 
             {visibleNow ? <CheckCircleIcon className="hi hi-sm" aria-hidden="true" /> : <EyeSlashIcon className="hi hi-sm" aria-hidden="true" />}
             <span>{!visibleNow ? <>Published. Its category “{cat?.label}” is hidden, so learners can't see it yet.{!admin && " An admin can show the category."}</>
               : publish.already ? "This version was already published, so learners already see it." : publish.first ? "Published. Learners can see this resource now." : "Changes published. Learners now see this version."}</span>
-            <span className="ac-wsnoteacts"><AppLink className="ac-link" to={learnGuidePath(gid)} navigate={R.navigate}>View resource</AppLink><button type="button" className="ac-link" onClick={() => setPublish({ state: "idle" })}>Dismiss</button></span>
+            <span className="ac-wsnoteacts"><AppLink className="sb-btn ghost compact" to={learnGuidePath(gid)} navigate={R.navigate}>View resource</AppLink><button type="button" className="sb-btn quiet compact ac-wsnotedismiss" onClick={() => setPublish({ state: "idle" })}>Dismiss</button></span>
           </div>
         )}
         {publish.state === "error" && (
           <div className="ac-wsnote ac-note-err" role="alert"><ExclamationTriangleIcon className="hi hi-sm" aria-hidden="true" /><span><b>Not published.</b> {publish.message}</span>
-            <span className="ac-wsnoteacts"><button type="button" className="ac-link" onClick={() => setPublish({ state: "idle" })}>Dismiss</button></span></div>
+            <span className="ac-wsnoteacts"><button type="button" className="sb-btn quiet compact ac-wsnotedismiss" onClick={() => setPublish({ state: "idle" })}>Dismiss</button></span></div>
         )}
       </header>
       <PublishCheckCtx.Provider value={{ issues: issues.map((i) => ({ ...i, item: "details" })), attempted, touched }}>
